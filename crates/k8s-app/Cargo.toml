@@ -1,0 +1,45 @@
+[package]
+name = "k8s-app"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+default-run = "k8s-app"
+
+[[bin]]
+name = "k8s-app"
+path = "src/main.rs"
+
+[dependencies]
+anyhow.workspace = true
+assets.workspace = true
+ed25519-dalek = "2.2"
+hex = "0.4"
+reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "stream"] }
+sha2 = "0.10"
+tempfile.workspace = true
+# profiler provides frame histograms, the built-in frame overlay, HangDetector, and the foreground journal.
+gpui = { workspace = true, features = ["profiler"] }
+gpui_platform.workspace = true
+gpui_tokio.workspace = true
+settings.workspace = true
+theme.workspace = true
+theme_settings.workspace = true
+ui.workspace = true
+util.workspace = true
+
+# Keymap file watching uses the Zed fs crate.
+fs = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+k8s-actions = { path = "../k8s-actions" }
+k8s-core = { path = "../k8s-core" }
+k8s-term = { path = "../k8s-term" }
+k8s-ui = { path = "../k8s-ui" }
+serde.workspace = true
+serde_json.workspace = true
+serde_yaml_ng.workspace = true
+tokio.workspace = true
+chrono = "0.4.42"
+kube = { version = "4.2.0", features = ["runtime"] }
+
+[target.'cfg(windows)'.dependencies]
+windows.workspace = true

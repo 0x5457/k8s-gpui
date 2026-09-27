@@ -1,0 +1,56 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/k8s-actions",
+    "crates/k8s-core",
+    "crates/k8s-ui",
+    "crates/k8s-term",
+    "crates/k8s-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.98"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+tokio = { version = "1", features = ["full"] }
+# GPUI #[gpui::bench] code uses criterion. Benchmarks run in release mode.
+criterion = { version = "0.5", features = ["html_reports"] }
+dirs = "6"
+libc = "0.2"
+tempfile = "3.27"
+which = "8"
+windows = { version = "0.62", default-features = false, features = ["std", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+# Zed platform crates use one pinned revision.
+assets = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+gpui = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79", default-features = false, features = ["wayland"] }
+gpui_platform = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79", default-features = false, features = ["wayland", "font-kit"] }
+gpui_tokio = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+settings = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+theme = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+theme_settings = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+ui = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+# debug-embed makes util::fs_embed! embed assets at compile time in debug builds.
+# Without it, Zed settings/assets read from the repository root at runtime.
+util = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79", features = ["debug-embed"] }
+# YAML editor dependencies.
+text = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+rope = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+sum_tree = { git = "https://github.com/zed-industries/zed", rev = "189839eef500a5ab5edbcf97cbea2279f11b9d79" }
+
+# Downstream crates do not inherit Zed's [patch.crates-io] entries.
+# Mirror only the entries required by this workspace.
+# tree-sitter-language is required because tree-sitter-json uses LanguageFn 0.1.5,
+# while git tree-sitter 0.27.0 uses a different type. settings_json/migrator reports
+# `tree_sitter::Language: From<LanguageFn> is not satisfied`.
+[patch.crates-io]
+tree-sitter-language = { git = "https://github.com/tree-sitter/tree-sitter", rev = "43623ec9bf0eaaf7113285c46e8a09018f181b18" }
+async-process = { git = "https://github.com/zed-industries/async-process.git", rev = "0b6d6713570af61806e1e5cb40e0f757cb93fd9d" }

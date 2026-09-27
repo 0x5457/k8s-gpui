@@ -1,0 +1,259 @@
+name: run_tests
+
+on:
+  merge_group:
+  pull_request:
+    branches:
+      - "**"
+  push:
+    branches:
+      - main
+      - "v[0-9]+.[0-9]+.x"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_TIMEOUT: "600"
+
+jobs:
+  orchestrate:
+    name: orchestrate
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      run: ${{ steps.filter.outputs.run }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Select checks to run
+        id: filter
+        shell: bash
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        run: |
+          set -euo pipefail
+          if [[ "$EVENT_NAME" != "pull_request" ]]; then
+            echo "run=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          changed_files="$RUNNER_TEMP/changed-files"
+          git diff --name-only -z "$BASE_SHA" "$HEAD_SHA" > "$changed_files"
+          set +e
+          grep -zEq '^(crates/|assets/|Cargo\.(toml|lock)$|rust-toolchain\.toml$|\.cargo/|\.github/workflows/)' "$changed_files"
+          match_status=$?
+          set -e
+          case "$match_status" in
+            0)
+              echo "Native or CI files changed. Run all native checks."
+              echo "run=true" >> "$GITHUB_OUTPUT"
+              ;;
+            1)
+              echo "No native or CI files changed. Skip native checks."
+              echo "run=false" >> "$GITHUB_OUTPUT"
+              ;;
+            *)
+              echo "Cannot inspect changed files. Check the checkout and Git diff."
+              exit "$match_status"
+              ;;
+          esac
+
+  style:
+    name: style
+    needs: orchestrate
+    if: needs.orchestrate.outputs.run == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: rustfmt
+      - name: Check Rust formatting
+        run: cargo fmt --all -- --check
+
+  clippy:
+    name: clippy (${{ matrix.name }})
+    needs: [orchestrate, style]
+    if: needs.orchestrate.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            cc: clang
+            cxx: clang++
+          - name: macos
+            os: macos-latest
+            cc: ""
+            cxx: ""
+          - name: windows
+            os: windows-latest
+            cc: ""
+            cxx: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang lld llvm make cmake pkg-config \
+            libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev \
+            libstdc++-12-dev libva-dev libvulkan1 libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
+            git curl jq
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+        with:
+          components: clippy
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: clippy-${{ matrix.name }}-${{ runner.arch }}
+      - name: Run Clippy on the workspace
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Run Clippy on the benchmark
+        run: cargo clippy -p k8s-ui --bench table --all-features --locked -- -D warnings
+
+  test:
+    name: test (${{ matrix.name }})
+    needs: [orchestrate, style]
+    if: needs.orchestrate.outputs.run == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux
+            os: ubuntu-22.04
+            cc: clang
+            cxx: clang++
+          - name: macos
+            os: macos-latest
+            cc: ""
+            cxx: ""
+          - name: windows
+            os: windows-latest
+            cc: ""
+            cxx: ""
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+    env:
+      CC: ${{ matrix.cc }}
+      CXX: ${{ matrix.cxx }}
+      CARGO_PROFILE_TEST_DEBUG: "0"
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        with:
+          egress-policy: audit
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+      - name: Checkout
+        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          persist-credentials: false
+      - name: Install Linux dependencies
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang lld llvm make cmake pkg-config \
+            libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev \
+            libstdc++-12-dev libva-dev libvulkan1 libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
+            git curl jq
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@1.98.1
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test-${{ matrix.name }}-${{ runner.arch }}
+      - name: Install nextest
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        with:
+          tool: nextest
+      - name: Run workspace tests
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+      - name: Run workspace documentation tests
+        run: cargo test --workspace --all-features --locked --doc
+
+  ci:
+    name: ci
+    if: always()
+    needs: [orchestrate, style, clippy, test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Verify required job results
+        shell: bash
+        env:
+          ORCHESTRATE_RESULT: ${{ needs.orchestrate.result }}
+          RUN_CHECKS: ${{ needs.orchestrate.outputs.run }}
+          STYLE_RESULT: ${{ needs.style.result }}
+          CLIPPY_RESULT: ${{ needs.clippy.result }}
+          TEST_RESULT: ${{ needs.test.result }}
+        run: |
+          set -euo pipefail
+          if [[ "$ORCHESTRATE_RESULT" != "success" ]]; then
+            echo "Orchestrate did not pass: $ORCHESTRATE_RESULT. Check the orchestrate job."
+            exit 1
+          fi
+          if [[ "$RUN_CHECKS" != "true" ]]; then
+            echo "Native checks were not required for this change. No action is needed."
+            exit 0
+          fi
+          for result in "$STYLE_RESULT" "$CLIPPY_RESULT" "$TEST_RESULT"; do
+            if [[ "$result" != "success" ]]; then
+              echo "Required CI job did not pass: $result. Check the job logs."
+              exit 1
+            fi
+          done

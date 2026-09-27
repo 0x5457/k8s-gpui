@@ -1,0 +1,46 @@
+[package]
+name = "k8s-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+k8s-actions = { path = "../k8s-actions" }
+k8s-core = { path = "../k8s-core" }
+gpui.workspace = true
+theme.workspace = true
+ui.workspace = true
+tokio.workspace = true
+unicode-segmentation = "1.13"
+serde_json.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+settings.workspace = true
+# YAML editor dependencies.
+rope.workspace = true
+kube-core = "4.2.0"
+statig = "0.4.1"
+# k8s-openapi Time uses jiff internally. Avoid chrono to keep one time library.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+
+# GPUI provides test infrastructure through dev-dependencies. It does not affect the application build.
+# - test-support: TestAppContext / VisualTestContext / #[gpui::test] / #[gpui::property_test]
+# - bench-support: BenchAppContext / #[gpui::bench] with profiler support
+[dev-dependencies]
+criterion.workspace = true
+gpui = { workspace = true, features = ["test-support", "bench-support"] }
+gpui_platform = { workspace = true, features = ["test-support"] }
+rand = "0.10"
+# Panel examples and test startup dependencies.
+assets.workspace = true
+gpui_tokio.workspace = true
+# Tests initialize the settings and theme systems like the app.
+theme_settings.workspace = true
+# The default settings file is an fs_embed asset. Test images need debug-embed too.
+# Without it, debug builds look for files under the repository-root assets/ directory and panic.
+util.workspace = true
+
+[[bench]]
+name = "table"
+harness = false

@@ -1,0 +1,31 @@
+// The k8s-gpui "VS Code" keymap preset.
+//
+// The default keymap is already close to VS Code. This preset contains only
+// the bindings that differ. It loads after the default keymap and before the
+// user overrides, so user bindings win. Ctrl+K chords and Ctrl+P quick open
+// are not included.
+[
+  {
+    // Global bindings apply everywhere except while the modal command palette is open.
+    "context": "!CommandPalette",
+    "bindings": {
+      // VS Code commands: show Explorer and toggle Terminal.
+      "secondary-shift-e": "k8s_shell::ToggleLeftPanel",
+      "secondary-`": "k8s_shell::ToggleDock"
+    }
+  },
+  {
+    "context": "Terminal || ResourceSearch || Dialog || menu",
+    "unbind": {
+      "secondary-shift-e": "k8s_shell::ToggleLeftPanel",
+      "secondary-`": "k8s_shell::ToggleDock"
+    }
+  },
+  {
+    "context": "Editor || TextInput",
+    "unbind": {
+      "secondary-shift-e": "k8s_shell::ToggleLeftPanel",
+      "secondary-`": "k8s_shell::ToggleDock"
+    }
+  }
+]

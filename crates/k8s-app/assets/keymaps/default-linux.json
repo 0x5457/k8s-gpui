@@ -1,0 +1,596 @@
+// The k8s-gpui default keymap.
+//
+// Defaults follow the Lens keymap. This file is the base for every platform; the macOS
+// overlay in default-macos.json only adds the standard Command keys it needs.
+// User overrides are loaded after this file.
+//
+// JSONC supports comments and trailing commas.
+//
+// Modifier families used below:
+// - `secondary-shift-<key>` is the default family for app commands. Shift+letter survives
+//   XKB, never collides with a Control+Alt+digit workspace switch, and does not shadow a
+//   Control+letter readline binding inside a session.
+// - `secondary-alt-<key>` is used where the mnemonic letter is free but the shift letter is
+//   taken by another command or by the macOS overlay.
+// - `alt-<key>` is used only for the status bar trio (pause, resume, appearance), because
+//   Control+Alt+d, l, q and t belong to the desktop shell.
+// - `ctrl-shift-<key>` is the session's own editing family, because that is what the terminal
+//   reads from the modifier state. It appears only in the `Terminal` context.
+[
+  {
+    // Global bindings are available anywhere, including the command palette. The palette consumes keys before dispatch.
+    // Tab and Shift+Tab move focus between regions when no more-specific context overrides them.
+    "bindings": {
+      "secondary-shift-p": "k8s_shell::ToggleCommandPalette",
+      "escape": "k8s_shell::Dismiss",
+      "tab": "k8s_shell::FocusNext",
+      "shift-tab": "k8s_shell::FocusPrevious",
+      "ctrl-tab": "k8s_shell::FocusNext",
+      "ctrl-shift-tab": "k8s_shell::FocusPrevious"
+    }
+  },
+  {
+    // Application shortcuts are explicitly unbound in terminal, search, dialog, and menu contexts.
+    // Close has the same meaning on every platform: secondary-w closes the active window and
+    // secondary-shift-t closes the active center tab, so one key never does two things.
+    "context": "!CommandPalette",
+    "bindings": {
+      "secondary-w": "k8s_app::CloseWindow",
+      "secondary-b": "k8s_shell::ToggleLeftPanel",
+      "secondary-alt-b": "k8s_shell::ToggleRightPanel",
+      "secondary-j": "k8s_shell::ToggleDock",
+      "secondary-shift-f": "k8s_shell::SearchResources",
+      "secondary-shift-n": "k8s_shell::ToggleNotifications",
+      "secondary-shift-r": "k8s_shell::ReloadKubeconfigs",
+      "secondary-,": "k8s_app::OpenSettings"
+    }
+  },
+  {
+    "context": "Shell && !CommandPalette && !Terminal",
+    "bindings": {
+      "secondary-shift-c": "k8s_shell::OpenContextSwitcher",
+      "secondary-shift-m": "k8s_shell::OpenNamespaceSwitcher",
+      "secondary-shift-k": "k8s_shell::OpenResourceKindSwitcher"
+    }
+  },
+  {
+    // Every key in this section is released again by the Editor || TextInput,
+    // ResourceSearch || Dialog || menu, and Terminal unbind blocks below, so a text surface,
+    // an overlay, or a focused session always keeps its own keys.
+    "context": "Shell && !CommandPalette",
+    "bindings": {
+      "secondary-alt-w": "k8s_shell::CloseOtherTabs",
+      "secondary-shift-t": "k8s_shell::CloseTab",
+      "secondary-shift-w": "k8s_shell::CloseAllTabs",
+      "secondary-shift-i": "k8s_shell::TogglePinTab",
+      "secondary-alt-left": "k8s_shell::MoveTabLeft",
+      "secondary-alt-right": "k8s_shell::MoveTabRight",
+      "secondary-pagedown": "k8s_shell::NextTab",
+      "secondary-pageup": "k8s_shell::PreviousTab",
+      "secondary-1": ["k8s_shell::SwitchTab", { "index": 0 }],
+      "secondary-2": ["k8s_shell::SwitchTab", { "index": 1 }],
+      "secondary-3": ["k8s_shell::SwitchTab", { "index": 2 }],
+      "secondary-4": ["k8s_shell::SwitchTab", { "index": 3 }],
+      "secondary-5": ["k8s_shell::SwitchTab", { "index": 4 }],
+      "secondary-6": ["k8s_shell::SwitchTab", { "index": 5 }],
+      "secondary-7": ["k8s_shell::SwitchTab", { "index": 6 }],
+      "secondary-8": ["k8s_shell::SwitchTab", { "index": 7 }],
+      "secondary-9": ["k8s_shell::SwitchTab", { "index": 8 }],
+      // The Table and Inspector views open the selected object's YAML for editing.
+      "secondary-e": "k8s_shell::FocusYaml",
+      "secondary-shift-o": "k8s_shell::OpenOverview",
+      // Commands on the current selection. The keys below are the historical keys that the
+      // Terminal unbind block already reserved, so the release list and the bindings agree.
+      "secondary-shift-a": "k8s_shell::ApplyYaml",
+      "secondary-alt-e": "k8s_shell::OpenEvents",
+      "secondary-alt-f": "k8s_shell::OpenForwards",
+      "secondary-alt-i": "k8s_shell::DescribeSelection",
+      "secondary-alt-r": "k8s_shell::RestartSelection",
+      "secondary-alt-x": "k8s_shell::ExecSelection",
+      "secondary-alt-y": "k8s_shell::CopySelectedPodName",
+      "secondary-shift-g": "k8s_shell::PortForwardSelection",
+      "secondary-shift-s": "k8s_shell::ScaleSelection",
+      "secondary-shift-u": "k8s_shell::ReloadKeymap",
+      "secondary-shift-v": "k8s_shell::OpenLogs",
+      // Status bar and appearance commands. Alt keeps the mnemonic letter here: the shift
+      // letters for p, r and t are taken, and Control+Alt+d, l, q and t belong to the desktop.
+      "alt-p": "k8s_shell::PauseUpdates",
+      "alt-r": "k8s_shell::ResumeUpdates",
+      "alt-t": "k8s_shell::ToggleTheme",
+      // The Hotbar rail unmounts with the sidebar, so its keys are also bound in the shell.
+      "secondary-shift-b": "k8s_hotbar::ToggleHotbar",
+      "alt-1": ["k8s_hotbar::SwitchCluster", { "slot": 0 }],
+      "alt-2": ["k8s_hotbar::SwitchCluster", { "slot": 1 }],
+      "alt-3": ["k8s_hotbar::SwitchCluster", { "slot": 2 }],
+      "alt-4": ["k8s_hotbar::SwitchCluster", { "slot": 3 }],
+      "alt-5": ["k8s_hotbar::SwitchCluster", { "slot": 4 }],
+      "alt-6": ["k8s_hotbar::SwitchCluster", { "slot": 5 }],
+      "alt-7": ["k8s_hotbar::SwitchCluster", { "slot": 6 }],
+      "alt-8": ["k8s_hotbar::SwitchCluster", { "slot": 7 }],
+      "alt-9": ["k8s_hotbar::SwitchCluster", { "slot": 8 }],
+      // A bank holds up to MAX_SLOTS_PER_BANK slots, so slot ten continues past the digits.
+      "alt-0": ["k8s_hotbar::SwitchCluster", { "slot": 9 }],
+      "alt--": ["k8s_hotbar::SwitchCluster", { "slot": 10 }],
+      "alt-=": ["k8s_hotbar::SwitchCluster", { "slot": 11 }],
+      "alt-shift-1": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-shift-2": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-shift-3": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-shift-4": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-shift-5": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-shift-6": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-shift-7": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-shift-8": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-shift-9": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      // Wayland/xkb reports Shift+digit as a level-2 symbol, such as `@` for Shift+2.
+      // Bind both forms because platforms report different forms.
+      "alt-!": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-@": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-#": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-$": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-%": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-^": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-&": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-*": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-(": ["k8s_hotbar::SwitchBank", { "index": 8 }]
+    }
+  },
+  {
+    "context": "Editor",
+    "bindings": {
+      "secondary-z": "k8s_shell::Undo",
+      "secondary-shift-z": "k8s_shell::Redo",
+      "secondary-x": "k8s_shell::Cut",
+      "secondary-c": "k8s_shell::Copy",
+      "secondary-v": "k8s_shell::Paste",
+      "secondary-a": "k8s_shell::SelectAll"
+    }
+  },
+  {
+    "context": "TextInput",
+    "bindings": {
+      "secondary-z": "k8s_shell::Undo",
+      "secondary-shift-z": "k8s_shell::Redo",
+      "secondary-x": "k8s_shell::Cut",
+      "secondary-c": "k8s_shell::Copy",
+      "secondary-v": "k8s_shell::Paste",
+      "secondary-a": "k8s_shell::SelectAll"
+    }
+  },
+  {
+    // Resource table navigation bindings apply only when the table has focus.
+    // Tab selects columns. Ctrl+Tab and Ctrl+Shift+Tab move focus out of the table.
+    "context": "Table && !CommandPalette",
+    "bindings": {
+      "up": "k8s_table::SelectPrevious",
+      "down": "k8s_table::SelectNext",
+      "tab": "k8s_table::SelectNextColumn",
+      "shift-tab": "k8s_table::SelectPreviousColumn",
+      "shift-enter": "k8s_table::SortSelectedColumn",
+      "enter": "k8s_table::OpenDetails",
+      "space": "k8s_table::OpenDetails",
+      "f5": "k8s_ops::Refresh",
+      // Opens the row context menu. Shift+F10 is the keyboard route to the same menu that
+      // the row button opens, so no command lives only behind a pointer.
+      "shift-f10": "k8s_table::OpenRowActions",
+      // Destructive action: opens a confirmation dialog.
+      "delete": "k8s_ops::DeleteSelection"
+    }
+  },
+  {
+    // Inspector tabs, the YAML review, and the Describe value rows. These keys belong to the panel,
+    // not to the shell, because the panel is the only surface that can act on them. The Inspector is
+    // a sibling of the Table, so f5 means Refresh in the table and Reload tab here.
+    //
+    // The review and the value keys are app keys, not panel-local inventions: each one takes a chord
+    // this product already uses for the same idea, and the header families above say which letter is
+    // free. Every key below is released again on a text surface and on an overlay, so typing and a
+    // search field, a dialog, or a menu keep their own keys.
+    "context": "Inspector && !CommandPalette",
+    "bindings": {
+      "secondary-alt-m": "k8s_inspector::MetricsRange5m",
+      "secondary-shift-q": "k8s_inspector::MetricsRange15m",
+      "secondary-shift-h": "k8s_inspector::MetricsRange1h",
+      "f5": "k8s_inspector::ReloadActiveTab",
+      // The r family is taken by Restart in the shell and by Reload kubeconfigs, so the
+      // retry key takes the next free letter of the same family.
+      "secondary-alt-c": "k8s_inspector::RetryMetrics",
+      // Confirming the review writes to the cluster, so it is the power step of the apply flow and
+      // not a bare key. secondary-shift-a already opens this review from the shell, and the two are
+      // one flow, so the extra modifier complements a related shortcut rather than borrowing the
+      // chord of an unrelated command. Alt is the family for a letter whose shift form is taken.
+      "secondary-alt-a": "k8s_inspector::ConfirmApply",
+      // Escape cancels the process in progress, and a review is a process in progress, so the panel
+      // takes it here and releases the shell's global Dismiss in the next section.
+      "escape": "k8s_inspector::CancelApplyReview",
+      // Revert restores the text the cluster last reported, which is the reload direction this app
+      // already spells secondary-shift-r, so it takes the plain r. secondary-n and secondary-r are
+      // two of the three chords the Terminal unbind block reserves for this app's own commands and
+      // never binds, so a panel command can take one without inventing a shortcut.
+      "secondary-r": "k8s_inspector::RevertYaml",
+      // n walks the parse-problem list, the way secondary-pagedown walks the tab bar.
+      "secondary-n": "k8s_inspector::NextProblem",
+      // Copying one field is the chord the value row already answers to, Control+c on Linux and
+      // Command+c on macOS, so the keymap says the same thing and the panel route and the row route
+      // cannot drift. The whole document then takes y, the letter that names the YAML this panel
+      // owns: the c family is spoken for here, c is the value, shift-c the context switcher, and
+      // alt-c the metrics retry.
+      "secondary-c": "k8s_inspector::CopyValue",
+      "secondary-y": "k8s_inspector::CopyYaml",
+      // Expanding a truncated value is the least common command here, and the shift form of o is
+      // OpenOverview in the shell, so the alt family carries it.
+      "secondary-alt-o": "k8s_inspector::ToggleValueExpansion"
+    }
+  },
+  {
+    // The Hotbar rail uses Alt+digit to select a bank slot and Alt+Shift+digit to switch banks.
+    // The shell binds the same keys, because the rail unmounts with the sidebar.
+    // F1-F12 remain unbound: F1 is reserved for the debug frame overlay, and F2-F12 can conflict with the window manager.
+    "context": "Hotbar",
+    "bindings": {
+      "alt-1": ["k8s_hotbar::SwitchCluster", { "slot": 0 }],
+      "alt-2": ["k8s_hotbar::SwitchCluster", { "slot": 1 }],
+      "alt-3": ["k8s_hotbar::SwitchCluster", { "slot": 2 }],
+      "alt-4": ["k8s_hotbar::SwitchCluster", { "slot": 3 }],
+      "alt-5": ["k8s_hotbar::SwitchCluster", { "slot": 4 }],
+      "alt-6": ["k8s_hotbar::SwitchCluster", { "slot": 5 }],
+      "alt-7": ["k8s_hotbar::SwitchCluster", { "slot": 6 }],
+      "alt-8": ["k8s_hotbar::SwitchCluster", { "slot": 7 }],
+      "alt-9": ["k8s_hotbar::SwitchCluster", { "slot": 8 }],
+      "alt-0": ["k8s_hotbar::SwitchCluster", { "slot": 9 }],
+      "alt--": ["k8s_hotbar::SwitchCluster", { "slot": 10 }],
+      "alt-=": ["k8s_hotbar::SwitchCluster", { "slot": 11 }],
+      "alt-shift-1": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-shift-2": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-shift-3": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-shift-4": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-shift-5": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-shift-6": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-shift-7": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-shift-8": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-shift-9": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      // Wayland/xkb reports Shift+digit as a level-2 symbol, such as `@` for Shift+2.
+      // Bind both forms because platforms report different forms.
+      "alt-!": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-@": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-#": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-$": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-%": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-^": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-&": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-*": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-(": ["k8s_hotbar::SwitchBank", { "index": 8 }]
+    }
+  },
+  {
+    "context": "menu",
+    "bindings": {
+      "home": "menu::SelectFirst",
+      "end": "menu::SelectLast",
+      "up": "menu::SelectPrevious",
+      "down": "menu::SelectNext",
+      "tab": "menu::SelectNext",
+      "shift-tab": "menu::SelectPrevious",
+      "enter": "menu::Confirm",
+      "escape": "menu::Cancel"
+    }
+  },
+  {
+    // A focused session owns the keyboard: every app command that would preedit shell input or
+    // move between tabs is unbound here, including the two close keys. Ctrl-Tab and
+    // Ctrl-Shift-Tab stay bound as the focus escape out of the session.
+    //
+    // The editing keys are the ones the terminal reads from the modifier state:
+    // Control+Shift+letter, because XKB folds Shift into the keysym and the printed character
+    // cannot be trusted without costing every CapsLock user the interrupt. So Control+A,
+    // Control+C, Control+V, Control+X and Control+F keep their readline meaning for the child
+    // process. That one table also answers Control+Shift+F and Control+Shift+G with find and
+    // find-next, and Shift+Insert with paste. None of the three is listed here: they are not
+    // actions, the session answers them in its own key table, and a keymap file can only name an
+    // action. The macOS overlay adds the Command chords, which the same table answers.
+    "context": "Terminal",
+    "bindings": {
+      "ctrl-shift-a": "k8s_shell::SelectAll",
+      "ctrl-shift-c": "k8s_shell::Copy",
+      "ctrl-shift-v": "k8s_shell::Paste",
+      "ctrl-shift-x": "k8s_shell::Cut"
+    },
+    "unbind": {
+      "escape": "k8s_shell::Dismiss",
+      "tab": "k8s_shell::FocusNext",
+      "shift-tab": "k8s_shell::FocusPrevious",
+      "secondary-shift-p": "k8s_shell::ToggleCommandPalette",
+      "secondary-b": "k8s_shell::ToggleLeftPanel",
+      "secondary-alt-b": "k8s_shell::ToggleRightPanel",
+      "secondary-j": "k8s_shell::ToggleDock",
+      "secondary-e": "k8s_shell::FocusYaml",
+      "secondary-w": "k8s_app::CloseWindow",
+      "secondary-shift-t": "k8s_shell::CloseTab",
+      "secondary-alt-w": "k8s_shell::CloseOtherTabs",
+      "secondary-shift-w": "k8s_shell::CloseAllTabs",
+      "secondary-shift-i": "k8s_shell::TogglePinTab",
+      "secondary-alt-left": "k8s_shell::MoveTabLeft",
+      "secondary-alt-right": "k8s_shell::MoveTabRight",
+      "secondary-pagedown": "k8s_shell::NextTab",
+      "secondary-pageup": "k8s_shell::PreviousTab",
+      "secondary-1": ["k8s_shell::SwitchTab", { "index": 0 }],
+      "secondary-2": ["k8s_shell::SwitchTab", { "index": 1 }],
+      "secondary-3": ["k8s_shell::SwitchTab", { "index": 2 }],
+      "secondary-4": ["k8s_shell::SwitchTab", { "index": 3 }],
+      "secondary-5": ["k8s_shell::SwitchTab", { "index": 4 }],
+      "secondary-6": ["k8s_shell::SwitchTab", { "index": 5 }],
+      "secondary-7": ["k8s_shell::SwitchTab", { "index": 6 }],
+      "secondary-8": ["k8s_shell::SwitchTab", { "index": 7 }],
+      "secondary-9": ["k8s_shell::SwitchTab", { "index": 8 }],
+      "secondary-f": "k8s_shell::SearchResources",
+      "secondary-shift-f": "k8s_shell::SearchResources",
+      "secondary-n": "k8s_shell::ToggleNotifications",
+      "secondary-shift-n": "k8s_shell::ToggleNotifications",
+      "secondary-r": "k8s_shell::ReloadKubeconfigs",
+      "secondary-shift-r": "k8s_shell::ReloadKubeconfigs",
+      "secondary-shift-c": "k8s_shell::OpenContextSwitcher",
+      "secondary-shift-m": "k8s_shell::OpenNamespaceSwitcher",
+      "secondary-shift-k": "k8s_shell::OpenResourceKindSwitcher",
+      "secondary-shift-o": "k8s_shell::OpenOverview",
+      "secondary-,": "k8s_app::OpenSettings",
+      "secondary-shift-a": "k8s_shell::ApplyYaml",
+      "secondary-alt-e": "k8s_shell::OpenEvents",
+      "secondary-alt-f": "k8s_shell::OpenForwards",
+      "secondary-alt-i": "k8s_shell::DescribeSelection",
+      "secondary-alt-r": "k8s_shell::RestartSelection",
+      "secondary-alt-x": "k8s_shell::ExecSelection",
+      "secondary-alt-y": "k8s_shell::CopySelectedPodName",
+      "secondary-shift-g": "k8s_shell::PortForwardSelection",
+      "secondary-shift-s": "k8s_shell::ScaleSelection",
+      "secondary-shift-u": "k8s_shell::ReloadKeymap",
+      "secondary-shift-v": "k8s_shell::OpenLogs",
+      "alt-p": "k8s_shell::PauseUpdates",
+      "alt-r": "k8s_shell::ResumeUpdates",
+      "alt-t": "k8s_shell::ToggleTheme",
+      "secondary-shift-b": "k8s_hotbar::ToggleHotbar",
+      "alt-1": ["k8s_hotbar::SwitchCluster", { "slot": 0 }],
+      "alt-2": ["k8s_hotbar::SwitchCluster", { "slot": 1 }],
+      "alt-3": ["k8s_hotbar::SwitchCluster", { "slot": 2 }],
+      "alt-4": ["k8s_hotbar::SwitchCluster", { "slot": 3 }],
+      "alt-5": ["k8s_hotbar::SwitchCluster", { "slot": 4 }],
+      "alt-6": ["k8s_hotbar::SwitchCluster", { "slot": 5 }],
+      "alt-7": ["k8s_hotbar::SwitchCluster", { "slot": 6 }],
+      "alt-8": ["k8s_hotbar::SwitchCluster", { "slot": 7 }],
+      "alt-9": ["k8s_hotbar::SwitchCluster", { "slot": 8 }],
+      "alt-0": ["k8s_hotbar::SwitchCluster", { "slot": 9 }],
+      "alt--": ["k8s_hotbar::SwitchCluster", { "slot": 10 }],
+      "alt-=": ["k8s_hotbar::SwitchCluster", { "slot": 11 }],
+      "alt-shift-1": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-shift-2": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-shift-3": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-shift-4": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-shift-5": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-shift-6": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-shift-7": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-shift-8": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-shift-9": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      "alt-!": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-@": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-#": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-$": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-%": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-^": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-&": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-*": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-(": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      "secondary-alt-p": ["k8s_shell::UseKeymapPreset", { "preset": "lens" }],
+      "secondary-alt-v": ["k8s_shell::UseKeymapPreset", { "preset": "vscode" }]
+    }
+  },
+  {
+    "context": "menu",
+    "unbind": {
+      "escape": "k8s_shell::Dismiss",
+      "tab": "k8s_shell::FocusNext",
+      "shift-tab": "k8s_shell::FocusPrevious",
+      "ctrl-tab": "k8s_shell::FocusNext",
+      "ctrl-shift-tab": "k8s_shell::FocusPrevious",
+      "secondary-z": "k8s_shell::Undo",
+      "secondary-shift-z": "k8s_shell::Redo",
+      "secondary-x": "k8s_shell::Cut",
+      "secondary-c": "k8s_shell::Copy",
+      "secondary-v": "k8s_shell::Paste",
+      "secondary-a": "k8s_shell::SelectAll"
+    }
+  },
+  {
+    // A text surface keeps the standard editing keys. Closing the window or a tab must never eat
+    // a keystroke meant for the value being edited, and neither must the app commands that own
+    // the end-of-line and tab keys. macOS releases the same keys from its overlay.
+    "context": "Editor || TextInput",
+    "unbind": {
+      "secondary-w": "k8s_app::CloseWindow",
+      "secondary-shift-t": "k8s_shell::CloseTab",
+      "secondary-e": "k8s_shell::FocusYaml",
+      "secondary-shift-o": "k8s_shell::OpenOverview",
+      "secondary-shift-a": "k8s_shell::ApplyYaml",
+      "secondary-alt-e": "k8s_shell::OpenEvents",
+      "secondary-alt-f": "k8s_shell::OpenForwards",
+      "secondary-alt-i": "k8s_shell::DescribeSelection",
+      "secondary-alt-r": "k8s_shell::RestartSelection",
+      "secondary-alt-x": "k8s_shell::ExecSelection",
+      "secondary-alt-y": "k8s_shell::CopySelectedPodName",
+      "secondary-shift-g": "k8s_shell::PortForwardSelection",
+      "secondary-shift-s": "k8s_shell::ScaleSelection",
+      "secondary-shift-u": "k8s_shell::ReloadKeymap",
+      "secondary-shift-v": "k8s_shell::OpenLogs",
+      "alt-p": "k8s_shell::PauseUpdates",
+      "alt-r": "k8s_shell::ResumeUpdates",
+      "alt-t": "k8s_shell::ToggleTheme",
+      "secondary-shift-b": "k8s_hotbar::ToggleHotbar",
+      "alt-1": ["k8s_hotbar::SwitchCluster", { "slot": 0 }],
+      "alt-2": ["k8s_hotbar::SwitchCluster", { "slot": 1 }],
+      "alt-3": ["k8s_hotbar::SwitchCluster", { "slot": 2 }],
+      "alt-4": ["k8s_hotbar::SwitchCluster", { "slot": 3 }],
+      "alt-5": ["k8s_hotbar::SwitchCluster", { "slot": 4 }],
+      "alt-6": ["k8s_hotbar::SwitchCluster", { "slot": 5 }],
+      "alt-7": ["k8s_hotbar::SwitchCluster", { "slot": 6 }],
+      "alt-8": ["k8s_hotbar::SwitchCluster", { "slot": 7 }],
+      "alt-9": ["k8s_hotbar::SwitchCluster", { "slot": 8 }],
+      "alt-0": ["k8s_hotbar::SwitchCluster", { "slot": 9 }],
+      "alt--": ["k8s_hotbar::SwitchCluster", { "slot": 10 }],
+      "alt-=": ["k8s_hotbar::SwitchCluster", { "slot": 11 }],
+      "alt-shift-1": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-shift-2": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-shift-3": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-shift-4": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-shift-5": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-shift-6": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-shift-7": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-shift-8": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-shift-9": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      "alt-!": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-@": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-#": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-$": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-%": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-^": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-&": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-*": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-(": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      "f5": "k8s_inspector::ReloadActiveTab",
+      "secondary-alt-m": "k8s_inspector::MetricsRange5m",
+      "secondary-shift-q": "k8s_inspector::MetricsRange15m",
+      "secondary-shift-h": "k8s_inspector::MetricsRange1h",
+      "secondary-alt-c": "k8s_inspector::RetryMetrics",
+      "secondary-alt-a": "k8s_inspector::ConfirmApply",
+      "secondary-r": "k8s_inspector::RevertYaml",
+      "secondary-n": "k8s_inspector::NextProblem",
+      "secondary-c": "k8s_inspector::CopyValue",
+      "secondary-y": "k8s_inspector::CopyYaml",
+      "secondary-alt-o": "k8s_inspector::ToggleValueExpansion",
+      "shift-f10": "k8s_table::OpenRowActions"
+    }
+  },
+  {
+    // A search field, a dialog, and an open menu own the keyboard: no app command, including
+    // the close keys and the tab commands, fires until the overlay is dismissed.
+    "context": "ResourceSearch || Dialog || menu",
+    "unbind": {
+      "secondary-shift-p": "k8s_shell::ToggleCommandPalette",
+      "secondary-b": "k8s_shell::ToggleLeftPanel",
+      "secondary-alt-b": "k8s_shell::ToggleRightPanel",
+      "secondary-j": "k8s_shell::ToggleDock",
+      "secondary-shift-f": "k8s_shell::SearchResources",
+      "secondary-shift-n": "k8s_shell::ToggleNotifications",
+      "secondary-shift-r": "k8s_shell::ReloadKubeconfigs",
+      "secondary-,": "k8s_app::OpenSettings",
+      "secondary-w": "k8s_app::CloseWindow",
+      "secondary-shift-t": "k8s_shell::CloseTab",
+      "secondary-alt-w": "k8s_shell::CloseOtherTabs",
+      "secondary-shift-w": "k8s_shell::CloseAllTabs",
+      "secondary-shift-i": "k8s_shell::TogglePinTab",
+      "secondary-alt-left": "k8s_shell::MoveTabLeft",
+      "secondary-alt-right": "k8s_shell::MoveTabRight",
+      "secondary-pagedown": "k8s_shell::NextTab",
+      "secondary-pageup": "k8s_shell::PreviousTab",
+      "secondary-1": ["k8s_shell::SwitchTab", { "index": 0 }],
+      "secondary-2": ["k8s_shell::SwitchTab", { "index": 1 }],
+      "secondary-3": ["k8s_shell::SwitchTab", { "index": 2 }],
+      "secondary-4": ["k8s_shell::SwitchTab", { "index": 3 }],
+      "secondary-5": ["k8s_shell::SwitchTab", { "index": 4 }],
+      "secondary-6": ["k8s_shell::SwitchTab", { "index": 5 }],
+      "secondary-7": ["k8s_shell::SwitchTab", { "index": 6 }],
+      "secondary-8": ["k8s_shell::SwitchTab", { "index": 7 }],
+      "secondary-9": ["k8s_shell::SwitchTab", { "index": 8 }],
+      "secondary-e": "k8s_shell::FocusYaml",
+      "secondary-shift-o": "k8s_shell::OpenOverview",
+      "secondary-shift-c": "k8s_shell::OpenContextSwitcher",
+      "secondary-shift-m": "k8s_shell::OpenNamespaceSwitcher",
+      "secondary-shift-k": "k8s_shell::OpenResourceKindSwitcher",
+      "up": "k8s_table::SelectPrevious",
+      "down": "k8s_table::SelectNext",
+      "tab": "k8s_table::SelectNextColumn",
+      "shift-tab": "k8s_table::SelectPreviousColumn",
+      "shift-enter": "k8s_table::SortSelectedColumn",
+      "enter": "k8s_table::OpenDetails",
+      "space": "k8s_table::OpenDetails",
+      "f5": "k8s_ops::Refresh",
+      "delete": "k8s_ops::DeleteSelection",
+      "shift-f10": "k8s_table::OpenRowActions",
+      "secondary-shift-a": "k8s_shell::ApplyYaml",
+      "secondary-alt-e": "k8s_shell::OpenEvents",
+      "secondary-alt-f": "k8s_shell::OpenForwards",
+      "secondary-alt-i": "k8s_shell::DescribeSelection",
+      "secondary-alt-r": "k8s_shell::RestartSelection",
+      "secondary-alt-x": "k8s_shell::ExecSelection",
+      "secondary-alt-y": "k8s_shell::CopySelectedPodName",
+      "secondary-shift-g": "k8s_shell::PortForwardSelection",
+      "secondary-shift-s": "k8s_shell::ScaleSelection",
+      "secondary-shift-u": "k8s_shell::ReloadKeymap",
+      "secondary-shift-v": "k8s_shell::OpenLogs",
+      "alt-p": "k8s_shell::PauseUpdates",
+      "alt-r": "k8s_shell::ResumeUpdates",
+      "alt-t": "k8s_shell::ToggleTheme",
+      "secondary-shift-b": "k8s_hotbar::ToggleHotbar",
+      "alt-1": ["k8s_hotbar::SwitchCluster", { "slot": 0 }],
+      "alt-2": ["k8s_hotbar::SwitchCluster", { "slot": 1 }],
+      "alt-3": ["k8s_hotbar::SwitchCluster", { "slot": 2 }],
+      "alt-4": ["k8s_hotbar::SwitchCluster", { "slot": 3 }],
+      "alt-5": ["k8s_hotbar::SwitchCluster", { "slot": 4 }],
+      "alt-6": ["k8s_hotbar::SwitchCluster", { "slot": 5 }],
+      "alt-7": ["k8s_hotbar::SwitchCluster", { "slot": 6 }],
+      "alt-8": ["k8s_hotbar::SwitchCluster", { "slot": 7 }],
+      "alt-9": ["k8s_hotbar::SwitchCluster", { "slot": 8 }],
+      "alt-0": ["k8s_hotbar::SwitchCluster", { "slot": 9 }],
+      "alt--": ["k8s_hotbar::SwitchCluster", { "slot": 10 }],
+      "alt-=": ["k8s_hotbar::SwitchCluster", { "slot": 11 }],
+      "alt-shift-1": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-shift-2": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-shift-3": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-shift-4": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-shift-5": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-shift-6": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-shift-7": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-shift-8": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-shift-9": ["k8s_hotbar::SwitchBank", { "index": 8 }],
+      "alt-!": ["k8s_hotbar::SwitchBank", { "index": 0 }],
+      "alt-@": ["k8s_hotbar::SwitchBank", { "index": 1 }],
+      "alt-#": ["k8s_hotbar::SwitchBank", { "index": 2 }],
+      "alt-$": ["k8s_hotbar::SwitchBank", { "index": 3 }],
+      "alt-%": ["k8s_hotbar::SwitchBank", { "index": 4 }],
+      "alt-^": ["k8s_hotbar::SwitchBank", { "index": 5 }],
+      "alt-&": ["k8s_hotbar::SwitchBank", { "index": 6 }],
+      "alt-*": ["k8s_hotbar::SwitchBank", { "index": 7 }],
+      "alt-(": ["k8s_hotbar::SwitchBank", { "index": 8 }]
+    }
+  },
+  {
+    // The panel takes Escape for its review, the way a menu takes it for Cancel, so the shell's
+    // global Dismiss is released here: inside the Inspector one keystroke means one thing. A
+    // search field, a dialog, and a menu keep their own Escape, because there the overlay is the
+    // only thing that owns the keyboard.
+    "context": "Inspector && !CommandPalette",
+    "unbind": {
+      "escape": "k8s_shell::Dismiss"
+    }
+  },
+  {
+    // The Inspector keeps its own release list: a keymap file maps one action per keystroke,
+    // and f5 above already releases the table refresh in this context.
+    "context": "ResourceSearch || Dialog || menu",
+    "unbind": {
+      "f5": "k8s_inspector::ReloadActiveTab",
+      "secondary-alt-m": "k8s_inspector::MetricsRange5m",
+      "secondary-shift-q": "k8s_inspector::MetricsRange15m",
+      "secondary-shift-h": "k8s_inspector::MetricsRange1h",
+      "secondary-alt-c": "k8s_inspector::RetryMetrics",
+      "secondary-alt-a": "k8s_inspector::ConfirmApply",
+      "escape": "k8s_inspector::CancelApplyReview",
+      "secondary-r": "k8s_inspector::RevertYaml",
+      "secondary-n": "k8s_inspector::NextProblem",
+      "secondary-c": "k8s_inspector::CopyValue",
+      "secondary-y": "k8s_inspector::CopyYaml",
+      "secondary-alt-o": "k8s_inspector::ToggleValueExpansion"
+    }
+  }
+  // The following actions do not exist in this build yet. Uncomment a binding only after its corresponding action exists.
+  //
+  // "secondary-shift-,": "k8s_app::OpenClusterSettings",
+  // "secondary-f": "k8s_shell::SearchInView",
+  // "secondary-p": "k8s_shell::SearchClusters"
+]

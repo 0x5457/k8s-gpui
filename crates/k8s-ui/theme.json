@@ -1,0 +1,55 @@
+{
+  "typography": {
+    "data": {
+      "font_family": "JetBrainsMono Nerd Font",
+      "font_size": 12,
+      "line_height": 1.5,
+      "font_features": {
+        "calt": 0,
+        "dlig": 0,
+        "liga": 0,
+        "tnum": 1,
+        "zero": 1
+      }
+    },
+    "terminal": {
+      "font_features": {
+        "calt": 0,
+        "dlig": 0,
+        "liga": 0,
+        "tnum": 1,
+        "zero": 1
+      }
+    }
+  },
+  "accessibility": {
+    "increase_contrast": {
+      "default": false,
+      "setting_key": "increaseContrast",
+      "text_min_contrast": 7.0,
+      "graphic_min_contrast": 4.5
+    }
+  },
+  "surfaces": {
+    "editor": "editor.background",
+    "input": "surface.background",
+    "raised": "elevated_surface.background",
+    "selected": "element.selected",
+    "tab_bar": "tab_bar.background",
+    "tab_active": "tab.active_background"
+  },
+  "editor_wash": {
+    "active_line": "editor.active_line.background",
+    "diagnostic": "error.background",
+    "diagnostic_alpha": 0.16
+  },
+  "text_selection": {
+    "background": "element.selection_background",
+    "foreground": "text",
+    "foreground_fallback": "text.accent"
+  },
+  "search_match": {
+    "background": "search.match_background",
+    "active_background": "search.active_match_background"
+  }
+}
