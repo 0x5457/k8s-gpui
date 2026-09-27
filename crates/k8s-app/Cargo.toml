@@ -16,7 +16,7 @@ assets.workspace = true
 ed25519-dalek = "2.2"
 hex = "0.4"
 reqwest = { version = "0.12.28", default-features = false, features = ["rustls-tls", "stream"] }
-sha2 = "0.10"
+sha2 = "0.11"
 tempfile.workspace = true
 # profiler provides frame histograms, the built-in frame overlay, HangDetector, and the foreground journal.
 gpui = { workspace = true, features = ["profiler"] }
