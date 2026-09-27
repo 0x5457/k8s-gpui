@@ -23,7 +23,7 @@ serde_yaml_ng = "0.10"
 tokio = { version = "1", features = ["full"] }
 # GPUI #[gpui::bench] code uses criterion. Benchmarks run in release mode.
 criterion = { version = "0.5", features = ["html_reports"] }
-dirs = "6"
+dirs = "7"
 libc = "0.2"
 tempfile = "3.27"
 which = "8"
