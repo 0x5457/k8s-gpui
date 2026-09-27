@@ -27,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -99,7 +99,7 @@ jobs:
       K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
       K8S_GPUI_UPDATE_MANIFEST_URL: https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-x86_64.json
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -116,14 +116,14 @@ jobs:
             git curl jq
 
       # Match the Rust toolchain pin.
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-linux-x86_64
 
       - name: Install nextest
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172
         with:
           tool: nextest
 
@@ -157,19 +157,19 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-macos-${{ runner.arch }}
 
       - name: Install nextest
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172
         with:
           tool: nextest
 
@@ -242,7 +242,7 @@ jobs:
     env:
       CARGO_INCREMENTAL: "0"
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -252,14 +252,14 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: release-windows-${{ runner.arch }}
 
       - name: Install nextest
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172
         with:
           tool: nextest
 
@@ -314,7 +314,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false

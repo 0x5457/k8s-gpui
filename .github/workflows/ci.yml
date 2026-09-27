@@ -35,11 +35,11 @@ jobs:
       run: ${{ steps.filter.outputs.run }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -85,15 +85,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: rustfmt
       - name: Check Rust formatting
@@ -126,7 +126,7 @@ jobs:
       CXX: ${{ matrix.cxx }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
         with:
           egress-policy: audit
       - name: Enable Windows long paths
@@ -134,7 +134,7 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Linux dependencies
@@ -149,7 +149,7 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
             git curl jq
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy
       - name: Cache Rust build artifacts
@@ -189,7 +189,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1
         with:
           egress-policy: audit
       - name: Enable Windows long paths
@@ -197,7 +197,7 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Linux dependencies
@@ -212,13 +212,13 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
             git curl jq
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
       - name: Cache Rust build artifacts
         uses: Swatinem/rust-cache@v2
         with:
           shared-key: test-${{ matrix.name }}-${{ runner.arch }}
       - name: Install nextest
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        uses: taiki-e/install-action@9983c65e42da123ff25d1f78505eb6de315aa172
         with:
           tool: nextest
       - name: Run workspace tests
