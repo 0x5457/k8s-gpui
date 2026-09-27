@@ -1,0 +1,441 @@
+## Release flow: a tag creates a draft release, builds assets, uploads them, and publishes the release.
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref_name }}
+  cancel-in-progress: false
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+  CARGO_INCREMENTAL: "0"
+  CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+  CARGO_NET_RETRY: "10"
+  CARGO_HTTP_TIMEOUT: "600"
+
+jobs:
+  validate_release:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Check the release tag and updater signing settings
+        id: version
+        shell: bash
+        env:
+          K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
+          K8S_GPUI_UPDATE_SIGNING_KEY: ${{ secrets.K8S_GPUI_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          version="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          with Path("Cargo.toml").open("rb") as stream:
+              print(tomllib.load(stream)["workspace"]["package"]["version"])
+          PY
+          )"
+          if [[ "$GITHUB_REF_NAME" != "v${version}" ]]; then
+            echo "::error::GITHUB_REF_NAME=$GITHUB_REF_NAME does not match v${version}. Push a tag named v${version}."
+            exit 1
+          fi
+          missing=()
+          [[ -n "${K8S_GPUI_UPDATE_PUBLIC_KEY:-}" ]] || missing+=(K8S_GPUI_UPDATE_PUBLIC_KEY)
+          [[ -n "${K8S_GPUI_UPDATE_SIGNING_KEY:-}" ]] || missing+=(K8S_GPUI_UPDATE_SIGNING_KEY)
+          if ((${#missing[@]})); then
+            echo "::error::Missing updater settings: ${missing[*]}. Set K8S_GPUI_UPDATE_PUBLIC_KEY as a repository variable and K8S_GPUI_UPDATE_SIGNING_KEY as a repository secret."
+            exit 1
+          fi
+          printf 'version=%s\n' "$version" >> "$GITHUB_OUTPUT"
+          python3 scripts/sign_update_manifest.py check-key
+
+  create_draft_release:
+    needs: validate_release
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Create draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+            if [[ "$draft" != "true" ]]; then
+              echo "::error::Release $GITHUB_REF_NAME is already published. Do not modify it."
+              exit 1
+            fi
+            echo "Release $GITHUB_REF_NAME already exists. Skip creation."
+          else
+            gh release create "$GITHUB_REF_NAME" \
+              --repo "$GITHUB_REPOSITORY" \
+              --title "$GITHUB_REF_NAME" \
+              --draft \
+              --generate-notes
+          fi
+
+  bundle_linux_x86_64:
+    needs: [validate_release, create_draft_release]
+    runs-on: ubuntu-22.04
+    timeout-minutes: 150
+    env:
+      CC: clang
+      CXX: clang++
+      K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
+      K8S_GPUI_UPDATE_MANIFEST_URL: https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-x86_64.json
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      # Install the Linux dependencies for the application.
+      - name: Install Linux dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential clang lld llvm make cmake pkg-config \
+            libasound2-dev libfontconfig-dev libglib2.0-dev libssl-dev \
+            libstdc++-12-dev libva-dev libvulkan1 libwayland-dev \
+            libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
+            git curl jq
+
+      # Match the Rust toolchain pin.
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      # Deliberately not the mbx action: its GitHub backend only saves on a
+      # default-branch push, so a tag-triggered release build could never
+      # publish a cache entry and would start every run cold.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-linux-x86_64
+
+      - name: Install nextest
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        with:
+          tool: nextest
+
+      - name: Run native tests
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+
+      - name: Build release binaries
+        run: cargo build --release --locked -p k8s-app --bin k8s-app
+
+      - name: Package Linux release artifacts
+        run: |
+          set -euo pipefail
+          install -m 0755 target/release/k8s-app k8s-app
+          strip k8s-app
+          tar -czf k8s-gpui-linux-x86_64.tar.gz k8s-app
+          sha256sum k8s-gpui-linux-x86_64.tar.gz > k8s-gpui-linux-x86_64.tar.gz.sha256
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: k8s-gpui-linux-x86_64
+          path: |
+            k8s-app
+            k8s-gpui-linux-x86_64.tar.gz
+            k8s-gpui-linux-x86_64.tar.gz.sha256
+          if-no-files-found: error
+
+  bundle_macos:
+    needs: [validate_release, create_draft_release]
+    runs-on: macos-latest
+    timeout-minutes: 150
+    env:
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      # Kept on rust-cache for the tag-push save reason documented in the Linux job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-macos-${{ runner.arch }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        with:
+          tool: nextest
+
+      - name: Run native tests
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+
+      - name: Detect architecture
+        id: arch
+        shell: bash
+        run: echo "arch=$(uname -m)" >> "$GITHUB_OUTPUT"
+
+      - name: Build release binaries
+        run: cargo build --release --locked -p k8s-app --bin k8s-app
+
+      - name: Package an unsigned macOS artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          arch="${{ steps.arch.outputs.arch }}"
+          app="dist/K8s GPUI.app"
+          version="$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)"
+          mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
+          install -m 0755 target/release/k8s-app "$app/Contents/MacOS/k8s-app"
+          cat > "$app/Contents/Info.plist" <<PLIST
+          <?xml version="1.0" encoding="UTF-8"?>
+          <plist version="1.0">
+          <dict>
+            <key>CFBundleDevelopmentRegion</key>
+            <string>en</string>
+            <key>CFBundleDisplayName</key>
+            <string>K8s GPUI</string>
+            <key>CFBundleExecutable</key>
+            <string>k8s-app</string>
+            <key>CFBundleIdentifier</key>
+            <string>dev.k8s-gpui.app</string>
+            <key>CFBundleInfoDictionaryVersion</key>
+            <string>6.0</string>
+            <key>CFBundleName</key>
+            <string>K8s GPUI</string>
+            <key>CFBundlePackageType</key>
+            <string>APPL</string>
+            <key>CFBundleShortVersionString</key>
+            <string>$version</string>
+            <key>CFBundleVersion</key>
+            <string>$version</string>
+            <key>NSHighResolutionCapable</key>
+            <true/>
+            <key>NSPrincipalClass</key>
+            <string>NSApplication</string>
+          </dict>
+          </plist>
+          PLIST
+          plutil -lint "$app/Contents/Info.plist"
+          archive="k8s-gpui-macos-${arch}-unsigned.app.tar.gz"
+          tar -C dist -czf "$archive" "K8s GPUI.app"
+          shasum -a 256 "$archive" > "$archive.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: k8s-gpui-macos-${{ steps.arch.outputs.arch }}-unsigned
+          path: |
+            k8s-gpui-macos-${{ steps.arch.outputs.arch }}-unsigned.app.tar.gz
+            k8s-gpui-macos-${{ steps.arch.outputs.arch }}-unsigned.app.tar.gz.sha256
+          if-no-files-found: error
+
+  bundle_windows:
+    needs: [validate_release, create_draft_release]
+    runs-on: windows-latest
+    timeout-minutes: 150
+    env:
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Enable Windows long paths
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: git config --global core.longpaths true
+
+      - uses: dtolnay/rust-toolchain@1.98.1
+
+      # Kept on rust-cache for the tag-push save reason documented in the Linux job.
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: release-windows-${{ runner.arch }}
+
+      - name: Install nextest
+        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        with:
+          tool: nextest
+
+      - name: Run native tests
+        run: cargo nextest run --workspace --all-features --locked --no-fail-fast
+
+      - name: Detect architecture
+        id: arch
+        shell: pwsh
+        run: |
+          $arch = if ($env:RUNNER_ARCH -eq "ARM64") {
+            "arm64"
+          } elseif ($env:RUNNER_ARCH -eq "X64") {
+            "x86_64"
+          } else {
+            "x86"
+          }
+          "arch=$arch" >> $env:GITHUB_OUTPUT
+
+      - name: Build release binaries
+        run: cargo build --release --locked -p k8s-app --bin k8s-app
+
+      - name: Package an unsigned Windows artifact
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $arch = "${{ steps.arch.outputs.arch }}"
+          $package = "dist/k8s-gpui-windows-$arch"
+          New-Item -ItemType Directory -Force $package | Out-Null
+          Copy-Item "target/release/k8s-app.exe" "$package/k8s-app.exe"
+          $archive = "k8s-gpui-windows-$arch-unsigned.zip"
+          Compress-Archive -Path "$package/*" -DestinationPath $archive
+          $hash = (Get-FileHash $archive -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$hash  $archive" | Set-Content "$archive.sha256" -Encoding utf8
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned
+          path: |
+            k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned.zip
+            k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned.zip.sha256
+          if-no-files-found: error
+
+  upload_release_assets:
+    needs:
+      - validate_release
+      - create_draft_release
+      - bundle_linux_x86_64
+      - bundle_macos
+      - bundle_windows
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        with:
+          fetch-depth: 1
+          persist-credentials: false
+
+      - uses: actions/download-artifact@v8
+        with:
+          path: release-artifacts
+          merge-multiple: true
+
+      - name: Generate, sign, and verify the updater manifest
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate_release.outputs.version }}
+          K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
+          K8S_GPUI_UPDATE_SIGNING_KEY: ${{ secrets.K8S_GPUI_UPDATE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${K8S_GPUI_UPDATE_PUBLIC_KEY:-}" || -z "${K8S_GPUI_UPDATE_SIGNING_KEY:-}" ]]; then
+            echo "::error::Updater settings are missing. Set K8S_GPUI_UPDATE_PUBLIC_KEY as a repository variable and K8S_GPUI_UPDATE_SIGNING_KEY as a repository secret."
+            exit 1
+          fi
+          python3 scripts/update_manifest.py generate \
+            --output release-artifacts/update-linux-x86_64.json \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --version "$RELEASE_VERSION" \
+            --os linux \
+            --arch x86_64 \
+            --artifact release-artifacts/k8s-app
+          python3 scripts/sign_update_manifest.py sign \
+            --manifest release-artifacts/update-linux-x86_64.json \
+            --signature release-artifacts/update-linux-x86_64.json.sig
+          python3 scripts/sign_update_manifest.py verify \
+            --manifest release-artifacts/update-linux-x86_64.json \
+            --signature release-artifacts/update-linux-x86_64.json.sig
+          python3 scripts/update_manifest.py verify \
+            --manifest release-artifacts/update-linux-x86_64.json \
+            --artifact-root release-artifacts \
+            --repository "$GITHUB_REPOSITORY" \
+            --tag "$GITHUB_REF_NAME" \
+            --version "$RELEASE_VERSION" \
+            --os linux \
+            --arch x86_64 \
+            --required-artifact k8s-app
+
+      - name: Check Linux release assets
+        shell: bash
+        env:
+          RELEASE_VERSION: ${{ needs.validate_release.outputs.version }}
+        run: |
+          set -euo pipefail
+          test -s release-artifacts/k8s-app
+          chmod 0755 release-artifacts/k8s-app
+          for binary in release-artifacts/k8s-app; do
+            if ! file "$binary" | grep -E 'ELF 64-bit.*x86-64' >/dev/null; then
+              echo "::error::$binary is not a Linux x86_64 ELF binary. Check the build artifact."
+              exit 1
+            fi
+          done
+          (
+            cd release-artifacts
+            shopt -s nullglob
+            checksums=( *.sha256 )
+            if ((${#checksums[@]} == 0)); then
+              echo "::error::No SHA-256 sidecar files were downloaded. Check the artifact upload."
+              exit 1
+            fi
+            sha256sum --check "${checksums[@]}"
+          )
+          set +e
+          version_output="$(timeout 3s release-artifacts/k8s-app --version 2>&1)"
+          version_status=$?
+          set -e
+          if [[ "$version_status" -ne 0 || "$version_output" != "k8s-app ${RELEASE_VERSION}" ]]; then
+            echo "::error::k8s-app --version did not report k8s-app $RELEASE_VERSION. Check the binary and version."
+            exit 1
+          fi
+
+      - name: Refuse published or conflicting release assets
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          draft="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json isDraft --jq '.isDraft')"
+          if [[ "$draft" != "true" ]]; then
+            echo "::error::Do not upload assets to a published release. Create a new draft release instead."
+            exit 1
+          fi
+          shopt -s nullglob
+          assets=( release-artifacts/* )
+          if ((${#assets[@]} == 0)); then
+            echo "::error::No release assets were found. Check the downloaded artifacts and build jobs."
+            exit 1
+          fi
+          existing="$(gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets[].name')"
+          for path in "${assets[@]}"; do
+            if [[ ! -f "$path" ]]; then
+              echo "::error::Release asset is not a regular file: $path. Check the artifact path."
+              exit 1
+            fi
+            name="${path##*/}"
+            if printf '%s\n' "$existing" | grep -Fx "$name" >/dev/null; then
+              echo "::error::Release asset already exists and will not be overwritten: $name. Remove it from the draft release before retrying."
+              exit 1
+            fi
+          done
+
+      - name: Upload assets and publish
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          assets=( release-artifacts/* )
+          if ((${#assets[@]} == 0)); then
+            echo "::error::No release assets were found. Check the downloaded artifacts and build jobs."
+            exit 1
+          fi
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" "${assets[@]}"
+          gh release edit "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --draft=false --latest

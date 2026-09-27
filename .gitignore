@@ -1,0 +1,9 @@
+/target
+/target-*
+**/*.rs.bk
+reference/
+core.*
+
+__pycache__/
+vendor/
+docs

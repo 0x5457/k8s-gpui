@@ -1,0 +1,28 @@
+// The k8s-gpui keymap.
+//
+// User overrides for the selected keymap file. This file is loaded after the
+// built-in default keymap and the selected preset, so later bindings win.
+// JSONC supports comments and trailing commas.
+//
+// Contexts used by the built-in keymap are Shell, CommandPalette, Table,
+// Inspector, Hotbar, Terminal, Editor, TextInput, ResourceSearch, Dialog, and
+// menu. Terminal owns a focused session, Editor and TextInput own typing, the
+// Inspector owns the selected object's YAML and its Describe values, and
+// ResourceSearch, Dialog, and menu own an open overlay. A binding with no
+// "context" is global.
+//
+// Open the command palette (secondary-shift-p) and run "Reload Keymap" after editing.
+[
+  {
+    "context": "Shell && !CommandPalette",
+    "bindings": {
+      // "secondary-shift-e": "k8s_shell::ToggleLeftPanel"
+    }
+  },
+  {
+    "context": "Table && !CommandPalette",
+    "bindings": {
+      // "secondary-d": "k8s_table::OpenDetails"
+    }
+  }
+]

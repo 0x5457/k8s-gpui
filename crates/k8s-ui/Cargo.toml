@@ -1,0 +1,36 @@
+[package]
+name = "k8s-ui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+# The performance spike is a benchmark harness, not shipped application code.
+# Enable with `--features spike` to build the `table-spike` binary.
+spike = []
+
+[dependencies]
+k8s-actions = { path = "../k8s-actions" }
+k8s-core = { path = "../k8s-core" }
+gpui-kit.workspace = true
+tokio.workspace = true
+serde_json.workspace = true
+serde.workspace = true
+serde_yaml_ng.workspace = true
+kube-core.workspace = true
+statig.workspace = true
+jiff.workspace = true
+
+# GPUI's test infrastructure comes through gpui-kit (TestAppContext,
+# VisualTestContext, #[gpui_kit::test]); the bench harness is only on gpui itself.
+[dev-dependencies]
+criterion.workspace = true
+gpui-kit = { workspace = true, features = ["test-support"] }
+gpui = { workspace = true, features = ["bench-support"] }
+rand = "0.10"
+
+[[bench]]
+name = "table"
+harness = false
+required-features = ["spike"]

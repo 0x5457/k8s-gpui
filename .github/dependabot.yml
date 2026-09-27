@@ -1,0 +1,46 @@
+# Dependabot checks for Cargo and GitHub Actions updates every Wednesday at 15:00 America/New_York.
+# Minor and patch updates are grouped; major updates remain separate.
+# Serde, kube, Tokio, and GitHub Actions updates are grouped.
+# Git dependencies are not supported and require manual updates.
+version: 2
+
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "15:00"
+      timezone: America/New_York
+    open-pull-requests-limit: 10
+    groups:
+      serde:
+        patterns:
+          - "serde"
+          - "serde_*"
+      kube-stack:
+        patterns:
+          - "kube"
+          - "kube-*"
+          - "k8s-openapi"
+      tokio-stack:
+        patterns:
+          - "tokio"
+          - "tokio-*"
+      minor-and-patch:
+        applies-to: version-updates
+        update-types:
+          - minor
+          - patch
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: wednesday
+      time: "15:00"
+      timezone: America/New_York
+    groups:
+      actions:
+        patterns:
+          - "*"

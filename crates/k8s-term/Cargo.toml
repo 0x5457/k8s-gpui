@@ -1,0 +1,19 @@
+[package]
+name = "k8s-term"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+k8s-actions = { path = "../k8s-actions" }
+alacritty_terminal = "0.26"
+anyhow.workspace = true
+gpui-kit.workspace = true
+tokio.workspace = true
+unicode-segmentation.workspace = true
+unicode-width = "0.2"
+
+# GPUI test support does not affect the application build.
+[dev-dependencies]
+gpui-kit = { workspace = true, features = ["test-support"] }

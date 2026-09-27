@@ -1,0 +1,45 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/k8s-actions",
+    "crates/k8s-core",
+    "crates/k8s-ui",
+    "crates/k8s-term",
+    "crates/k8s-app",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+rust-version = "1.98"
+
+[workspace.dependencies]
+anyhow = "1"
+thiserror = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml_ng = "0.10"
+# k8s-openapi's Time uses jiff internally. Avoid chrono to keep one time library.
+jiff = { version = "0.2", default-features = false, features = ["std"] }
+# RFC 3339 for on-disk records and crash logs. Pinned identically in two crates
+# before, which is how the two drift.
+chrono = "0.4.42"
+tokio = { version = "1", features = ["full"] }
+# One entry per crate, so feature unification is visible instead of accidental.
+kube = { version = "4.2.0", features = ["runtime", "ws", "gzip", "jsonpatch"] }
+kube-core = "4.2.0"
+statig = "0.4.1"
+unicode-segmentation = "1.13"
+# GPUI #[gpui::bench] code uses criterion. Benchmarks run in release mode.
+criterion = { version = "0.5", features = ["html_reports"] }
+dirs = "6"
+libc = "0.2"
+tempfile = "3.27"
+windows = { version = "0.62", default-features = false, features = ["std", "Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Storage_FileSystem", "Win32_System_Pipes", "Win32_System_Threading"] }
+
+# GPUI Kit: one dependency for the UI framework, components, and assets. It also
+# re-exports GPUI itself, so no member names gpui directly.
+gpui-kit = { version = "0.6.5", features = ["component", "assets", "tree-sitter", "tree-sitter-yaml"] }
+# Only the k8s-ui benchmark needs GPUI's bench harness by name; nothing else does.
+gpui = { package = "gpui-pre", version = "=0.3.6" }

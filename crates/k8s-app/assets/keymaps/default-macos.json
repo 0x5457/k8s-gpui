@@ -1,0 +1,98 @@
+// The macOS overlay for the k8s-gpui default keymap.
+//
+// It only adds what macOS needs on top of default-linux.json: the standard Command keys and
+// the replacement keys for the app commands that would shadow a system or text-input key.
+// Close keeps the shared meaning: secondary-w closes the active window, secondary-shift-t
+// closes the active center tab.
+//
+// The overlay never takes a chord away from a panel command. Inside the Inspector secondary-c
+// stays the copy of the focused value, because the Describe value row answers to Command+C on
+// every platform, and secondary-n is Next Problem rather than a New command, because this app
+// registers no New command for Command+N to stand for.
+[
+  {
+    "context": "!CommandPalette",
+    "unbind": {
+      "secondary-b": "k8s_shell::ToggleLeftPanel",
+      "secondary-j": "k8s_shell::ToggleDock"
+    }
+  },
+  {
+    "context": "!CommandPalette",
+    "bindings": {
+      "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
+      "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-q": "k8s_app::Quit",
+      "secondary-m": "k8s_app::MinimizeWindow",
+      "secondary-h": "k8s_app::Hide",
+      "secondary-alt-h": "k8s_app::HideOthers",
+      "ctrl-secondary-f": "k8s_app::ToggleFullScreen"
+    }
+  },
+  {
+    "context": "Shell && !CommandPalette",
+    "unbind": {
+      "secondary-e": "k8s_shell::FocusYaml"
+    },
+    "bindings": {
+      "secondary-shift-y": "k8s_shell::FocusYaml"
+    }
+  },
+  {
+    // The base keymap already releases the shared app commands in a session. macOS only adds the
+    // keys it introduces itself, and keeps Command-W: the Command chord belongs to the app, while
+    // the Control-W that the base releases stays available to the shell.
+    "context": "Terminal",
+    "unbind": {
+      "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
+      "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-shift-y": "k8s_shell::FocusYaml"
+    },
+    "bindings": {
+      "secondary-w": "k8s_app::CloseWindow",
+      "secondary-x": "k8s_shell::Cut",
+      "secondary-c": "k8s_shell::Copy",
+      "secondary-v": "k8s_shell::Paste",
+      "secondary-a": "k8s_shell::SelectAll"
+    }
+  },
+  {
+    // The base keymap already releases the shared app commands while a search field, a dialog, or
+    // a menu owns the keyboard. macOS adds the lifecycle and Command keys it introduces itself.
+    "context": "ResourceSearch || Dialog || PopupMenu",
+    "unbind": {
+      "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
+      "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-q": "k8s_app::Quit",
+      "secondary-m": "k8s_app::MinimizeWindow",
+      "secondary-h": "k8s_app::Hide",
+      "secondary-alt-h": "k8s_app::HideOthers",
+      "ctrl-secondary-f": "k8s_app::ToggleFullScreen",
+      "secondary-shift-y": "k8s_shell::FocusYaml",
+      "delete": "k8s_ops::DeleteSelection",
+      "secondary-delete": "k8s_ops::DeleteSelection"
+    }
+  },
+  {
+    // The base keymap triggers the destructive delete with the forward delete key alone. A Mac
+    // keyboard has no key with that name, and the key labelled Delete is Backspace there, so
+    // macOS asks for Command with the forward delete key: Command+Delete is the platform
+    // convention for moving something to the trash, and no bare key press destroys a resource.
+    // The confirmation dialog still guards the command.
+    "context": "Table && !CommandPalette",
+    "unbind": {
+      "delete": "k8s_ops::DeleteSelection"
+    },
+    "bindings": {
+      "secondary-delete": "k8s_ops::DeleteSelection"
+    }
+  },
+  {
+    "context": "Editor || TextInput",
+    "unbind": {
+      "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
+      "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-shift-y": "k8s_shell::FocusYaml"
+    }
+  }
+]
