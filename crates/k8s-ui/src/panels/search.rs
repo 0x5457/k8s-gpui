@@ -32,9 +32,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::design::{self, Severity};
 #[cfg(test)]
 use crate::design::Confidence;
+use crate::design::{self, Severity};
 use crate::panels::common;
 use crate::session::{ClusterSession, ResourceSpec, TextInput};
 
@@ -280,7 +280,6 @@ fn result_lanes(icon: AnyElement, namespace: AnyElement, name: AnyElement) -> An
         .child(name)
         .into_any_element()
 }
-
 
 /// The heading above one group of rows.
 ///

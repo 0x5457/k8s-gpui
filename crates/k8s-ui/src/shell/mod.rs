@@ -49,8 +49,7 @@ use k8s_core::helm::{Helm, HelmError};
 use k8s_core::latency::LatencyTier;
 use k8s_core::machines::{
     ConnectionEffect as CoreConnectionEffect, ConnectionEvent as CoreConnectionEvent,
-    ConnectionMachine as CoreConnectionMachine, ConnectionState as CoreConnectionState,
-    SearchHit,
+    ConnectionMachine as CoreConnectionMachine, ConnectionState as CoreConnectionState, SearchHit,
 };
 use statig::blocking::StateMachine;
 use statig::prelude::IntoStateMachineExt as _;
@@ -10980,13 +10979,14 @@ impl Render for Shell {
                     // over the title bar or under the status bar to become an overlay.
                     .relative()
                     .when(sidebar_visible, |this| {
-                        this.child(self.render_tree_with_filter(window, cx))
-                        .child(self.render_divider(
-                            DragTarget::Left,
-                            CursorStyle::ResizeLeftRight,
-                            window,
-                            cx,
-                        ))
+                        this.child(self.render_tree_with_filter(window, cx)).child(
+                            self.render_divider(
+                                DragTarget::Left,
+                                CursorStyle::ResizeLeftRight,
+                                window,
+                                cx,
+                            ),
+                        )
                     })
                     .child(self.render_center_workspace(window, cx))
                     .when(inspector_layout == InspectorLayout::Docked, |this| {
@@ -11867,7 +11867,8 @@ mod command_row_copy_tests {
             .build()
             .expect("tokio runtime");
         let handle = runtime.handle().clone();
-        let path = std::env::temp_dir().join(format!("k8s-gpui-stale-resume-{}.yaml", std::process::id()));
+        let path =
+            std::env::temp_dir().join(format!("k8s-gpui-stale-resume-{}.yaml", std::process::id()));
         std::fs::write(
             &path,
             r#"

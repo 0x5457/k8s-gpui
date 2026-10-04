@@ -2397,10 +2397,10 @@ impl Shell {
                 tooltip.clone(),
                 switcher_chord("k8s_shell::OpenNamespaceSwitcher", cx),
             )
-                .max_w(px(max_width))
-                .min_w(px(0.0))
-                .flex_shrink_1()
-                .tab_index(3isize),
+            .max_w(px(max_width))
+            .min_w(px(0.0))
+            .flex_shrink_1()
+            .tab_index(3isize),
         );
         // See `render_cluster_selector`: the eyebrow and the trigger are one row, and the row is
         // the control.
@@ -2958,18 +2958,30 @@ impl Shell {
             // flicker.
             .hover(|this| {
                 this.bg(if selected {
-                    design::state::hover_on(design::row_selected_bg_on(cx, surface), design::role::accent(cx))
+                    design::state::hover_on(
+                        design::row_selected_bg_on(cx, surface),
+                        design::role::accent(cx),
+                    )
                 } else if cursor {
-                    design::state::hover_on(tree_cursor_bg(surface, cx), design::role::fg_primary(cx))
+                    design::state::hover_on(
+                        tree_cursor_bg(surface, cx),
+                        design::role::fg_primary(cx),
+                    )
                 } else {
                     design::state::hover(cx, surface)
                 })
             })
             .active(|this| {
                 this.bg(if selected {
-                    design::state::press_on(design::row_selected_bg_on(cx, surface), design::role::accent(cx))
+                    design::state::press_on(
+                        design::row_selected_bg_on(cx, surface),
+                        design::role::accent(cx),
+                    )
                 } else if cursor {
-                    design::state::press_on(tree_cursor_bg(surface, cx), design::role::fg_primary(cx))
+                    design::state::press_on(
+                        tree_cursor_bg(surface, cx),
+                        design::role::fg_primary(cx),
+                    )
                 } else {
                     design::state::press(cx, surface)
                 })

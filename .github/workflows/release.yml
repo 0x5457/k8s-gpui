@@ -156,7 +156,6 @@ jobs:
     needs: [validate_release, create_draft_release]
     runs-on: macos-latest
     timeout-minutes: 150
-    env:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -241,7 +240,6 @@ jobs:
     needs: [validate_release, create_draft_release]
     runs-on: windows-latest
     timeout-minutes: 150
-    env:
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:

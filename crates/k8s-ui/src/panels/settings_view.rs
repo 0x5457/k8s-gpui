@@ -324,8 +324,7 @@ const SAVE_NOT_SAVED_NOTE: &str = "Not saved";
 const RETRY_LABEL: &str = "Retry";
 const SAVING_LABEL: &str = "Saving…";
 
-const UPDATES_UNAVAILABLE_MESSAGE: &str =
-    "Application updates are unavailable in this build. Use a K8s Studio build with update support.";
+const UPDATES_UNAVAILABLE_MESSAGE: &str = "Application updates are unavailable in this build. Use a K8s Studio build with update support.";
 
 /// The theme family that ships with the product. Everything else is a Zed theme.
 const K8S_STUDIO_THEME_PREFIX: &str = "K8s Studio";
@@ -5230,7 +5229,11 @@ impl SettingsView {
                 .role(Role::Status)
                 .aria_label(text.clone())
                 .child(if busy {
-                    spinner(IconName::LoaderCircle, color, Size::Size(design::icon::IN_ROW))
+                    spinner(
+                        IconName::LoaderCircle,
+                        color,
+                        Size::Size(design::icon::IN_ROW),
+                    )
                 } else {
                     Icon::new(design::health_icon(severity))
                         .with_size(Size::Size(design::icon::IN_ROW))

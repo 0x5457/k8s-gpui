@@ -453,9 +453,9 @@ fn show_about(cx: &mut App) {
             alert
                 .title(format!("About {}", crate::menus::product_name()))
                 .description(format!(
-                "Version {}. Manage Kubernetes clusters and workloads.",
-                env!("CARGO_PKG_VERSION")
-            ))
+                    "Version {}. Manage Kubernetes clusters and workloads.",
+                    env!("CARGO_PKG_VERSION")
+                ))
         });
     });
 }
@@ -922,9 +922,7 @@ fn main() {
                                     shell.set_terminal_services(None, cx);
                                 });
                             }
-                            eprintln!(
-                                "k8s-gpui: {error}"
-                            );
+                            eprintln!("k8s-gpui: {error}");
                         }
                     }
                 })

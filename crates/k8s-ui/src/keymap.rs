@@ -1309,8 +1309,8 @@ mod tests {
     use crate::shell::{
         CloseAllTabs, CloseOtherTabs, CloseTab, Copy, Cut, Dismiss, FocusNext, FocusPrevious,
         FocusYaml, NextTab, Paste, PreviousTab, Redo, ReloadKubeconfigs, SearchResources,
-        SelectAll, SwitchCluster, SwitchTab, ToggleCommandPalette, ToggleDock,
-        ToggleLeftPanel, ToggleNotifications, Undo,
+        SelectAll, SwitchCluster, SwitchTab, ToggleCommandPalette, ToggleDock, ToggleLeftPanel,
+        ToggleNotifications, Undo,
     };
     use gpui_kit::TestAppContext;
 
@@ -2218,9 +2218,10 @@ mod tests {
             // The table body is the other half of the rule: releasing a key on the field must not
             // release it everywhere. Read on every platform, so a platform that gave a key away
             // without binding it somewhere else fails here rather than shipping a dead chord.
-            for (key, action) in TABLE_BARE_KEYS.into_iter().filter(|(key, _)| {
-                target != "macos" || *key != "delete"
-            }) {
+            for (key, action) in TABLE_BARE_KEYS
+                .into_iter()
+                .filter(|(key, _)| target != "macos" || *key != "delete")
+            {
                 assert!(
                     effective_action_names(cx, key, &["Shell", "Table"])
                         .iter()

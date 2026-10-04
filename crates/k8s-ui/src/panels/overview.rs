@@ -2984,18 +2984,16 @@ fn workload_cell(
         // a shortfall to state, for the reason the stat tiles reserve theirs: five
         // meters on one line is a spine, and a cell that printed two lines and a
         // cell that printed three would put its meter 16px off it.
-        .child(
-            div().min_w(px(0.)).min_h(text::LABEL_LINE_HEIGHT).child(
-                // The cell's own subline is the story it exists to tell — how many
-                // replicas are missing — so its resting arm is secondary ink. See
-                // [`subline_ink`].
-                tile_subline(
-                    &[(subline.clone(), subline_severity)],
-                    role::fg_secondary(cx),
-                    cx,
-                ),
+        .child(div().min_w(px(0.)).min_h(text::LABEL_LINE_HEIGHT).child(
+            // The cell's own subline is the story it exists to tell — how many
+            // replicas are missing — so its resting arm is secondary ink. See
+            // [`subline_ink`].
+            tile_subline(
+                &[(subline.clone(), subline_severity)],
+                role::fg_secondary(cx),
+                cx,
             ),
-        )
+        ))
         // The bar slot is reserved whether or not this kind has a denominator —
         // `bar_slot` says why, and the short version is that a kind with `0 / 0`
         // has no bar to draw and the other four cells in the row do.
@@ -3265,10 +3263,7 @@ fn vital_figures(overview: &Overview) -> (StatTile, Vec<StatTile>) {
             .collect();
         match ranked.iter().max_by_key(|(number, _)| *number) {
             Some((number, name)) => {
-                let mut runs = vec![(
-                    format!("{} {name}", count(*number)),
-                    bucket_severity(name),
-                )];
+                let mut runs = vec![(format!("{} {name}", count(*number)), bucket_severity(name))];
                 if let Some((rest, rest_name)) = ranked
                     .iter()
                     .filter(|(other, _)| *other != *number)

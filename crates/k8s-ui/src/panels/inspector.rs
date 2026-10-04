@@ -675,13 +675,9 @@ enum ApplyCheckState {
     /// The server accepted the document and returned the object it would store.
     Valid,
     /// Another field manager owns a field this apply would change.
-    Conflict {
-        owners: Vec<String>,
-    },
+    Conflict { owners: Vec<String> },
     /// The check could not complete. Applying is still allowed; the reason is shown instead.
-    Failed {
-        reason: String,
-    },
+    Failed { reason: String },
 }
 
 /// One flattened field: its path, the text it shows, and whether the JSON value is a string.
@@ -2343,9 +2339,13 @@ impl InspectorPanel {
     /// every verdict was discarded on arrival. The review's own request answers while it is open.
     pub fn current_apply_request(&self) -> Option<ApplyRequest> {
         self.apply_request.clone().or_else(|| {
-            self.pending_apply
-                .as_ref()
-                .map(|pending| ApplyRequest::new(pending.request_id, pending.target.clone(), pending.yaml.clone()))
+            self.pending_apply.as_ref().map(|pending| {
+                ApplyRequest::new(
+                    pending.request_id,
+                    pending.target.clone(),
+                    pending.yaml.clone(),
+                )
+            })
         })
     }
 
@@ -4852,7 +4852,10 @@ impl InspectorPanel {
             return Some(status_message(
                 Severity::Warning,
                 "Unsaved changes",
-                Some("Preview to see what the cluster would take, or Cancel to discard them.".to_owned()),
+                Some(
+                    "Preview to see what the cluster would take, or Cancel to discard them."
+                        .to_owned(),
+                ),
                 cx,
             ));
         }
@@ -5637,8 +5640,7 @@ impl InspectorPanel {
                 None,
             ),
             ApplyCheckState::Valid => (
-                "The API server would take this document. Nothing has been written yet."
-                    .to_owned(),
+                "The API server would take this document. Nothing has been written yet.".to_owned(),
                 // Words, so the word inks: this line is the answer a reader acts on, and a
                 // sentence drawn in the mark ink is a sentence read at whatever contrast a 6px
                 // dot happens to clear.
@@ -8082,7 +8084,11 @@ fn icon_control_box() -> Pixels {
 /// The sweep belongs to the shared `spinner`, which also honors reduce motion, so nothing here
 /// reads that setting.
 fn waiting_glyph(cx: &App) -> AnyElement {
-    spinner(IconName::LoaderCircle, design::role::accent(cx), state_icon_size())
+    spinner(
+        IconName::LoaderCircle,
+        design::role::accent(cx),
+        state_icon_size(),
+    )
 }
 
 /// A kind's own glyph, in the twelve bespoke shapes.
@@ -10086,8 +10092,7 @@ fn event_timeline_row(
                         .when(severity == Some(Severity::Warning), |this| {
                             this.child(
                                 div().flex_none().child(
-                                    label_small("Warning")
-                                        .text_color(role::warning_word(cx)),
+                                    label_small("Warning").text_color(role::warning_word(cx)),
                                 ),
                             )
                         })
@@ -13964,9 +13969,7 @@ mod tests {
     /// has to go and ask a button for is an answer they do not have on the last screen before a
     /// write.
     #[gpui_kit::test]
-    fn the_review_asks_the_server_about_the_document_without_writing_it(
-        cx: &mut TestAppContext,
-    ) {
+    fn the_review_asks_the_server_about_the_document_without_writing_it(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
@@ -14269,7 +14272,9 @@ mod tests {
 
         // The verdict is the line a reader reads before deciding, and it has to sit where it is
         // read: above the diff, and clear of the write it qualifies.
-        let verdict = cx.debug_bounds("yaml-review-check-status").expect("the verdict");
+        let verdict = cx
+            .debug_bounds("yaml-review-check-status")
+            .expect("the verdict");
         let write = cx.debug_bounds("yaml-review-apply").expect("the write");
         assert!(
             verdict.origin.y + verdict.size.height <= write.origin.y,

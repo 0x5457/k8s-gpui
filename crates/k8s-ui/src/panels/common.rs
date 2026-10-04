@@ -263,10 +263,7 @@ pub(super) fn reusable_button(id: impl Into<ElementId>, label: impl Into<SharedS
 /// One helper rather than twenty inline `div`s, because twenty inline copies is
 /// how a second size turns up: this is the only place in the product that says
 /// what a chrome button's label is.
-pub(crate) fn labelled(
-    button: Button,
-    text: impl Into<SharedString>,
-) -> Button {
+pub(crate) fn labelled(button: Button, text: impl Into<SharedString>) -> Button {
     let text = text.into();
     button
         .child(
@@ -287,16 +284,16 @@ pub(super) fn reusable_icon_button(
     Button::new(id)
         .icon(icon)
         .ghost()
-    // gpui-kit derives a Button's glyph from its BOX at 0.75, and overwrites
-    // whatever size the caller asked for, so the box is the only lever a caller
-    // has on the glyph. At `size::CONTROL` (28px) that is a 21px glyph, which is
-    // in no lane: the toolbar lane is 16, the navigation lane is 14, and a 21px
-    // mark beside a 16px one is the ragged icon column this product spent a wave
-    // removing. `icon::IN_TOOLBAR / 0.75` is the box that derives exactly the
-    // toolbar lane, and it is still wider than `size::HIT_MIN`, so the target a
-    // pointer has to hit does not shrink to accommodate a glyph.
-    .with_size(Size::Size(icon_button_box()))
-    .w(icon_button_box())
+        // gpui-kit derives a Button's glyph from its BOX at 0.75, and overwrites
+        // whatever size the caller asked for, so the box is the only lever a caller
+        // has on the glyph. At `size::CONTROL` (28px) that is a 21px glyph, which is
+        // in no lane: the toolbar lane is 16, the navigation lane is 14, and a 21px
+        // mark beside a 16px one is the ragged icon column this product spent a wave
+        // removing. `icon::IN_TOOLBAR / 0.75` is the box that derives exactly the
+        // toolbar lane, and it is still wider than `size::HIT_MIN`, so the target a
+        // pointer has to hit does not shrink to accommodate a glyph.
+        .with_size(Size::Size(icon_button_box()))
+        .w(icon_button_box())
         .accessibility_label(label)
         .tab_index(0isize)
 }

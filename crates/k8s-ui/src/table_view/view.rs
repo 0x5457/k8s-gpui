@@ -3111,11 +3111,13 @@ impl PodsView {
                 .filter_map(|uid| {
                     let row = snapshot.by_uid.get(uid.as_ref()).copied()?;
                     let distance = anchor_row.map_or(0, |anchor| anchor.abs_diff(row));
-                    Some((distance, anchor_row.is_some_and(|anchor| row < anchor), uid.clone()))
+                    Some((
+                        distance,
+                        anchor_row.is_some_and(|anchor| row < anchor),
+                        uid.clone(),
+                    ))
                 })
-                .min_by(|left, right| {
-                    left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1))
-                })
+                .min_by(|left, right| left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1)))
                 .map(|(_, _, uid)| uid);
             self.selected_uid = next.clone();
             self.selection_anchor = next;

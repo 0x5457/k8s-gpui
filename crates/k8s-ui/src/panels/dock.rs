@@ -1785,7 +1785,9 @@ impl DockPanel {
         services: Option<TerminalServices>,
         cx: &mut Context<Self>,
     ) {
-        let context = services.as_ref().and_then(|services| services.context.clone());
+        let context = services
+            .as_ref()
+            .and_then(|services| services.context.clone());
         if self.terminal_context() != context.as_deref() {
             self.close_sessions_off_cluster(context.as_deref(), cx);
         }
@@ -1808,8 +1810,7 @@ impl DockPanel {
         let forwards = self.forwards.len();
         self.terminals
             .retain(|entry| Self::session_is_on(entry, context));
-        self.terminal_focus_handles
-            .truncate(self.terminals.len());
+        self.terminal_focus_handles.truncate(self.terminals.len());
         self.forwards
             .retain(|entry| Self::forward_is_on(entry, context));
         let closed = (terminals - self.terminals.len()) + (forwards - self.forwards.len());
@@ -1825,7 +1826,9 @@ impl DockPanel {
             self.close_terminal_split();
         }
         self.terminal_maximized = false;
-        self.active_terminal = self.active_terminal.min(self.terminals.len().saturating_sub(1));
+        self.active_terminal = self
+            .active_terminal
+            .min(self.terminals.len().saturating_sub(1));
         self.sync_terminal_focus_handles();
         self.sync_focus_handles();
         eprintln!(
@@ -5169,13 +5172,15 @@ impl DockPanel {
                     let toggled = selected.as_ref() == Some(&name);
                     let panel = panel.clone();
                     let name = name.clone();
-                    menu.item(menu_item(name.clone()).checked(toggled).on_click(
-                        move |_, _, cx| {
-                            panel
-                                .update(cx, |panel, cx| panel.set_container(name.clone(), cx))
-                                .ok();
-                        },
-                    ))
+                    menu.item(
+                        menu_item(name.clone())
+                            .checked(toggled)
+                            .on_click(move |_, _, cx| {
+                                panel
+                                    .update(cx, |panel, cx| panel.set_container(name.clone(), cx))
+                                    .ok();
+                            }),
+                    )
                 })
             })
             .into_any_element(),
@@ -5273,13 +5278,11 @@ impl DockPanel {
             // Open is a state, so open is the ink step, exactly as `shell/panels.rs` states it
             // on the bell: the trigger has to say it owns the menu that is up, and hover cannot
             // say it once focus has moved into the menu.
-            .icon(
-                Icon::new(IconName::Ellipsis).text_color(if menu_open {
-                    design::icon::active(cx)
-                } else {
-                    design::icon::resting(cx)
-                }),
-            )
+            .icon(Icon::new(IconName::Ellipsis).text_color(if menu_open {
+                design::icon::active(cx)
+            } else {
+                design::icon::resting(cx)
+            }))
             .ghost()
             // 24x24, the same icon-button box as `⌃` and `×` beside it. It used to override the
             // height down to the 22px tab pill, so the one control in the strip that is not a
@@ -12554,7 +12557,9 @@ mod tests {
         let mut scoped = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
         scoped.namespace = Some("team-a".to_owned());
         let scoped_context = scoped.context.clone();
-        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(scoped), cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_terminal_services(Some(scoped), cx)
+        });
         panel.read_with(cx, |panel, _| {
             assert_eq!(panel.terminal_count(), 1);
             assert_eq!(
@@ -12565,7 +12570,9 @@ mod tests {
 
         let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
         elsewhere.context = Some("other-cluster".to_owned());
-        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_terminal_services(Some(elsewhere), cx)
+        });
         panel.read_with(cx, |panel, _| {
             assert_eq!(
                 panel.terminal_count(),
@@ -12603,7 +12610,9 @@ mod tests {
 
         let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
         elsewhere.context = Some("other-cluster".to_owned());
-        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_terminal_services(Some(elsewhere), cx)
+        });
         panel.read_with(cx, |panel, _| {
             assert_eq!(
                 panel.forward_count(),
@@ -12641,7 +12650,9 @@ mod tests {
 
         let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
         elsewhere.context = Some("other-cluster".to_owned());
-        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.update(cx, |panel, cx| {
+            panel.set_terminal_services(Some(elsewhere), cx)
+        });
         panel.read_with(cx, |panel, _| {
             assert!(
                 panel.request().is_none(),

@@ -2095,11 +2095,13 @@ impl HelmView {
                                 // the control, and a glyph at full strength in every
                                 // row says the whole list is pressed. Only Uninstall
                                 // removes the release, so only it wears the error role.
-                                .text_color(if target.is_destructive() {
-                                    role::danger(menu_cx)
-                                } else {
-                                    design::icon::resting(menu_cx)
-                                }),
+                                .text_color(
+                                    if target.is_destructive() {
+                                        role::danger(menu_cx)
+                                    } else {
+                                        design::icon::resting(menu_cx)
+                                    },
+                                ),
                             )
                             .disabled(busy)
                             .on_click(move |_, window, cx| {
@@ -2727,13 +2729,11 @@ impl HelmView {
             // shape already says it too: the sorted column is the only heading in
             // the band with a glyph on it.
             cell = cell.child(
-                div()
-                    .flex_none()
-                    .child(
-                        Icon::new(indicator)
-                            .with_size(Size::Size(design::icon::IN_ROW))
-                            .text_color(design::icon::active(cx)),
-                    ),
+                div().flex_none().child(
+                    Icon::new(indicator)
+                        .with_size(Size::Size(design::icon::IN_ROW))
+                        .text_color(design::icon::active(cx)),
+                ),
             );
         }
         cell.on_click(cx.listener(move |view, _, _, cx| view.toggle_sort(column, cx)))
