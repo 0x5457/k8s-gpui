@@ -8,11 +8,19 @@ pub(crate) const IPC_DIR_NAME: &str = "k8s-gpui";
 pub const IPC_LOCK_NAME: &str = "ipc.lock";
 
 /// Directory and lock file modes restrict access to the current user.
+///
+/// Unix only: the modes are set through `PermissionsExt`, which is what makes them meaningful,
+/// and a build for Windows never compiles the code that reads them.
+#[cfg(unix)]
 pub(crate) const SOCKET_DIR_MODE: u32 = 0o700;
+#[cfg(unix)]
 pub(crate) const LOCK_MODE: u32 = 0o600;
 
 /// Environment variable that overrides the runtime directory.
 pub(crate) const IPC_DIR_ENV: &str = "K8S_GPUI_IPC_DIR";
+
+/// Linux only: the resolver reads it, and only Linux's session bus gives it a home.
+#[cfg(target_os = "linux")]
 pub(crate) const XDG_RUNTIME_DIR_ENV: &str = "XDG_RUNTIME_DIR";
 
 #[derive(Debug, thiserror::Error)]

@@ -504,6 +504,16 @@ fn selected_shell(
     })
 }
 
+/// Quotes a Windows program path so CreateProcess does not split it at the first space.
+///
+/// `C:\Program Files\PowerShell\powershell.exe` is two argv entries unless the whole path
+/// arrives quoted, and the program is launched from the `Shell` command line rather than
+/// through an argv array, so the quoting has to be in the string itself.
+#[cfg(target_os = "windows")]
+fn quote_windows_program(program: String) -> String {
+    format!("\"{program}\"")
+}
+
 struct LocalTransport {
     options: Options,
     window_size: WindowSize,
