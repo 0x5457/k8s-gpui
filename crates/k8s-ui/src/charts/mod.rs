@@ -44,7 +44,8 @@ impl Unit {
         }
     }
 
-    /// Compact value for an axis label. The unit lives in [`Unit::axis_name`].
+    /// Compact value for an axis label. A unit the label does not itself carry is
+    /// named in [`Unit::axis_name`].
     pub fn axis_label(self, value: f64) -> String {
         match self {
             Self::Cpu => format_cores(value / 1000.0),
@@ -53,16 +54,17 @@ impl Unit {
         }
     }
 
-    /// The variable a vertical axis measures, drawn on the axis itself.
+    /// The variable a vertical axis measures, and the unit of a bare label.
     ///
     /// `charts.md › Best practices` allows short tick labels as long as the unit
-    /// is named elsewhere on the chart. A bare "0.050" is not interpretable and
-    /// the legend names containers rather than the quantity, so the axis has to
-    /// carry the variable.
+    /// is named elsewhere on the chart. A bare `0.050` is not interpretable, so
+    /// the CPU axis says what it is counting. Memory and count labels carry
+    /// their own unit (`18.4Gi`), so a caption claiming bytes under them would
+    /// contradict every tick printed beneath it.
     pub fn axis_name(self) -> &'static str {
         match self {
             Self::Cpu => "CPU (cores)",
-            Self::Memory => "Memory (bytes)",
+            Self::Memory => "Memory",
             Self::Count => "Count",
         }
     }

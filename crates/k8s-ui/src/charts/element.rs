@@ -9,6 +9,7 @@
 
 use std::rc::Rc;
 
+use gpui_kit::assets::IconName;
 use gpui_kit::component::plot::scale::{Scale, ScaleLinear};
 use gpui_kit::component::plot::tooltip::{CrossLine, Dot, PlotHover, Tooltip, TooltipState};
 use gpui_kit::component::plot::{
@@ -24,6 +25,7 @@ use gpui_kit::{
 use k8s_core::metrics::NormalizedPoint;
 
 use crate::design::{self, role, space, text};
+use crate::panels::common::empty_state;
 
 use super::ChartData;
 use super::geometry::{self, PlotRect};
@@ -31,9 +33,10 @@ use super::{SeriesColor, SeriesStroke};
 
 /// Y tick labels use compact units, so `1023Gi` is the longest label possible.
 const Y_LABEL_COLUMNS: f32 = 6.0;
-/// Line width, and the radius of a dot standing in for a one-sample series.
+/// Line width of every series' stroke.
 const LINE_WIDTH: f32 = 1.5;
-/// Diameter of the dot on a hovered or scrubbed sample.
+/// Diameter of the dot on a hovered or scrubbed sample, and of the mark a
+/// one-sample series draws in place of the line it has not earned yet.
 const DOT_SIZE: f32 = 6.0;
 /// Area wash alpha. The line above it is the boundary, so this is a tint under
 /// a stroke and not a second mark.
@@ -476,7 +479,7 @@ impl MetricsPlot {
         // The clock is the fixed reading; the offset says how far back it sits,
         // which is the part a reader cannot work out from the axis.
         let mut tooltip = Tooltip::new(point(px(x), cursor.y), bounds.size)
-            .gap(px(8.))
+            .gap(space::SM)
             .cross_line(
                 CrossLine::new(point(px(x), px(plot.y)))
                     .band(px(1.))
@@ -576,20 +579,22 @@ impl Plot for MetricsPlot {
                 children.push(self.overlay(at_ms, cursor, bounds, Some(1.), cx));
             }
         }
-        let mut notes = Vec::new();
+        // Two states, and the difference between them is whether the plot has a
+        // mark in it. Both used to be one caption block, which made a chart
+        // waiting for its first scrape and a chart holding a single sample
+        // indistinguishable, and made this the only surface in the product whose
+        // empty state was not the app's.
         if self.data.is_empty() {
-            // Sentence case and no title: this is a caption on an empty plot, and
-            // `Design guides > Interface language` puts the capital on a heading,
-            // of which there is none here.
-            notes.push("No samples yet".to_owned());
-        }
-        // One sample repeats tick labels, so the status line says what is
-        // missing instead of the axis claiming a range the data never reached.
-        if self.data.sample_count() < 2 {
-            notes.push(geometry::waiting_for_next_scrape(self.data.interval_ms));
-        }
-        if !notes.is_empty() {
-            children.push(status_note(notes, cx));
+            children.push(empty_note(geometry::waiting_for_next_scrape(
+                self.data.interval_ms,
+            )));
+        } else if self.data.sample_count() < 2 {
+            // One sample repeats tick labels, so the status line says what is
+            // missing instead of the axis claiming a range the data never reached.
+            children.push(status_note(
+                geometry::waiting_for_next_scrape(self.data.interval_ms),
+                cx,
+            ));
         }
         if children.is_empty() {
             return Vec::new();
@@ -778,15 +783,35 @@ impl Plot for MetricsPlot {
     }
 }
 
-/// Chart status text, centred on the plot.
+/// The chart with nothing on it at all.
 ///
-/// A status line is prose rather than data, so it reads in the UI font at the
-/// caption role and matches the panel text around the chart instead of arriving
-/// as the only monospaced sentence on the surface. The ink is `fg_tertiary`,
-/// because this is a caption and the chart behind it is either empty or holding
-/// a single sample: a status line in `fg_secondary` is the loudest thing on a
-/// panel whose real content is four points.
-fn status_note(lines: Vec<String>, cx: &App) -> AnyElement {
+/// The plot used to answer with two lines of caption type centred in an empty
+/// rectangle, which is a caption on nothing, and it was the only empty state in
+/// the product that was not the app's. This chart's own table, a few lines below
+/// it, already answers the same wait with the shared primitive, so the two now
+/// speak one language and a reader who has seen one has seen the other.
+///
+/// `LoaderCircle` is the honest glyph: the state really is a wait for a scrape,
+/// and the primitive turns it into the app's spinner, which is the one that stops
+/// for a reader who asked for less motion.
+fn empty_note(hint: String) -> AnyElement {
+    empty_state(IconName::LoaderCircle, "No samples yet", hint)
+}
+
+/// A caption on a plot that has one mark in it.
+///
+/// **A caption and not an empty state**, and the distinction is the whole of it: a
+/// single sample puts a dot on the plot and the reader is looking at a chart, so
+/// what the line has to say is what the chart is missing, which is the next
+/// scrape, and not the fact that there is nothing here. The empty plot gets the
+/// empty state above because on that one there genuinely is nothing.
+///
+/// Prose rather than data, so it reads in the UI font at the caption role and
+/// matches the panel text around the chart instead of arriving as the only
+/// monospaced sentence on the surface. The ink is `fg_tertiary`, because this is
+/// a caption and the chart behind it is holding a single sample: a status line in
+/// `fg_secondary` is the loudest thing on a panel whose real content is one point.
+fn status_note(line: String, cx: &App) -> AnyElement {
     v_flex()
         .size_full()
         .items_center()
@@ -801,7 +826,7 @@ fn status_note(lines: Vec<String>, cx: &App) -> AnyElement {
                 .text_size(text::CAPTION)
                 .line_height(text::CAPTION_LINE_HEIGHT)
                 .text_color(role::fg_tertiary(cx))
-                .children(lines.into_iter().map(SharedString::from)),
+                .child(SharedString::from(line)),
         )
         .into_any_element()
 }
@@ -912,8 +937,11 @@ fn paint_polyline(
         return;
     };
     if points.len() == 1 {
-        // A one-sample series has no line to draw, so it reads as a mark.
-        paint_dot(window, *first, origin, LINE_WIDTH, color);
+        // A one-sample series has no line to draw, so it reads as a mark, and it
+        // is the mark the hover draws on a sample at the same size. A speck at
+        // the line weight is a smudge on an otherwise empty plot rather than a
+        // reading a reader could point at.
+        paint_dot(window, *first, origin, DOT_SIZE / 2.0, color);
         return;
     }
     let mut builder = PathBuilder::stroke(px(LINE_WIDTH));

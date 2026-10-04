@@ -8,8 +8,11 @@
 //! ink, because emphasis is a budget and four coloured dots beside a count is how
 //! the count stops being the thing the reader sees; the four figures share one
 //! surface, so a row of unboxed numbers reads as a group rather than as four loose
-//! readings; node capacity is bars, so the relationship between a request and a
-//! limit is visible rather than two numbers sitting next to each other.
+//! readings; and the row spends **one** `display` figure, on the pods the cluster
+//! is running out of the ones it declares, because a surface with four equal
+//! headlines has no headline; node capacity is bars, so the relationship between a
+//! request and a limit is visible rather than two numbers sitting next to each
+//! other.
 //! Everything past that is detail the reader can reach in one more step, and it
 //! is placed last.
 //!
@@ -28,8 +31,10 @@
 //! empty.
 //!
 //! **The page is a composition, not a stack.** Four bands on one left spine,
-//! each boundary two spacing steps wide, and every band's box is the box its
-//! content is. The deepest band — the capacity table, the one region on the
+//! each boundary two spacing steps wide, and every band's box is its own
+//! surface's box — the figures inside sit one band padding in from it, which is
+//! what makes each band read as a card rather than as a row of figures somebody
+//! forgot to pad. The deepest band — the capacity table, the one region on the
 //! screen that scrolls — is sized to the rows the cluster reported and takes
 //! whatever the window has left over only when there are more rows than fit.
 //!
@@ -124,25 +129,26 @@ fn tabular_features() -> FontFeatures {
     FEATURES.clone()
 }
 
-/// The one number a surface exists to communicate.
+/// A tile's figure, at the type step that figure is worth.
 ///
-/// `UI-SPEC` §2.3 reserves `display` for exactly this and says no other role may
-/// spend it, which is why the hero tile and the three beside it are the only
-/// 28px text on the page and the workload itemisation below them is a step down.
+/// `UI-SPEC` §2.3 reserves `display` for the one number a surface exists to
+/// communicate, so only [`stat_number`] may spend it — and only the lead tile
+/// does. The three tiles beside it and the five workload cells below them print
+/// [`stat_figure`].
 ///
-/// **It is set, never transitioned.** A figure here is replaced on every refresh,
-/// twenty seconds apart, and `Design guides > Motion` is explicit that motion
-/// explains change rather than decorating it: a number that eases from one refresh
-/// to the next is a page that pulses, and the reader cannot tell a value that
-/// moved from a value that was edited. `motion::INSTANT` is therefore the whole of
-/// this number's motion policy, and the only animated thing on the page is the
-/// loading ladder above it.
-fn stat_number(text: &str, cx: &App) -> Div {
+/// **They are set, never transitioned.** A figure here is replaced on every
+/// refresh, twenty seconds apart, and `Design guides > Motion` is explicit that
+/// motion explains change rather than decorating it: a number that eases from one
+/// refresh to the next is a page that pulses, and the reader cannot tell a value
+/// that moved from a value that was edited. `motion::INSTANT` is therefore the
+/// whole of this number's motion policy, and the only animated thing on the page
+/// is the loading ladder above it.
+fn tile_number(text: &str, step: (Pixels, Pixels), cx: &App) -> Div {
     div()
         .font(ui_font(cx))
         .font_features(tabular_features())
-        .text_size(text::DISPLAY)
-        .line_height(text::DISPLAY_LINE_HEIGHT)
+        .text_size(step.0)
+        .line_height(step.1)
         .font_weight(text::SEMIBOLD)
         .text_color(role::fg_primary(cx))
         .min_w(px(0.))
@@ -150,6 +156,28 @@ fn stat_number(text: &str, cx: &App) -> Div {
         .text_ellipsis()
         .whitespace_nowrap()
         .child(text.to_owned())
+}
+
+/// The one number this surface exists to communicate: the lead tile's figure.
+///
+/// One `display` number per surface, and the page has exactly one — the pods a
+/// cluster is running out of the ones it declares, which is the question the
+/// rest of the page itemises. The three tiles beside it were `display` too, so a
+/// row of four equal headlines gave the reader four focal points and none: the
+/// answer is the one number on the page and the other three are its context.
+fn stat_number(text: &str, cx: &App) -> Div {
+    tile_number(text, (text::DISPLAY, text::DISPLAY_LINE_HEIGHT), cx)
+}
+
+/// A figure that supports the lead tile rather than being it: one step down.
+///
+/// The same face, weight and tabular figures as [`stat_number`], so the row reads
+/// as one repeated pattern, and the same ink — a reader has to be able to read
+/// `2 / 3` on the nodes tile at a glance, and the difference between the tiles is
+/// size, not contrast. What the size buys is the one thing a surface with four
+/// tiles cannot afford: a place the eye lands first.
+fn stat_figure(text: &str, cx: &App) -> Div {
+    tile_number(text, (text::TITLE, text::TITLE_LINE_HEIGHT), cx)
 }
 
 /// A tile's label. `UI-SPEC` §3.5 fixes it at 11px uppercase muted, and §2.3
@@ -167,11 +195,36 @@ fn tile_label(label: &'static str) -> Label {
         .font_weight(text::SEMIBOLD)
 }
 
-/// A tile's subline: the 12px muted sentence under the number.
-fn tile_subline(subline: &str) -> Label {
-    Label::new(subline.to_owned())
-        .text_size(text::LABEL)
-        .line_height(text::LABEL_LINE_HEIGHT)
+/// A tile's subline: the 12px sentence under the number, in one or more runs.
+///
+/// A subline is a LIST because a sentence can name two states and one ink can only
+/// say one of them. `2 pending · 1 failed` was drawn in the failure ink because
+/// the tile's verdict is Error, and the effect was that a PENDING count was
+/// announced as a failure - the line misstated one of the two facts it states
+/// exactly, in the most expensive ink on the page. Two runs, each in its own word
+/// ink, is the two-ink rule applied to a sentence rather than to a pair of objects.
+fn tile_subline(runs: &[(String, Severity)], resting: Hsla, cx: &App) -> Div {
+    let mut line = h_flex().min_w(px(0.)).flex_wrap().gap(px(0.));
+    for (index, (text, severity)) in runs.iter().enumerate() {
+        if index > 0 {
+            // The separator belongs to no bucket, so it wears the resting ink and
+            // never the previous run's - a middot in danger red reads as part of the
+            // word beside it.
+            line = line.child(
+                Label::new(" · ".to_owned())
+                    .text_size(text::LABEL)
+                    .line_height(text::LABEL_LINE_HEIGHT)
+                    .text_color(resting),
+            );
+        }
+        line = line.child(
+            Label::new(text.clone())
+                .text_size(text::LABEL)
+                .line_height(text::LABEL_LINE_HEIGHT)
+                .text_color(subline_ink(*severity, resting, cx)),
+        );
+    }
+    line
 }
 
 /// A plain text tooltip for the surfaces gpui-kit has no tooltip-aware control
@@ -214,21 +267,24 @@ fn state_ink(severity: Severity, cx: &App) -> Hsla {
     }
 }
 
-/// The ink a stat tile's **subline** is written in: secondary metadata, or the
-/// channel's *word* ink when that line is the one on the tile about a state
-/// rather than about a quantity.
+/// The ink a **subline** is written in: metadata, or the channel's *word* ink
+/// when that line is the one on the cell about a state rather than about a
+/// quantity.
 ///
-/// Two steps down from the 28px number, and not a third: the tile label above the
-/// number is already `fg.tertiary`, so a subline in `word_ink(Severity::Muted)`
-/// would put the two quiet lines of a tile in one ink and leave the reading order —
-/// label, number, subline — with nowhere to go. The resting arm is therefore
-/// `fg.secondary`, which is also what makes a healthy figure grey rather than the
-/// theme's success hue (`UI-SPEC` §0 铁律三). Only the three status arms point
-/// anywhere else, and they point at the *word* inks.
-fn subline_ink(severity: Severity, cx: &App) -> Hsla {
+/// `resting` is the ink a line that is only reporting takes, and it is an argument
+/// because the two kinds of subline are not the same importance: a workload
+/// cell's `10,001 missing` is the story that cell exists to tell, while a
+/// supporting tile's `1.15 of 20 cores` is the absolute behind a percentage the
+/// reader has already got, and `fg.tertiary` is the ink `Design guides > Color
+/// and themes` gives to help text. Only the three status arms point anywhere
+/// else, and they point at the *word* inks.
+///
+/// It is never the mark ink and never the theme's success hue, which is what makes
+/// a healthy figure grey rather than green (`UI-SPEC` §0 铁律三).
+fn subline_ink(severity: Severity, resting: Hsla, cx: &App) -> Hsla {
     match severity {
         Severity::Warning | Severity::Error | Severity::Info => word_ink(severity, cx),
-        Severity::Success | Severity::Neutral | Severity::Muted => role::fg_secondary(cx),
+        Severity::Success | Severity::Neutral | Severity::Muted => resting,
     }
 }
 
@@ -366,7 +422,7 @@ fn grid_row(cells: Vec<(String, u32, AnyElement)>) -> AnyElement {
 
 // ── Band ─────────────────────────────────────────────────────────────────────
 
-/// A band's own padding, above and below its cells.
+/// A band's own padding, on **all four** sides.
 ///
 /// `space::LG_PLUS` rather than the grid's own `space::LG`, because the spatial
 /// grammar in `Design guides > Spatial grammar` is explicit that a container
@@ -378,6 +434,19 @@ fn grid_row(cells: Vec<(String, u32, AnyElement)>) -> AnyElement {
 /// Twenty is also what clears the band's own corner: `radius::LG` is 8px, so a
 /// cell's first line of type starts 20px below the band's top edge and 12px past
 /// the end of the corner's arc.
+///
+/// **One value, both axes.** A card with 20px above its content and 1px beside
+/// it is not a card with tight padding — it is a card with no padding on one
+/// axis, and the reader's eye reads the two differently: air above a row of
+/// figures is a margin, and air beside them is the figure being held off the
+/// page. There is also nothing about a band's left edge that asks for a different
+/// number from its top edge, so a second constant would be a second value with
+/// no reason behind it.
+///
+/// The horizontal half **costs no height**, which is the one thing the height
+/// model has to know: [`figures_band_height`] counts this value twice and no
+/// more, and the figures inside a band move 20px in on each side without moving
+/// the page's vertical rhythm at all.
 const BAND_PADDING: Pixels = space::LG_PLUS;
 
 /// One group of related figures on one shared surface.
@@ -393,12 +462,36 @@ const BAND_PADDING: Pixels = space::LG_PLUS;
 /// inside it are separated by the grid gap and nothing else.
 ///
 /// **The plate is a sibling, not the band's own background.** The band's box is
-/// its content's box, and the plate is an absolutely-positioned sibling painted
-/// behind it — which is what lets the band's padding be vertical only while its
-/// surface still starts and ends on the page's own content spine. Padding the band
-/// horizontally would inset the cells with it, and the four tiles then no longer
-/// start where the section headings above and below them start, which is the one
-/// thing `UI-SPEC` §7 asks every element in a region to share.
+/// its surface's box and the plate is an absolutely-positioned sibling painted
+/// behind it, filling that box edge to edge — so the surface and the content
+/// always agree, every pixel of plate is [`BAND_PADDING`] from the figures it
+/// carries, and a stripe of colour beside them is not a thing this function can
+/// draw.
+///
+/// **The padding is [`BAND_PADDING`] on all four sides, and the surface is what
+/// sits on the page's spine.** This band used to pad vertically only, on the
+/// reasoning that a full-bleed surface has to run to the content spine or the
+/// four tiles stop starting where the section headings above and below them do.
+/// The render showed what that reasoning bought: on a 2× capture, `PODS READY`,
+/// the `18 / 21` figure and the meter bar all began **1.5 logical px** inside the
+/// band's own edge — 3 device pixels, which is glyph side bearing, not padding —
+/// against 36px of air above the row's first line of type and 30px below its last,
+/// of which the band's own padding is 20 on each. A box with vertical air and
+/// none horizontal is not a card with tight padding; it is a table of figures
+/// somebody forgot to pad, and that is the reading the tile row was sent back for.
+///
+/// So the region that shares the page's spine is the **plate**, and it is a
+/// region's own box: the plate, the health strip, the section headings and the
+/// capacity table all start on the same x as the toolbar title above them. What
+/// sits one `BAND_PADDING` further in is a band's **contents**, which is what a
+/// card's padding is for — the same way the figure inside a card is held off the
+/// card's edge.
+///
+/// **Four figures, one reading.** The cells keep the grid gap and no surface of
+/// their own, because four cards inside a card is what the guide rules out and
+/// because the row's hierarchy is already carried by type: the lead tile prints a
+/// `display` figure and the three beside it a `title` one. Boxes would add a
+/// second hierarchy the page would then have to reconcile with the first.
 ///
 /// No border and no shadow. The surface is one step off the content plane and the
 /// radius is the panel tier (`radius::LG`), so the boundary is a change of value
@@ -417,7 +510,9 @@ fn band(selector: &'static str, content: AnyElement, plate: Hsla) -> Div {
         .relative()
         .w_full()
         .min_w(px(0.))
-        .py(BAND_PADDING)
+        // One value on every edge, so the figures inside the surface are as far
+        // from its left and right as they are from its top and bottom.
+        .p(BAND_PADDING)
         .child(
             div()
                 .absolute()
@@ -460,6 +555,27 @@ fn band_plate(stale: bool, cx: &App) -> Hsla {
 /// so it is `space::SM` rather than a raw `px(8.)`, and it is the same height in
 /// the stat tiles, the workload cells and the capacity table so the page carries
 /// one mark rather than three.
+/// There is deliberately no maximum width on this page, and a measure was tried.
+///
+/// Centring the body at 1200px makes the tiles and their meters read better on a
+/// wide display — a meter whose track is the cell is only a bar while the cell is
+/// a bar's width, and four 470px tiles make four 460px rules. It also clips
+/// `MEMORY LIMITS` off the capacity table, which needs about 1600.
+///
+/// The reason it does not ship is the page's spine. Three invariants hold it
+/// together, and a centred measure breaks all three: every section starts on the
+/// panel's padding line, the toolbar's title and the content below it start on one
+/// x, and each grid fills the width it was given so its columns stay comparable
+/// across rows. A reader's eye tracks this page down its LEFT edge; a block
+/// floating in the middle of the window, under a toolbar that starts 104px to its
+/// left, reads as two things rather than one page.
+///
+/// So the width stays the panel's. The remaining answer — capping the meter on
+/// the tile instead — is `bar_slot`'s to settle, and it is a real trade: a meter
+/// that stops short of its cell makes four meters four lengths again, which is
+/// the comparison the tile row exists to make. Until that is decided the long
+/// track is the lesser defect, because it is honest: it is exactly as long as the
+/// cell it measures, and the value is printed above it to three figures.
 const BAR_HEIGHT: Pixels = space::SM;
 
 /// Corner on the track and on the fill.
@@ -484,7 +600,18 @@ const BAR_RADIUS: Pixels = radius::XS;
 /// appearance and 1.11:1 against the raised band, which is the quiet end of
 /// "you can see it and it is not competing".
 fn bar_track(cx: &App) -> Hsla {
-    role::surface_inset(cx)
+    // A wash of the local ink over the tile's own plane, NOT `role::surface_inset`.
+    //
+    // `surface_inset` is derived from the editor background, which in both shipped
+    // appearances is several steps darker than the tile the meter is painted on. A
+    // meter drawn on it read as a black slot cut into the card rather than as the
+    // whole a share is a share of - and the card behind a bar is the only thing
+    // that says what the bar is measured against.
+    //
+    // This is the one wash in the product that exists to make a plane recede
+    // rather than to answer a hover, and it is the same 4% of the local ink, so it
+    // is invisible-in-the-right-way on a light tile and on a dark one.
+    design::state::hover_on(role::surface_raised(cx), role::fg_primary(cx))
 }
 
 /// A share of a whole, drawn as a bar.
@@ -623,13 +750,20 @@ const SECTION_CONTENT_GAP: Pixels = space::SM;
 /// because [`capacity_table_height`] reads it to work out how much of the window
 /// the capacity table has left, and a constant that drifts from the type scale
 /// would mis-size every table on the page by exactly the drift.
+///
+/// It is the **lead** tile's height, because the lead tile is the tallest one and
+/// the row is stretched to it: the three tiles beside it print a `title` figure
+/// and take the difference in their spacer, so their content is 12px shorter and
+/// their meters land on the lead tile's meter line rather than 12px above it.
+///
+/// Four gaps and not three, for the same reason the tile has a spacer: the spacer
+/// is a child, so it has a gap on either side of it even when it takes no height.
 fn stat_tile_height() -> f32 {
     f32::from(text::CAPTION_LINE_HEIGHT)
         + f32::from(text::DISPLAY_LINE_HEIGHT)
         + f32::from(text::LABEL_LINE_HEIGHT)
         + f32::from(BAR_HEIGHT)
-        // Three gaps between the four lines: label, number, subline, bar.
-        + 3.0 * f32::from(space::XS)
+        + 4.0 * f32::from(space::XS)
 }
 
 /// Height of one workload cell, in logical pixels.
@@ -651,7 +785,18 @@ fn band_rows(wide: bool) -> f32 {
     if wide { 1.0 } else { 2.0 }
 }
 
-/// Height of a band of figures: its cells, the gaps between them, and its padding.
+/// Height of a band of figures: its cells, the gaps between them, and the padding
+/// above and below them.
+///
+/// **Two [`BAND_PADDING`]s and no more**, because the band's horizontal inset
+/// costs the page nothing vertically: the figures move 20px in on each side and
+/// the band is exactly as tall as it was before it had them. So the tile row is
+/// **126px** wide-layout (86 of tile, 40 of padding) and 228 narrow, and the
+/// workload band is 126 wide and 196 narrow (70 of cell, 16 between the rows, 40
+/// of padding). Those are the numbers [`capacity_table_height`] spends, and a lane
+/// that changed [`BAND_PADDING`] without changing this with it is how the modelled
+/// page and the drawn one drift apart — the table then runs past the fold by
+/// exactly the drift.
 fn figures_band_height(wide: bool, cell: f32) -> f32 {
     let rows = band_rows(wide);
     rows * cell + (rows - 1.0) * f32::from(GRID_GAP) + 2.0 * f32::from(BAND_PADDING)
@@ -879,6 +1024,11 @@ fn skeleton_block(selector: &str, share: f32, height: Pixels, waited: Duration, 
 /// that print nothing there, because the real tile reserves that slot too and a
 /// placeholder that vanished would move the bar up 16px.
 ///
+/// `lead` is the real tile's own flag, because the placeholder for a `title`
+/// figure is a `title`-sized block: a skeleton that stood every number at the
+/// display height would be 12px taller than three of the four cells it stands in
+/// for, and the row it builds would not be the row the numbers land in.
+///
 /// **The placeholder is content-sized and banded like the real thing.** A skeleton
 /// whose shape does not match the loaded layout is a second layout to get wrong:
 /// `UI-SPEC` §4.14 asks for a skeleton only where the real geometry is known, and
@@ -887,7 +1037,13 @@ fn skeleton_block(selector: &str, share: f32, height: Pixels, waited: Duration, 
 /// table's frame — the one region whose height is a function of the window, and a
 /// placeholder sized from the window would be a table-shaped block that a real
 /// three-row table then does not fill.
-fn skeleton_stat_tile(selector: &str, index: u64, waited: Duration, cx: &App) -> AnyElement {
+fn skeleton_stat_tile(
+    selector: &str,
+    index: u64,
+    lead: bool,
+    waited: Duration,
+    cx: &App,
+) -> AnyElement {
     // 60–80%, stepped by the slot's own index.
     let seed = 0.6 + 0.1 * (index % 3) as f32;
     v_flex()
@@ -905,7 +1061,11 @@ fn skeleton_stat_tile(selector: &str, index: u64, waited: Duration, cx: &App) ->
         .child(skeleton_block(
             &format!("{selector}-number"),
             0.66 * seed,
-            text::DISPLAY_LINE_HEIGHT,
+            if lead {
+                text::DISPLAY_LINE_HEIGHT
+            } else {
+                text::TITLE_LINE_HEIGHT
+            },
             waited,
             cx,
         ))
@@ -916,6 +1076,9 @@ fn skeleton_stat_tile(selector: &str, index: u64, waited: Duration, cx: &App) ->
             waited,
             cx,
         ))
+        // The real tile's spacer, for the reason `stat_tile` gives: the meters in
+        // a row share one line whatever the figures above them are set at.
+        .child(div().flex_1())
         .child(skeleton_block(
             &format!("{selector}-bar"),
             1.0,
@@ -992,9 +1155,12 @@ fn skeleton_tiles(wide: bool, waited: Duration, cx: &App) -> AnyElement {
                     (
                         format!("overview-skeleton-tile-{index}"),
                         span,
+                        // The lead tile is the first slot, exactly as the loaded
+                        // row puts it.
                         skeleton_stat_tile(
                             &format!("overview-skeleton-tile-{index}"),
                             index,
+                            index == 0,
                             waited,
                             cx,
                         ),
@@ -1268,8 +1434,11 @@ fn freshness(
         (false, OverviewState::Ready(_)) => Freshness::Current,
         // Nothing has been taken yet, so there is nothing a refresh is
         // replacing: the first load used to say `Refreshing` over an empty page,
-        // which claims a previous answer is on screen when the page is blank.
-        (false, OverviewState::Loading) | (false, OverviewState::Failed(_)) => Freshness::Never,
+        // which claims a previous answer is on screen when the page is blank. A
+        // panel with no cluster has taken nothing for the same reason.
+        (false, OverviewState::Loading)
+        | (false, OverviewState::Disconnected)
+        | (false, OverviewState::Failed(_)) => Freshness::Never,
         // Only reachable if a failure is recorded without a snapshot to keep,
         // which `apply_refresh_result` does not do. `Stale` is still the honest
         // word for it: the figures on screen are the last good ones.
@@ -1630,7 +1799,7 @@ fn capacity_figure_lane() -> Pixels {
 /// `Design guides > Alignment details`' "preserve the spine through optional
 /// content". The heading above reserves the same lane, so a column's heading
 /// starts where its meter starts rather than a glyph-width to its left.
-const CAPACITY_CELL_GLYPH: Pixels = design::size::ICON;
+const CAPACITY_CELL_GLYPH: Pixels = design::icon::IN_ROW;
 
 /// Column headings, in column order.
 ///
@@ -1731,6 +1900,12 @@ fn capacity_column_widths(available: f32, metrics_available: bool) -> Vec<f32> {
 
 /// Padding the panel puts around the capacity grid: the scroll padding, on both
 /// sides.
+///
+/// The grid is the one region on this page that is **not** inside a [`band`] —
+/// it runs to the panel's own padding line so its seven columns get the width —
+/// so the band's [`BAND_PADDING`] is not part of this budget. Counting it anyway
+/// would take 40px the grid does not give up and force its columns to scroll a
+/// window they would otherwise fit.
 ///
 /// The group frame this used to add is gone with the other strokes, and a width
 /// budget that still reserves a border the panel does not draw is a budget the
@@ -1888,8 +2063,11 @@ fn section_heading_with_total(
                             .debug_selector(|| "overview-section-total".to_owned())
                             .font(ui_font(cx))
                             .font_features(tabular_features())
-                            .text_size(text::LABEL)
-                            .line_height(text::LABEL_LINE_HEIGHT)
+                            // The head's own step: 11px uppercase next to 12px put
+                            // the two baselines a pixel apart on one line, and the
+                            // count stays quiet through ink, not through size.
+                            .text_size(text::CAPTION)
+                            .line_height(text::CAPTION_LINE_HEIGHT)
                             .font_weight(text::MEDIUM)
                             .text_color(word_ink(total.severity, cx))
                             .child(total.figure.to_owned()),
@@ -1903,8 +2081,8 @@ fn section_heading_with_total(
                             .debug_selector(|| "overview-section-note".to_owned())
                             .font(ui_font(cx))
                             .font_features(tabular_features())
-                            .text_size(text::LABEL)
-                            .line_height(text::LABEL_LINE_HEIGHT)
+                            .text_size(text::CAPTION)
+                            .line_height(text::CAPTION_LINE_HEIGHT)
                             .font_weight(text::MEDIUM)
                             .text_color(match total.note {
                                 Some((_, severity)) => word_ink(severity, cx),
@@ -2129,6 +2307,22 @@ enum FailureStep {
     Other,
 }
 
+/// What the one control on a failure state actually does.
+///
+/// **The sentence and the button have to be one decision.** The `Unauthenticated`
+/// next step says `Reload the kubeconfig` and the state printed `Retry` under it,
+/// and a `Retry` re-sends the request the API server has just refused with the
+/// same credentials — it cannot succeed, so the control promised a different
+/// answer than the sentence described. The classifier already knows which of the
+/// two a failure is answered by, so it decides rather than the copy.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FailureAction {
+    /// Ask this connection the same question again.
+    Retry,
+    /// Read the kubeconfig files again and rebuild the connection.
+    ReloadKubeconfigs,
+}
+
 impl FailureStep {
     /// Classifies one error string.
     fn of(reason: &str) -> Self {
@@ -2201,24 +2395,37 @@ impl FailureStep {
         }
     }
 
-    /// The next step, as a verb phrase a reader can act on.
+    /// The move, as a verb phrase.
     ///
     /// This is the *action* only; [`Self::title`] already said what failed, and
     /// repeating it here is the "two sentences saying the same thing"
-    /// `UI-SPEC` §4.13 rules out. The button under it is `Retry`, so each line
-    /// ends on the same move the button offers.
+    /// `UI-SPEC` §4.13 rules out.
     fn next_step(self) -> &'static str {
         match self {
             Self::Forbidden => "Bind a role that can read this cluster, then retry.",
             // A `401` is answered by new credentials, never by an RBAC edit, and
             // the app's own action for that is `ReloadKubeconfigs`.
-            Self::Unauthenticated => "Reload the kubeconfig, then retry.",
+            Self::Unauthenticated => "Reload the kubeconfigs to read new credentials.",
             // `PROMPT.md` §2.4 requires a network timeout to be *visible* inside
             // 10 seconds, and `Self::TimedOut`'s title is what makes it visible:
             // it names the wait rather than asking the reader to go and look.
             Self::TimedOut => "Check the network between here and the API server, then retry.",
             Self::Unreachable => "Check the API server address and the network, then retry.",
             Self::Other => "Retry, or check the app log for the full request.",
+        }
+    }
+
+    /// The control this failure is answered by.
+    ///
+    /// Only an identity the API server would not name is different: the request
+    /// carries the same token whichever way it is sent, so the connection has to
+    /// be rebuilt from the file rather than asked again.
+    fn action(self) -> FailureAction {
+        match self {
+            Self::Unauthenticated => FailureAction::ReloadKubeconfigs,
+            Self::Forbidden | Self::TimedOut | Self::Unreachable | Self::Other => {
+                FailureAction::Retry
+            }
         }
     }
 }
@@ -2753,7 +2960,7 @@ fn workload_cell(
                             .debug_selector(move || format!("{inner_selector}-unread"))
                             .child(
                                 Icon::new(design::confidence::icon(design::Confidence::Unknown))
-                                    .xsmall()
+                                    .with_size(Size::Size(design::icon::IN_ROW))
                                     .text_color(ink),
                             ),
                     )
@@ -2779,9 +2986,14 @@ fn workload_cell(
         // cell that printed three would put its meter 16px off it.
         .child(
             div().min_w(px(0.)).min_h(text::LABEL_LINE_HEIGHT).child(
-                tile_subline(&subline)
-                    .text_color(subline_ink(subline_severity, cx))
-                    .truncate(),
+                // The cell's own subline is the story it exists to tell — how many
+                // replicas are missing — so its resting arm is secondary ink. See
+                // [`subline_ink`].
+                tile_subline(
+                    &[(subline.clone(), subline_severity)],
+                    role::fg_secondary(cx),
+                    cx,
+                ),
             ),
         )
         // The bar slot is reserved whether or not this kind has a denominator —
@@ -2805,10 +3017,20 @@ struct StatTile {
     /// The slot's own name, so a screenshot and a test can address one tile of
     /// the row without counting.
     selector: &'static str,
+    /// Whether this tile holds the page's one `display` figure. Exactly one tile
+    /// does, and it is the first.
+    lead: bool,
     label: &'static str,
     value: String,
     subline: String,
-    subline_severity: Severity,
+    /// The subline split into the runs it actually is, each with its own severity.
+    ///
+    /// One run for every subline that names one state, which is nearly all of
+    /// them. The tile that names two gets two, because one ink cannot say both —
+    /// see [`tile_subline`]. `subline` above stays the single flattened source
+    /// for the tooltip and the accessible name, so the two cannot drift: a reader
+    /// who cannot see the colours still hears the same sentence in the same order.
+    subline_runs: Vec<(String, Severity)>,
     /// The share the bar draws, when the tile has a denominator to be a share of.
     bar: Option<f64>,
     /// The whole sentence, for the tooltip and the tile's accessible name.
@@ -2825,13 +3047,36 @@ impl StatTile {
     ) -> Self {
         Self {
             selector,
+            lead: false,
             label,
             value,
             detail: subline.clone(),
+            subline_runs: vec![(subline.clone(), subline_severity)],
             subline,
-            subline_severity,
             bar: None,
         }
+    }
+
+    /// Splits the subline into runs, each in its own state ink.
+    ///
+    /// The split is for a sentence that names two buckets of one population — a
+    /// pending count and a failed count — where one ink would announce one of them
+    /// as the other. The runs must join back to `subline` separated by the same
+    /// separator [`tile_subline`] draws, because that flattened form is what the
+    /// tooltip and the accessible name read.
+    fn with_subline_runs(mut self, runs: Vec<(String, Severity)>) -> Self {
+        let joined = runs
+            .iter()
+            .map(|(text, _)| text.as_str())
+            .collect::<Vec<_>>()
+            .join(" \u{b7} ");
+        assert_eq!(
+            joined, self.subline,
+            "the subline's runs must join back to the sentence the tooltip reads, \
+             or a reader who cannot see the colours hears a different sentence"
+        );
+        self.subline_runs = runs;
+        self
     }
 }
 
@@ -2959,6 +3204,13 @@ fn capacity_tiles(cpu: Axis, memory: Axis) -> [StatTile; 2] {
 /// sixth copy of it is repetition rather than hierarchy. It is on that region's
 /// heading instead, where a total belongs.
 ///
+/// **The first tile is the page's one `display` figure and the other three are a
+/// step down.** The row used to print four `display` numbers side by side, which
+/// is four answers of equal weight to a question — is my cluster healthy, and what
+/// needs me — that only the first of them answers. Pods ready leads because it is
+/// the figure the other four regions itemise; the three beside it are its
+/// context, and a type step is what says so without spending a colour on it.
+///
 /// The pod tile's subline names the largest bucket that is not running and counts
 /// the rest: the ratio beside it already says how many are, but a tile that
 /// reports 9,900 pending and hides 7 more unready pods only tells the truth to
@@ -2988,6 +3240,50 @@ fn vital_figures(overview: &Overview) -> (StatTile, Vec<StatTile>) {
         (health.pending, "pending"),
         (health.failed, "failed"),
     ];
+    // The caption and its runs come from ONE decision, so the sentence and the
+    // colours cannot end up describing different buckets.
+    //
+    // This is the sentence that misstated a fact. The line was one `Label` and the
+    // tile had one `subline_severity`, so `2 pending · 1 failed` took the failure
+    // ink whole - and a PENDING count announced in the failure channel, sitting in
+    // the largest number on the page, is the most expensive misstatement the
+    // Overview can make. Two buckets, two word inks, one sentence.
+    let bucket_severity = |name: &str| match name {
+        "failed" => Severity::Error,
+        "pending" => Severity::Warning,
+        // `unknown` is deliberately not in the ladder: the table draws such a pod
+        // as a dash with no verdict, so it takes the quietest arm.
+        _ => Severity::Muted,
+    };
+    let pod_runs: Vec<(String, Severity)> = if health.total_pods == 0 {
+        vec![("No pods reported".to_owned(), Severity::Muted)]
+    } else {
+        let ranked: Vec<(usize, &str)> = unready
+            .iter()
+            .copied()
+            .filter(|(number, _)| *number > 0)
+            .collect();
+        match ranked.iter().max_by_key(|(number, _)| *number) {
+            Some((number, name)) => {
+                let mut runs = vec![(
+                    format!("{} {name}", count(*number)),
+                    bucket_severity(name),
+                )];
+                if let Some((rest, rest_name)) = ranked
+                    .iter()
+                    .filter(|(other, _)| *other != *number)
+                    .max_by_key(|(other, _)| *other)
+                {
+                    runs.push((
+                        format!("{} {rest_name}", count(*rest)),
+                        bucket_severity(rest_name),
+                    ));
+                }
+                runs
+            }
+            None => vec![("all running".to_owned(), Severity::Muted)],
+        }
+    };
     let pod_caption = if health.total_pods == 0 {
         "No pods reported".to_owned()
     } else {
@@ -3059,7 +3355,9 @@ fn vital_figures(overview: &Overview) -> (StatTile, Vec<StatTile>) {
         ratio(health.running, health.total_pods),
         pod_caption,
         pod_severity,
-    );
+    )
+    .with_subline_runs(pod_runs);
+    hero.lead = true;
     hero.bar = share(health.running, health.total_pods);
     hero.detail = format!(
         "Pods running {}, {} pending, {} failed",
@@ -3139,14 +3437,11 @@ fn replicas_total(overview: &Overview) -> (String, String, Option<(String, Sever
 ///
 /// **The reading order is the whole design.** Three steps, three inks, three
 /// sizes: the label is `caption` in `fg.tertiary` (quiet — it identifies the
-/// figure and says nothing about it), the number is `display` in `fg.primary`
-/// (the one number the surface exists to communicate, and `text::DISPLAY` is
-/// reserved for exactly that), and the subline is `label` in [`subline_ink`]
-/// (secondary metadata, or the channel's *word* ink when the subline is the one
-/// line on the tile that is about a state rather than a quantity). Before this the
-/// label and the subline were both `fg.secondary`, so the two quiet lines of the
-/// tile wore one ink and the eye had no way to tell which of them was the figure's
-/// own name.
+/// figure and says nothing about it), the number is the lead tile's `display` or
+/// a supporting tile's `title`, both in `fg.primary`, and the subline is `label`
+/// in [`subline_ink`]. Before this the label and the subline were both
+/// `fg.secondary`, so the two quiet lines of the tile wore one ink and the eye had
+/// no way to tell which of them was the figure's own name.
 ///
 /// A tile is **not** a card. The four tiles share one surface — [`band`] — and a
 /// tile draws no frame, no fill and no shadow of its own: `UI-SPEC` §0 铁律一
@@ -3156,14 +3451,37 @@ fn replicas_total(overview: &Overview) -> (String, String, Option<(String, Sever
 /// bordered cells inside a bordered row would be. What separates a tile from its
 /// neighbour is the grid's 16px gap, and what groups the four is the surface they
 /// all sit on.
+///
+/// **The meter is on the tile's bottom edge, and that is what keeps the row's four
+/// meters on one line.** The supporting tiles' figures are a type step shorter
+/// than the lead tile's, so their content is 12px less and a meter laid out after
+/// it would ride 12px above its neighbours — four bars in one row at two heights
+/// is two rows. The spacer takes the difference instead, so every tile in a row
+/// draws its meter on the row's baseline whether or not its figure is the long
+/// one.
 fn stat_tile(tile: &StatTile, cx: &App) -> AnyElement {
     let selector = tile.selector.to_owned();
     let bar_selector = selector.clone();
+    let figure = if tile.lead {
+        stat_number(&tile.value, cx)
+    } else {
+        stat_figure(&tile.value, cx)
+    };
     v_flex()
         .id(ElementId::from(selector.clone()))
         .debug_selector(move || selector.clone())
         .w_full()
         .min_w(px(0.))
+        // The lead tile's height, stated rather than inherited. The grid slot is a
+        // row and the tile is a column in it, and a column that takes its own
+        // content's height leaves the row's extra 12px below its meter instead of
+        // above it — the render measured the four meters along the bottom of the
+        // tile row at two heights, with the lead tile's on the lower line, which
+        // is the one arrangement that makes a meter row mean nothing. A floor the
+        // spacer can grow into is what turns that slack into the bar's margin, and
+        // it is the same number [`capacity_table_height`] already reserves for the
+        // band, so the two cannot disagree about how tall a tile is.
+        .min_h(px(stat_tile_height()))
         .gap(space::XS)
         .role(Role::Group)
         .aria_label(format!("{}: {}", tile.label, tile.detail))
@@ -3175,7 +3493,7 @@ fn stat_tile(tile: &StatTile, cx: &App) -> AnyElement {
         // was never wired to it.
         .tooltip(text_tooltip(tile.detail.clone()))
         .child(tile_label(tile.label).text_color(role::fg_tertiary(cx)))
-        .child(stat_number(&tile.value, cx))
+        .child(figure)
         // The subline slot is reserved even when a tile has nothing to add, so
         // the four bars along the bottom of the row are on one line. A tile that
         // printed nothing and then took no space would be a tile whose bar sat a
@@ -3183,13 +3501,25 @@ fn stat_tile(tile: &StatTile, cx: &App) -> AnyElement {
         .child(div().min_w(px(0.)).min_h(text::LABEL_LINE_HEIGHT).when(
             !tile.subline.is_empty(),
             |this| {
-                this.child(
-                    tile_subline(&tile.subline)
-                        .text_color(subline_ink(tile.subline_severity, cx))
-                        .truncate(),
-                )
+                this.child(tile_subline(
+                    &tile.subline_runs,
+                    // The lead tile's subline states the worst verdict in
+                    // the cluster, so it is part of the headline and reads
+                    // as body copy. A supporting tile's subline is the
+                    // absolute behind the share above it, and the share is
+                    // the answer — so it is help text, and the quietest ink.
+                    if tile.lead {
+                        role::fg_secondary(cx)
+                    } else {
+                        role::fg_tertiary(cx)
+                    },
+                    cx,
+                ))
             },
         ))
+        // The spacer that puts every meter in the row on one line. See the note on
+        // the function.
+        .child(div().flex_1())
         .child(bar_slot(
             tile.bar
                 .map(|share| (format!("{bar_selector}-bar"), share, magnitude_bar_ink(cx))),
@@ -3202,6 +3532,16 @@ fn stat_tile(tile: &StatTile, cx: &App) -> AnyElement {
 enum OverviewState {
     Loading,
     Ready(Overview),
+    /// There is no cluster to read: this panel was built without one, and a
+    /// handle is never added afterwards, so it is always a first run or a
+    /// session that has lost its cluster — never a dashboard with numbers on it.
+    ///
+    /// It used to be `Failed(common::NOT_CONNECTED_REASON)`, which made a state
+    /// the app is *waiting* for indistinguishable from a request that failed, and
+    /// every consumer had to string-match the message to tell them apart again.
+    /// Three places did. This is the same fact without the round trip through a
+    /// sentence.
+    Disconnected,
     Failed(String),
 }
 
@@ -3357,12 +3697,10 @@ impl OverviewView {
 
     pub fn focus_default_control(&self) -> FocusHandle {
         match &self.state {
-            // No cluster is not a failure, so the action the reader can take is
-            // the refresh they can already see in the toolbar.
-            OverviewState::Failed(reason) if reason == common::NOT_CONNECTED_REASON => {
-                self.refresh_focus.clone()
-            }
-            OverviewState::Failed(_) => self.retry_focus.clone(),
+            // Both states with nothing to show carry the one control that can
+            // change that, and both of those controls are tracked by the same
+            // handle because only one of the two states is ever on screen.
+            OverviewState::Disconnected | OverviewState::Failed(_) => self.retry_focus.clone(),
             OverviewState::Ready(overview)
                 if matches!(
                     overview_data_state(overview),
@@ -3480,12 +3818,7 @@ impl OverviewView {
         // per interval instead of saying so once and staying said.
         let Some(handle) = self.handle.clone() else {
             self.refreshing = false;
-            let reason = common::NOT_CONNECTED_REASON.to_owned();
-            if matches!(self.state, OverviewState::Ready(_)) {
-                self.refresh_error = Some(reason);
-            } else {
-                self.state = OverviewState::Failed(reason);
-            }
+            self.state = OverviewState::Disconnected;
             cx.notify();
             return;
         };
@@ -3652,7 +3985,7 @@ impl OverviewView {
                 div()
                     .flex_none()
                     .debug_selector(|| "overview-toolbar-title".to_owned())
-                    .child(label_panel_title("Cluster Overview")),
+                    .child(label_panel_title("Cluster overview")),
             )
             .child(div().flex_1().min_w(px(0.)))
             // Freshness sits against the button that causes it rather than
@@ -3690,20 +4023,25 @@ impl OverviewView {
                         // not the screen's one committed decision, and this panel
                         // spends its single primary on `Retry` in a state where
                         // nothing else is left to try.
-                        Button::new("overview-refresh")
-                            .label("Refresh")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            // The 28px row is the shared control rhythm, and
-                            // gpui-kit's own `Size::Medium` is 32, so the height
-                            // is pinned rather than inherited from the component.
-                            .h(design::size::CONTROL)
-                            .tab_index(0isize)
-                            .track_focus(&self.refresh_focus)
-                            .accessibility_label("Refresh the cluster overview")
-                            .tooltip("Refresh the cluster data")
-                            .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                        common::labelled(
+                            Button::new("overview-refresh")
+                                .icon(IconName::RefreshCw)
+                                .ghost()
+                                .with_size(Size::Size(design::size::CONTROL))
+                                // The 28px row is the shared control rhythm, and
+                                // gpui-kit's own `Size::Medium` is 32, so the height
+                                // is pinned rather than inherited from the component.
+                                .h(design::size::CONTROL)
+                                .tab_index(0isize)
+                                .track_focus(&self.refresh_focus)
+                                .tooltip("Refresh the cluster data")
+                                .on_click(cx.listener(|this, _, _, cx| this.refresh(cx))),
+                            "Refresh",
+                        )
+                        // The two words differ on purpose: `Refresh` is the action and the
+                        // announced name says what it refreshes, so the control still names
+                        // itself to a reader who never sees the strip around it.
+                        .accessibility_label("Refresh the cluster overview"),
                     ),
             )
             .into_any_element()
@@ -4025,10 +4363,11 @@ impl OverviewView {
     /// that grow in proportion to their columns fill the panel edge to edge, and
     /// the grid below lines up with them.
     ///
-    /// **And the four share one surface.** The grid fills the width; the band
-    /// around it is what says the four readings are one answer — see [`band`] for
-    /// why it is one plate and not four cards, and why it does not move the grid's
-    /// own edges.
+    /// **And the four share one surface.** The grid fills the band's own width;
+    /// the surface around it is what says the four readings are one answer — see
+    /// [`band`] for why it is one plate and not four cards, and why the padding
+    /// that holds the figures off the plate is the plate's rather than the
+    /// page's.
     fn render_tiles(&self, overview: &Overview, wide: bool, cx: &Context<Self>) -> AnyElement {
         let (hero, signals) = vital_figures(overview);
         let mut tiles = vec![hero];
@@ -4470,6 +4809,23 @@ impl OverviewView {
         if let Some(workloads) = self.render_workloads(overview, wide, cx) {
             body = body.child(workloads);
         }
+        // The capacity table and its legend are RETURNED SEPARATELY so the caller
+        // can take them out of the page's measure.
+        //
+        // One measure cannot serve both halves of this page. The tiles and the
+        // workload row want about 1200 — a tile needs room for a label, a figure,
+        // a subline and a meter that still reads as a meter — while the capacity
+        // table's five columns with their meters and their limits need about 1600,
+        // and capping it clipped MEMORY LIMITS off the right edge, which is the
+        // one thing a table may never lose.
+        //
+        // So the measure holds the parts that are read as figures and the table
+        // takes the full width beside it. That is the ordinary full-bleed-table
+        // arrangement, and it is why the table's **surface** and the two bands'
+        // surfaces share one left edge with it: the table runs to the panel's own
+        // padding line and each band's plate does too, because none of the three
+        // is inside a [`band`]. What sits inside a band is one `BAND_PADDING`
+        // further in, which is the card's padding and not a second spine.
         body.child(self.render_capacity(overview, usage, wide, available_height, window, cx))
             // The legend belongs to the table it explains, so a section that
             // rendered no table — a cluster that reported no node capacity at
@@ -4518,7 +4874,12 @@ impl OverviewView {
             .min_h(design::size::ROW)
             .items_stretch()
             .gap(space::SM)
-            .rounded(radius::SM)
+            // The card radius, and the page has one: `radius::MD` is what a card
+            // wears, the bands above wear the panel tier above it, and an inline
+            // strip at a third value is how a page ends up with three corners. A
+            // chip keeps `radius::SM` — a chip is barely round, and it is a
+            // different shape of thing.
+            .rounded(radius::MD)
             .bg(role::danger_wash(cx))
             .role(Role::Alert)
             // The sentence is the name. The raw reason is the *description*, which
@@ -4559,16 +4920,21 @@ impl OverviewView {
                             .debug_selector(|| "overview-refresh-retry".to_owned())
                             .flex_none()
                             .child(
-                                Button::new("overview-refresh-retry")
-                                    .label("Retry")
-                                    .ghost()
-                                    .with_size(Size::Size(design::size::ROW_DENSE))
-                                    .h(design::size::ROW_DENSE)
-                                    .tab_index(0isize)
-                                    .track_focus(&self.retry_focus)
-                                    .text_color(role::danger_word(cx))
-                                    .accessibility_label("Retry loading the cluster overview")
-                                    .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
+                                common::labelled(
+                                    Button::new("overview-refresh-retry")
+                                        .ghost()
+                                        .with_size(Size::Size(design::size::ROW_DENSE))
+                                        .h(design::size::ROW_DENSE)
+                                        .tab_index(0isize)
+                                        .track_focus(&self.retry_focus)
+                                        .text_color(role::danger_word(cx))
+                                        .on_click(cx.listener(|view, _, _, cx| view.refresh(cx))),
+                                    "Retry",
+                                )
+                                // The two words differ on purpose: this control sits beside the
+                                // strip's own message, and a bare "Retry" announced there says
+                                // nothing about which panel is asking.
+                                .accessibility_label("Retry loading the cluster overview"),
                             ),
                     ),
             )
@@ -4703,7 +5069,7 @@ impl OverviewView {
         self.centred_state(
             "empty-state",
             Role::Region,
-            IconName::Server,
+            design::glyph::state::empty_cluster(),
             "No pods or nodes reported",
             "The cluster answered, and it has nothing in it.",
             None,
@@ -4717,25 +5083,28 @@ impl OverviewView {
     ///
     /// `UI-SPEC` §4.13: a 24px muted glyph, one line, and at most one action.
     ///
-    /// **The action is gone, and it was the wrong one.** It said `Refresh` — a
-    /// button whose whole promise is "ask again and get a different answer",
-    /// printed on the one state where there is nothing to ask *about*, because
-    /// the view was built with no cluster connection at all. It also tracked the
-    /// same `FocusHandle` as the toolbar's own `Refresh`, so the panel had two
-    /// live controls on one handle and a Tab could put the ring on either.
+    /// **This state used to have no action, and that was the dead end.** Its
+    /// sentence sent the reader to the title bar to pick a cluster, which is
+    /// wrong on both arrivals that reach it: on a machine with no kubeconfig the
+    /// picker holds nothing to pick, and a kubeconfig whose contexts all failed
+    /// to load holds contexts the app cannot reach. The button says the move
+    /// instead — `Reload kubeconfigs`, which is the one action that fixes every
+    /// way of being here: it re-reads `~/.kube` and `$KUBECONFIG`, re-resolves
+    /// the contexts and re-selects one. It is the same command the palette and
+    /// `secondary-shift-r` already carry, so nothing new is introduced here and
+    /// the keyboard reaches the same place the button does.
     ///
-    /// The step that actually unblocks this state lives in the title bar, which is
-    /// 40px above and permanently shows the cluster picker, so the sentence names
-    /// it and stops. `PROMPT.md` §2.4's "Esc always does something" is not in
-    /// tension here: there is no layer to go back from, there is a field to fill.
+    /// The toolbar's own `Refresh` is not that control and was never an answer:
+    /// with no handle it re-entered this same state, which is why the keyboard
+    /// used to land on it.
     fn render_no_cluster(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         self.centred_state(
             "empty-state",
             Role::Region,
-            IconName::Server,
-            "No cluster selected",
-            "Pick one from the cluster menu in the title bar.",
-            None,
+            design::glyph::state::no_cluster(),
+            "No cluster connected",
+            "Clusters come from ~/.kube/config or $KUBECONFIG. Reload kubeconfigs to re-read them and connect.",
+            Some(self.reload_kubeconfigs_button("overview-reload-kubeconfigs", cx)),
             "",
             window,
             cx,
@@ -4767,23 +5136,47 @@ impl OverviewView {
             .into_any_element()
     }
 
+    /// The control for the states where the answer lives outside this panel.
+    ///
+    /// A `Retry` re-asks this panel's own handle, which on a disconnected panel
+    /// is no handle at all and lands in the same state it started in. The
+    /// kubeconfig files are what decide the answer and they change outside the
+    /// app, so the control that can change this state re-reads them.
+    fn reload_kubeconfigs_button(&self, id: &'static str, cx: &Context<Self>) -> AnyElement {
+        div()
+            .id(id)
+            .debug_selector(move || id.to_owned())
+            .flex_none()
+            .child(
+                Button::new(id)
+                    .label("Reload kubeconfigs")
+                    .primary()
+                    .with_size(Size::Medium)
+                    .tab_index(0isize)
+                    .track_focus(&self.retry_focus)
+                    .accessibility_label("Reload kubeconfigs and reconnect to a cluster")
+                    .on_click(cx.listener(|_, _, window, cx| {
+                        window.dispatch_action(Box::new(crate::shell::ReloadKubeconfigs), cx)
+                    })),
+            )
+            .into_any_element()
+    }
+
     fn render_error(&self, reason: &str, window: &Window, cx: &Context<Self>) -> AnyElement {
-        // `render` already routes this reason to the empty state. The guard
-        // repeats it so the answer stays right next to the copy that depends on
-        // it: a reason that classifies as `Other` would be titled "Reading the
-        // cluster failed" and asked to be retried, which is the wrong answer for
-        // a view that has no cluster to read.
-        if reason == common::NOT_CONNECTED_REASON {
-            return self.render_no_cluster(window, cx);
-        }
         let step = FailureStep::of(reason);
+        let action = match step.action() {
+            FailureAction::Retry => self.retry_button("overview-retry", cx),
+            FailureAction::ReloadKubeconfigs => {
+                self.reload_kubeconfigs_button("overview-reload-kubeconfigs", cx)
+            }
+        };
         self.centred_state(
             "overview-error",
             Role::Alert,
             IconName::TriangleAlert,
             step.title(),
             step.next_step(),
-            Some(self.retry_button("overview-retry", cx)),
+            Some(action),
             reason,
             window,
             cx,
@@ -4797,11 +5190,9 @@ impl OverviewView {
     /// percentage of the window is not a measure: a sentence can be one line at
     /// 1,500px and still make the reader's eye travel the whole width to reach
     /// its second line, and a denial names three permissions, so it does have
-    /// one. `ch` is the advance of `0`, which on the UI face is 0.6em at every
-    /// size — the same constant `settings::MONO_ADVANCE_EM` states for the data
-    /// face.
+    /// one.
     fn empty_state_measure() -> Pixels {
-        px(f32::from(text::BODY) * 0.6 * common::EMPTY_MEASURE_CH)
+        design::size::EMPTY_MEASURE
     }
 
     /// The cluster answered, and the answer was "forbidden".
@@ -4822,7 +5213,7 @@ impl OverviewView {
         self.centred_state(
             "overview-forbidden",
             Role::Alert,
-            IconName::Lock,
+            design::glyph::state::access_denied(),
             "Access denied",
             &hint,
             Some(self.retry_button("overview-retry", cx)),
@@ -4918,12 +5309,12 @@ impl OverviewView {
                     .items_center()
                     .gap(space::SM)
                     .max_w(Self::empty_state_measure())
-                    // `size::ICON_LARGE` rather than the component's own `large()`:
+                    // `design::icon::LEAD` rather than the component's own `large()`:
                     // the two are the same 24px today, and naming the product token
                     // is what keeps them from drifting apart.
                     .child(
                         Icon::new(icon)
-                            .with_size(Size::Size(design::size::ICON_LARGE))
+                            .with_size(Size::Size(design::icon::LEAD))
                             .text_color(role::fg_tertiary(cx)),
                     )
                     .child(
@@ -5522,8 +5913,11 @@ impl TableDelegate for CapacityTableDelegate {
                 } else {
                     IconName::ArrowUp
                 })
-                .xsmall()
-                .text_color(role::fg_primary(cx)),
+                .with_size(Size::Size(design::icon::IN_ROW))
+                // The sorted column is the selected one, so it wears the active
+                // ink - the same one the Helm table's sorted column wears, which
+                // is what lets a reader carry the fact across two panels.
+                .text_color(design::icon::active(cx)),
             );
         }
         head.on_click(cx.listener(move |table, _, _, cx| sort_capacity(table, col_ix, cx)))
@@ -5650,7 +6044,7 @@ impl TableDelegate for CapacityTableDelegate {
                     this.child(
                         div().debug_selector(move || glyph_selector.clone()).child(
                             Icon::new(design::health_icon(severity))
-                                .xsmall()
+                                .with_size(Size::Size(design::icon::IN_ROW))
                                 .text_color(mark_ink(severity, cx)),
                         ),
                     )
@@ -5771,14 +6165,7 @@ impl Render for OverviewView {
         let wide = available_width >= TILE_ROW_WIDE_ABOVE;
         let body: AnyElement = match &self.state {
             OverviewState::Loading => self.render_loading(wide, cx),
-            // "No cluster" is an empty state and everything else is an error.
-            // It is keyed on the *reason*, not on the handle: a view built with no
-            // handle that later reports an unreachable cluster is an error, and
-            // keying on the handle would answer a first run with a red screen
-            // every time the connection dropped.
-            OverviewState::Failed(reason) if reason == common::NOT_CONNECTED_REASON => {
-                self.render_no_cluster(window, cx)
-            }
+            OverviewState::Disconnected => self.render_no_cluster(window, cx),
             OverviewState::Failed(reason) => self.render_error(reason, window, cx),
             OverviewState::Ready(overview) => match overview_data_state(overview) {
                 OverviewDataState::Forbidden => self.render_forbidden(overview, window, cx),
@@ -5880,7 +6267,7 @@ impl Render for OverviewView {
         v_flex()
             .id("overview-view")
             .role(Role::Region)
-            .aria_label("Cluster Overview")
+            .aria_label("Cluster overview")
             .size_full()
             .min_w(px(0.))
             // `UI-SPEC` §1.1 gives `surface.content` to the table and the YAML
@@ -6670,6 +7057,21 @@ mod tests {
             );
         }
 
+        // The control matches the sentence. A rejected token used to be sent to
+        // a `Retry`, which re-sends the credentials the API server has just
+        // refused.
+        for step in steps {
+            let action = match step.action() {
+                FailureAction::Retry => "retry",
+                FailureAction::ReloadKubeconfigs => "reload",
+            };
+            assert!(
+                step.next_step().to_lowercase().contains(action),
+                "{step:?} is answered by {action:?} and says {:?}",
+                step.next_step()
+            );
+        }
+
         // A wait has no "ago", and the two ladders cannot drift apart on the
         // numbers.
         for (waited, expected) in [
@@ -6858,10 +7260,10 @@ mod tests {
             "past 2s the reader is owed a quantity as well as a placeholder"
         );
 
-        // Empty: a first run with no cluster. Terse, and not a failure.
+        // Disconnected: a first run with no cluster. Terse, and not a failure.
         let (view, cx) = cx.add_window_view(|_, cx| OverviewView::new(None, false, cx));
         view.update(cx, |view, cx| {
-            view.state = OverviewState::Failed(common::NOT_CONNECTED_REASON.to_owned());
+            view.state = OverviewState::Disconnected;
             cx.notify();
         });
         cx.run_until_parked();
@@ -6876,15 +7278,15 @@ mod tests {
         );
         assert_eq!(
             view.read_with(cx, |view, _| view.focus_default_control()),
-            view.read_with(cx, |view, _| view.refresh_focus.clone()),
-            "the one action is the toolbar's refresh, and it takes the focus"
+            view.read_with(cx, |view, _| view.retry_focus.clone()),
+            "and the keyboard lands on that action rather than on the toolbar's refresh, which has \
+             no handle to ask and returns this same state"
         );
         assert!(
-            cx.debug_bounds("overview-no-cluster-action").is_none(),
-            "and the state adds no button of its own: it used to print a filled `Refresh` \
-             primary here, on the one state where there is nothing to ask about, while tracking \
-             the same FocusHandle the toolbar's own refresh uses — so the panel had two live \
-             controls on one handle"
+            cx.debug_bounds("overview-reload-kubeconfigs").is_some(),
+            "the state offers the action that fixes it. It used to offer none and pointed at the \
+             title bar's cluster picker instead, which holds nothing to pick on a machine with no \
+             kubeconfig and nothing reachable on one whose contexts all failed to load"
         );
         assert!(
             cx.debug_bounds("overview-retry").is_none(),
@@ -7490,13 +7892,21 @@ mod tests {
         // rules that separated the regions with whitespace and a short dash — so
         // the guarantee it was protecting is now stated where it actually lives:
         // the scroll body's own padding. Four regions, one left edge.
+        //
+        // **The two bands are measured by their plates**, which are the regions'
+        // own boxes. A band's figures sit `BAND_PADDING` inside its surface —
+        // that is the card's padding, measured against the card below — so the
+        // thing that shares the page's spine is the surface and not the text
+        // inside it. Measuring the grid instead would have pinned the padding as
+        // the spine and put the regions' edges 20px inside the strip's and the
+        // table's, which is the misalignment this test exists to prevent.
         let panel = cx
             .debug_bounds("overview-content-bounds")
             .expect("the panel");
         let regions = [
             ("overview-health", "the strip"),
-            ("overview-vitals", "the tiles"),
-            ("overview-workload-grid", "the workloads"),
+            ("overview-vitals-band-plate", "the tiles' surface"),
+            ("overview-workload-band-plate", "the workloads' surface"),
             ("overview-capacity", "the capacity table"),
         ];
         for (selector, name) in regions {
@@ -7507,6 +7917,34 @@ mod tests {
             assert!(
                 (inset - f32::from(space::LG)).abs() < 1.0,
                 "{name} starts on the panel's padding line, not on the frame's: {inset}px"
+            );
+        }
+        // And the surface and its own contents agree, on both axes: a band that
+        // pads vertically only is the defect this measures, and the pixels that
+        // show it are the figures sitting against the edge of their own surface.
+        for (plate_selector, content_selector, name) in [
+            ("overview-vitals-band-plate", "overview-vitals", "the tiles"),
+            (
+                "overview-workload-band-plate",
+                "overview-workload-grid",
+                "the workloads",
+            ),
+        ] {
+            let plate = cx
+                .debug_bounds(plate_selector)
+                .unwrap_or_else(|| panic!("{name} surface"));
+            let content = cx
+                .debug_bounds(content_selector)
+                .unwrap_or_else(|| panic!("{name}"));
+            let inset_x = left_edge(content) - left_edge(plate);
+            let inset_y = f32::from(content.origin.y) - f32::from(plate.origin.y);
+            assert!(
+                (inset_x - f32::from(BAND_PADDING)).abs() < 1.0
+                    && (inset_y - f32::from(BAND_PADDING)).abs() < 1.0,
+                "{name} is one band padding inside its own surface on BOTH axes, so there is no \
+                 stripe of colour beside the figures and no table of figures flush to its edge: \
+                 {inset_x}px in from the left, {inset_y}px from the top, surface {plate:?} content \
+                 {content:?}"
             );
         }
 
@@ -7655,8 +8093,13 @@ mod tests {
             "the five kinds share one row at a wide panel"
         );
         assert!(
-            right_edge(panel) - right_edge(last) <= 2.0 * f32::from(GRID_GAP),
-            "and the row fills the width: {}px of void on the right of a {}px panel",
+            (right_edge(panel)
+                - right_edge(last)
+                - (f32::from(space::LG) + f32::from(BAND_PADDING)))
+            .abs()
+                < 1.0,
+            "and the row fills the width up to the band's own gutter — the panel's padding plus the \
+             surface's padding: {}px of void on the right of a {}px panel",
             right_edge(panel) - right_edge(last),
             f32::from(panel.size.width)
         );
@@ -7758,6 +8201,26 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {name} tile"))
         })
         .collect();
+        // A lead tile's meter and a supporting tile's are on one line, which is
+        // what the tiles' shared height is for. The lead tile prints a `display`
+        // figure and the three beside it a `title` one, so without a floor the
+        // spacer has nothing to absorb and the meters land on two lines twelve
+        // pixels apart — the render drew it that way and nothing here noticed,
+        // because the tiles' own origins were still aligned.
+        let meters: Vec<_> = ["overview-hero-bar", "overview-tile-nodes-bar"]
+            .iter()
+            .map(|name| {
+                cx.debug_bounds(name)
+                    .unwrap_or_else(|| panic!("the {name} meter"))
+            })
+            .collect();
+        for meter in &meters {
+            assert!(
+                (f32::from(meter.origin.y) - f32::from(meters[0].origin.y)).abs() < 0.5,
+                "the lead tile's meter and a supporting tile's are on one line: {meter:?} against \
+                 {meters:?}"
+            );
+        }
         for cell in &tiles {
             assert!(
                 (f32::from(cell.origin.y) - f32::from(tiles[0].origin.y)).abs() < 1.0,
@@ -7778,11 +8241,18 @@ mod tests {
                 "two adjacent tiles are one grid gap apart: {gap}px between {pair:?}"
             );
         }
+        // The void on the trailing side is the panel's own padding **plus the
+        // band's**: the four tiles fill their surface, and the surface is the
+        // region. It was `space::LG` while the band padded vertically only, and
+        // it is `space::LG + BAND_PADDING` now that the figures are held off the
+        // surface's edge — which is a gutter the reader can see, not a void.
         let void = right_edge(panel) - right_edge(tiles[tiles.len() - 1]);
+        let gutter = f32::from(space::LG) + f32::from(BAND_PADDING);
         assert!(
-            (void - f32::from(space::LG)).abs() < 1.0,
-            "the last tile ends one panel padding from the panel's own edge, so the row fills \
-             the width: {void}px of void"
+            (void - gutter).abs() < 1.0,
+            "the last tile ends one band padding inside the band's surface, and that surface ends \
+             one panel padding from the panel's own edge, so the row still fills the width: \
+             {void}px of void against a {gutter}px gutter"
         );
         // The tile row and the workload region start on the same left edge, which
         // is the whole point of a grid: two rows of different shapes that still
@@ -8047,12 +8517,18 @@ mod tests {
              the content below it has"
         );
         let toolbar_title_left = left_edge(title);
-        let scroll = cx.debug_bounds("overview-hero").expect("the hero tile");
+        // The region under the title is the tile band's **surface**, not the
+        // figures inside it: a card's contents sit `BAND_PADDING` inside the card,
+        // and the spine the toolbar shares is the one every region's own box
+        // starts on.
+        let region = cx
+            .debug_bounds("overview-vitals-band-plate")
+            .expect("the tile band's surface");
         assert!(
-            (toolbar_title_left - left_edge(scroll)).abs() < 1.0,
-            "and the toolbar's title and the content below it start on one x: {toolbar_title_left} \
+            (toolbar_title_left - left_edge(region)).abs() < 1.0,
+            "and the toolbar's title and the region below it start on one x: {toolbar_title_left} \
              vs {}",
-            left_edge(scroll)
+            left_edge(region)
         );
     }
     /// Every state with no data has to be **taller than nothing**.
@@ -8131,11 +8607,7 @@ mod tests {
 
         // No cluster, and a failure: both used to render as nothing.
         for (state, selector, label) in [
-            (
-                OverviewState::Failed(common::NOT_CONNECTED_REASON.to_owned()),
-                "empty-state",
-                "no cluster",
-            ),
+            (OverviewState::Disconnected, "empty-state", "no cluster"),
             (
                 OverviewState::Failed("no route to host".to_owned()),
                 "overview-error",

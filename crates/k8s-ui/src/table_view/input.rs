@@ -17,7 +17,7 @@ use gpui_kit::component::input::{
     MoveRight, SelectToEndOfLine, SelectToStartOfLine,
 };
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{FocusableExt as _, Icon, RoleOverride, Sizable as _, h_flex};
+use gpui_kit::component::{FocusableExt as _, Icon, RoleOverride, Sizable as _, Size, h_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     Action, App, ClickEvent, ElementId, Entity, EntityInputHandler, FocusHandle, Focusable,
@@ -36,7 +36,12 @@ type ChangeHandler = Box<dyn FnMut(&str, &mut App)>;
 /// oversized value from costing a frame per keystroke forever.
 const MAX_TEXT_BYTES: usize = 64 * 1024;
 const MAX_TEXT_CHARS: usize = 16 * 1024;
-const CLEAR_BUTTON_SIZE: Pixels = px(24.0);
+/// The box the clear control takes.
+///
+/// [`design::size::ICON_BUTTON`] and not a number: it is an icon-only button,
+/// and it is the only control inside the field, so a second literal here is a
+/// second place a reader's 24px icon button can drift from every other one.
+const CLEAR_BUTTON_SIZE: Pixels = design::size::ICON_BUTTON;
 
 fn normalize_text(text: &str, digits_only: bool, max_length: Option<usize>) -> String {
     let max_chars = max_length.unwrap_or(MAX_TEXT_CHARS).min(MAX_TEXT_CHARS);
@@ -143,9 +148,9 @@ impl TextInput {
             synced: String::new(),
             pending: None,
             placeholder,
-            aria_label: "Filter Resources".into(),
+            aria_label: "Filter resources".into(),
             aria_description: "Enter a resource name. Press Escape to clear the filter.".into(),
-            clear_label: "Clear Filter".into(),
+            clear_label: "Clear filter".into(),
             width: px(240.0),
             role: Role::SearchInput,
             leading_icon: true,
@@ -710,7 +715,6 @@ impl Render for TextInput {
         let state = self.input_state(window, cx);
         self.flush_pending(window, cx);
 
-        let colors = design::colors(cx);
         let surface = design::role::surface_raised(cx);
         // The product's focus treatment, split across the two boxes that can carry it.
         //
@@ -742,16 +746,25 @@ impl Render for TextInput {
         }
         if self.leading_icon {
             field = field.prefix(
+                // The lane a glyph takes in a field, beside the query it labels,
+                // and the resting ink solved against this field's own surface.
+                // `.xsmall()` put it at 12px — a size no lane in the app claims,
+                // so the magnifier could not be compared against the field's own
+                // invalid mark or against the controls beside it — and solved the
+                // ink from the raw `text.muted` seed instead of from a role.
                 Icon::new(IconName::Search)
-                    .xsmall()
-                    .text_color(design::graphic_on(surface, colors.text_muted)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    .text_color(design::graphic_on(surface, design::icon::resting(cx))),
             );
         }
         if self.invalid {
             field = field
                 .suffix(
+                    // The same lane, and the mark channel: an invalid field is
+                    // carrying a severity, so this is a mark beside the word the
+                    // reader is typing rather than another control glyph.
                     Icon::new(IconName::TriangleAlert)
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(design::Severity::Error.marker_on(cx, surface)),
                 )
                 .border_color(design::Severity::Error.marker_on(cx, surface));

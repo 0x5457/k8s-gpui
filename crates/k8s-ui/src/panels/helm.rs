@@ -44,6 +44,9 @@ const STATUS_COLUMN_WIDTH: f32 = 110.0;
 const REVISION_COLUMN_WIDTH: f32 = 70.0;
 const UPDATED_COLUMN_WIDTH: f32 = 170.0;
 const DETAIL_WIDE_WIDTH: f32 = 320.0;
+/// Width of the roll-back revision menu: room for a revision number, a timestamp
+/// and the release name on one row.
+const ROLLBACK_MENU_WIDTH: f32 = 320.0;
 const DETAIL_MIN_VIEWPORT: f32 = 1180.0;
 /// Width of the three buttons in the detail action bar.
 ///
@@ -523,25 +526,17 @@ struct PendingAction {
 enum HelmDetailSection {
     #[default]
     Overview,
-    Chart,
     Values,
     History,
     Notes,
 }
 
 impl HelmDetailSection {
-    const ALL: [Self; 5] = [
-        Self::Overview,
-        Self::Chart,
-        Self::Values,
-        Self::History,
-        Self::Notes,
-    ];
+    const ALL: [Self; 4] = [Self::Overview, Self::Values, Self::History, Self::Notes];
 
     fn label(self) -> &'static str {
         match self {
             Self::Overview => "Overview",
-            Self::Chart => "Chart",
             Self::Values => "Values",
             Self::History => "History",
             Self::Notes => "Notes",
@@ -562,9 +557,11 @@ impl HelmReleaseAction {
     /// Command palette and menu wording.
     pub fn command_label(self) -> &'static str {
         match self {
-            Self::Upgrade => "Upgrade Selected Release",
-            Self::Rollback => "Roll Back Selected Release",
-            Self::Uninstall => "Uninstall Selected Release",
+            // Every one of these opens the release's confirmation dialog, so
+            // every one of them takes the ellipsis the guide gives that door.
+            Self::Upgrade => "Upgrade selected release…",
+            Self::Rollback => "Roll back selected release…",
+            Self::Uninstall => "Uninstall selected release…",
         }
     }
 
@@ -2094,15 +2091,15 @@ impl HelmView {
                                     ReleaseMenuTarget::Rollback { .. } => IconName::RotateCcw,
                                     ReleaseMenuTarget::Uninstall => IconName::Trash,
                                 })
-                                // Only Uninstall removes the release, so only it wears the
-                                // error role.
-                                .text_color(
-                                    if target.is_destructive() {
-                                        role::danger(menu_cx)
-                                    } else {
-                                        role::fg_primary(menu_cx)
-                                    },
-                                ),
+                                // The resting ink of a row's glyph: the menu item is
+                                // the control, and a glyph at full strength in every
+                                // row says the whole list is pressed. Only Uninstall
+                                // removes the release, so only it wears the error role.
+                                .text_color(if target.is_destructive() {
+                                    role::danger(menu_cx)
+                                } else {
+                                    design::icon::resting(menu_cx)
+                                }),
                             )
                             .disabled(busy)
                             .on_click(move |_, window, cx| {
@@ -2171,7 +2168,10 @@ impl HelmView {
             .child(
                 Icon::new(IconName::Archive)
                     .flex_none()
-                    .text_color(role::fg_tertiary(cx)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    // The panel's own mark, at the resting ink of a control's glyph:
+                    // in the count tier it read as a title the panel could not show.
+                    .text_color(design::icon::resting(cx)),
             )
             .child(common::label_panel_title("Helm releases").text_color(role::fg_primary(cx)))
             .child(div().flex_1())
@@ -2193,10 +2193,15 @@ impl HelmView {
                 } else {
                     "Run this action again."
                 };
+                // Secondary, and not the filled accent. The detail action bar one
+                // screen over already owns this panel's single commitment — `Upgrade`
+                // on the release in hand — and a second filled button in the toolbar
+                // means a failure out-shouts the release it happened to. A retry is a
+                // recovery; it gets a boundary the pointer can find and no more.
                 this.child(
                     Button::new("helm-action-retry")
                         .label("Retry")
-                        .primary()
+                        .secondary()
                         .w(px(RETRY_BUTTON_WIDTH))
                         .tab_index(3isize)
                         // Retrying would start a second Helm command while one runs.
@@ -2219,7 +2224,7 @@ impl HelmView {
                         .child(common::spinner(
                             IconName::LoaderCircle,
                             role::accent(cx),
-                            Size::XSmall,
+                            Size::Size(design::icon::IN_ROW),
                         ))
                         // `fg.secondary`, not `fg.tertiary`. This is the only line in
                         // the panel that says a Helm command is running, and the
@@ -2450,6 +2455,14 @@ impl HelmView {
     /// `Archive`; the first two are now told apart, because one of them is a *missing
     /// program* — nothing was even asked — and the other is a *failed question*, which is
     /// the confidence channel's own glyph and stays that way.
+    ///
+    /// **None of the three actions this offers is the filled accent**, and that is one
+    /// decision rather than three: an empty state is not a decision area. The panel's
+    /// one commitment is `Upgrade` on the release in hand, in the detail action bar, and
+    /// a filled `Retry`, `Check again` or `Clear filter` under a title and a sentence is
+    /// the loudest thing on a panel that has nothing else on it — the reader is being
+    /// told to recover, not to decide. Each is a `secondary` control instead: a boundary
+    /// the pointer can find, on the surface the state is drawn on, with no accent spent.
     fn render_empty_state(&self, cx: &mut Context<Self>) -> AnyElement {
         match &self.releases {
             LoadState::Loading => empty_state_with_action(
@@ -2472,7 +2485,7 @@ impl HelmView {
                 // nothing had been asked of it at all.
                 let probe = Button::new("helm-probe-retry")
                     .label("Check again")
-                    .primary()
+                    .secondary()
                     .w(px(RETRY_BUTTON_WIDTH))
                     .tab_index(4isize)
                     .tooltip("Look for the Helm CLI again")
@@ -2529,7 +2542,7 @@ impl HelmView {
                 let busy = self.is_busy();
                 let retry = Button::new("helm-retry")
                     .label("Retry")
-                    .primary()
+                    .secondary()
                     .w(px(RETRY_BUTTON_WIDTH))
                     .tab_index(4isize)
                     // Reloading the list would replace the result of the running action.
@@ -2561,7 +2574,7 @@ impl HelmView {
             _ => {
                 let clear = Button::new("helm-clear-filter")
                     .label("Clear filter")
-                    .primary()
+                    .secondary()
                     .w(px(RETRY_BUTTON_WIDTH))
                     .tab_index(4isize)
                     .tooltip("Show every release again")
@@ -2699,18 +2712,28 @@ impl HelmView {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child(column.label()),
+                    // CAPTION is the table-header slot: tracked out and
+                    // uppercased. The spoken label keeps sentence case in the
+                    // aria below.
+                    .child(column.label().to_uppercase()),
             );
         if column.numeric() {
             cell = cell.justify_end();
         }
         if let Some(indicator) = indicator {
-            // The sorted column's heading is the one heading that speaks up, which is
-            // the one accent the header band spends.
+            // The sorted column is the selected one, so it wears the active ink -
+            // the same ink the Overview's capacity table gives its sorted column,
+            // which is what lets a reader carry the fact across two panels. The
+            // shape already says it too: the sorted column is the only heading in
+            // the band with a glyph on it.
             cell = cell.child(
                 div()
                     .flex_none()
-                    .child(Icon::new(indicator).xsmall().text_color(role::accent(cx))),
+                    .child(
+                        Icon::new(indicator)
+                            .with_size(Size::Size(design::icon::IN_ROW))
+                            .text_color(design::icon::active(cx)),
+                    ),
             );
         }
         cell.on_click(cx.listener(move |view, _, _, cx| view.toggle_sort(column, cx)))
@@ -2774,6 +2797,9 @@ impl HelmView {
                 DetailAction::Upgrade => ButtonVariant::Primary,
                 DetailAction::Rollback => ButtonVariant::Ghost,
             })
+            // One band, one control rhythm: the whole action bar takes the
+            // shared 28px control size.
+            .with_size(Size::Size(design::size::CONTROL))
             .w(px(ACTION_BUTTON_WIDTH))
             .tab_index(tab_index)
             // A busy panel already runs one action. A pending release cannot take another.
@@ -2882,7 +2908,7 @@ impl HelmView {
             .placeholder(action.label())
             .accessibility_label(action.aria_label(&data.name))
             .search_placeholder("Filter revisions…")
-            .menu_width(px(320.))
+            .menu_width(px(ROLLBACK_MENU_WIDTH))
             // A busy panel already runs one action, and a release Helm is working
             // on cannot take another.
             .disabled(self.is_busy() || data.blocked.is_some())
@@ -2893,7 +2919,9 @@ impl HelmView {
             .empty(move |_, app| {
                 common::label_small(unavailable).text_color(role::fg_tertiary(app))
             })
-            .with_size(Size::XSmall)
+            // The bar's own control size, the same 28px the two buttons beside
+            // it wear — a picker half their height was a third rhythm on one band.
+            .with_size(Size::Size(design::size::CONTROL))
             .into_any_element();
         div()
             .w(px(ACTION_BUTTON_WIDTH))
@@ -2903,11 +2931,18 @@ impl HelmView {
             .into_any_element()
     }
 
+    /// Height of the detail action bar: `design::size::ROW`, the band the section tabs directly
+    /// above it spend. It was `size::ROW + border::HIT` — 52px — which is a hit-target minimum
+    /// added to a row height: two unrelated tokens summed into a band that puts 12px of air above
+    /// and below a 28px control, and a band the reader reads as a divider because nothing in it
+    /// needs the height.
+    const DETAIL_ACTION_BAR_HEIGHT: Pixels = design::size::ROW;
+
     fn render_detail_actions(&mut self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let Some(data) = self.detail_action_data() else {
             return div()
                 .flex_none()
-                .h(design::size::ROW + design::border::HIT)
+                .h(Self::DETAIL_ACTION_BAR_HEIGHT)
                 .into_any_element();
         };
         h_flex()
@@ -2915,7 +2950,7 @@ impl HelmView {
             .debug_selector(|| "helm-detail-actions".to_owned())
             .flex_none()
             .w_full()
-            .h(design::size::ROW + design::border::HIT)
+            .h(Self::DETAIL_ACTION_BAR_HEIGHT)
             .px(space::SM)
             .gap(space::SM)
             .items_center()
@@ -2958,7 +2993,6 @@ impl HelmView {
         }
         let body = match self.detail_section {
             HelmDetailSection::Overview => self.render_overview_section(cx),
-            HelmDetailSection::Chart => self.render_chart_section(cx),
             HelmDetailSection::Values => self.render_values_section(cx),
             HelmDetailSection::History => self.render_history_section(window, cx),
             HelmDetailSection::Notes => self.render_notes_section(cx),
@@ -3025,6 +3059,12 @@ impl HelmView {
             .into_any_element()
     }
 
+    /// What the release *is*, in one section.
+    ///
+    /// The chart's name, its version and the app version it ships sat behind a tab of their
+    /// own, so the tab a reader landed on answered "when was this deployed" and the three facts
+    /// they came for — what is this thing, and which version of it is running — were one click
+    /// away in a five-tab row. They are rows like any other, and they are here now.
     fn render_overview_section(&self, cx: &Context<Self>) -> AnyElement {
         let Some(detail) = &self.detail else {
             return section_placeholder("Overview", "—", cx);
@@ -3035,34 +3075,10 @@ impl HelmView {
                 detail_failure_state(failure, "helm-overview-failure", "helm-overview-retry", cx)
             }
             LoadState::Ready(status) => {
-                let mut rows = vec![
-                    detail_row("First Deployed", status.info.first_deployed.clone(), cx),
-                    detail_row("Last Deployed", status.info.last_deployed.clone(), cx),
-                ];
-                if !status.info.description.is_empty() {
-                    rows.push(detail_row(
-                        "Description",
-                        status.info.description.clone(),
-                        cx,
-                    ));
-                }
-                section("Overview", rows, cx)
-            }
-        }
-    }
-
-    fn render_chart_section(&self, cx: &Context<Self>) -> AnyElement {
-        let Some(detail) = &self.detail else {
-            return section_placeholder("Chart", "—", cx);
-        };
-        match &detail.status {
-            LoadState::Loading => section_placeholder("Loading chart…", "—", cx),
-            LoadState::Failed(failure) => {
-                detail_failure_state(failure, "helm-chart-failure", "helm-chart-retry", cx)
-            }
-            LoadState::Ready(status) => {
                 let selected = self.selected_release();
-                let name = if status.chart.metadata.name.is_empty() {
+                // `helm status` answers no chart at all, so the release list carries the two
+                // halves it does answer and this fills the gap.
+                let chart = if status.chart.metadata.name.is_empty() {
                     selected
                         .map(|release| release.chart.clone())
                         .unwrap_or_else(|| "—".to_owned())
@@ -3081,15 +3097,21 @@ impl HelmView {
                 } else {
                     status.chart.metadata.app_version.clone()
                 };
-                section(
-                    "Chart",
-                    vec![
-                        detail_row("Chart", name, cx),
-                        detail_row("Version", version, cx),
-                        detail_row("App Version", app_version, cx),
-                    ],
-                    cx,
-                )
+                let mut rows = vec![
+                    detail_row("Chart", chart, cx),
+                    detail_row("Version", version, cx),
+                    detail_row("App Version", app_version, cx),
+                    detail_row("First Deployed", status.info.first_deployed.clone(), cx),
+                    detail_row("Last Deployed", status.info.last_deployed.clone(), cx),
+                ];
+                if !status.info.description.is_empty() {
+                    rows.push(detail_row(
+                        "Description",
+                        status.info.description.clone(),
+                        cx,
+                    ));
+                }
+                section("Overview", rows, cx)
             }
         }
     }
@@ -3180,11 +3202,13 @@ impl HelmView {
                     .id("helm-release-notes")
                     .w_full()
                     .gap(space::XS)
-                    .text_size(design::text::CAPTION)
-                    .line_height(design::text::CAPTION_LINE_HEIGHT)
+                    // Release notes are running prose: BODY, not CAPTION —
+                    // the scale reserves CAPTION for heads.
+                    .text_size(design::text::BODY)
+                    .line_height(design::text::BODY_LINE_HEIGHT)
                     .children(status.info.notes.lines().map(|line| {
                         div()
-                            .min_h(design::text::CAPTION_LINE_HEIGHT)
+                            .min_h(design::text::BODY_LINE_HEIGHT)
                             .child(SharedString::from(if line.is_empty() {
                                 " ".to_owned()
                             } else {
@@ -3209,7 +3233,11 @@ impl HelmView {
             }
             LoadState::Ready(values) if values_have_no_content(values) => section_placeholder(
                 "No user-supplied values",
-                "Upgrade to set values for this release.",
+                // The release takes every value from its chart's defaults. It used to read
+                // "Upgrade to set values for this release", which is an instruction for
+                // something the upgrade dialog cannot do — it asks for a chart and reuses
+                // what is here, and here is nothing.
+                "Every value on this release comes from the chart defaults.",
                 cx,
             ),
             LoadState::Ready(values) => {
@@ -3226,7 +3254,20 @@ impl HelmView {
                                 line.to_owned()
                             }))
                     }));
-                section("Values", vec![lines.into_any_element()], cx)
+                section(
+                    "Values",
+                    vec![
+                        lines.into_any_element(),
+                        // What an upgrade will do with this. `helm upgrade` reuses exactly
+                        // these keys, so this list is the change an upgrade carries; the
+                        // confirmation dialog says so too, and this is where a reader is when
+                        // they are deciding whether the list is right.
+                        common::label_small("Upgrade reuses these values.")
+                            .text_color(role::fg_tertiary(cx))
+                            .into_any_element(),
+                    ],
+                    cx,
+                )
             }
         }
     }
@@ -3290,7 +3331,12 @@ impl TableDelegate for RevisionTableDelegate {
             .line_height(design::text::CAPTION_LINE_HEIGHT)
             .font_weight(FontWeight::SEMIBOLD)
             .text_color(role::fg_tertiary(cx))
-            .child(HISTORY_COLUMNS.get(col_ix).map_or("", |(label, _)| *label))
+            .child(
+                HISTORY_COLUMNS
+                    .get(col_ix)
+                    .map_or("", |(label, _)| *label)
+                    .to_uppercase(),
+            )
     }
 
     fn render_tr(
@@ -3338,17 +3384,13 @@ impl TableDelegate for RevisionTableDelegate {
                     .aria_column_index(col_ix + 1)
                     .h_full()
                     .min_w_0()
-                    .gap(if status {
-                        design::size::STATUS_DOT
-                    } else {
-                        space::XS
-                    })
+                    .gap(if status { space::SM } else { space::XS })
                     .items_center()
                     // A revision is a number, so it is right-aligned with the tabular
                     // figures the data role already carries.
                     .when(col_ix == 0, |cell| cell.justify_end())
                     .when_some(severity, |cell, severity| {
-                        cell.text_color(status_ink(severity, cx))
+                        cell.text_color(status_word_ink(severity, cx))
                             .child(status_mark(severity, cx))
                     })
                     .child(
@@ -3542,10 +3584,15 @@ impl TableDelegate for ReleaseTableDelegate {
             .w_full()
             .h_full()
             .min_w_0()
-            // The status cell's dot and its word are one mark, so the gap between them
-            // is the design's own 6px dot gap rather than the general cell gap.
+            // The mark and the word are two readings of one state, not one ornament split in
+            // two, so the gap between them is the scale's "closely related" step — `space::SM`,
+            // the same lane the Port Forward list measures its status column from. It was
+            // `size::STATUS_DOT` here, which is the mark's own width: borrowing a shape's size
+            // as the gap between the shape and its word is how the two end up welded into one
+            // glyph, and the two tables that both draw a mark beside a word then disagree about
+            // how far apart a mark and a word sit.
             .gap(if column == ReleaseColumn::Status {
-                design::size::STATUS_DOT
+                space::SM
             } else {
                 space::XS
             })
@@ -3554,7 +3601,7 @@ impl TableDelegate for ReleaseTableDelegate {
         if column == ReleaseColumn::Status {
             let severity = release_severity(release.status);
             cell = cell
-                .text_color(status_ink(severity, cx))
+                .text_color(status_word_ink(severity, cx))
                 .child(status_mark(severity, cx));
         }
         // Keep the full value available when the cell is truncated.
@@ -3634,6 +3681,12 @@ fn failure_state(
         .into_any_element()
 }
 
+/// The status row a failed detail section draws: what failed, and the control that
+/// runs it again.
+///
+/// The retry is `secondary` for the same reason the panel's other recoveries are: the
+/// detail's one commitment is the action bar above it, and a failed section is a state
+/// the reader leaves rather than a decision they make.
 fn detail_failure_state(
     failure: &HelmFailure,
     state_id: &'static str,
@@ -3642,7 +3695,7 @@ fn detail_failure_state(
 ) -> AnyElement {
     let retry = Button::new(retry_id)
         .label("Retry")
-        .primary()
+        .secondary()
         .w(px(RETRY_BUTTON_WIDTH))
         .tab_index(11isize)
         .accessibility_label("Retry loading release details")
@@ -3663,7 +3716,7 @@ fn detail_failure_state(
     .child(
         Icon::new(design::severity_icon(Severity::Error))
             .flex_none()
-            .xsmall()
+            .with_size(Size::Size(design::icon::IN_ROW))
             .text_color(role::danger(cx)),
     )
     .child(
@@ -3741,13 +3794,21 @@ fn section(title: &'static str, rows: Vec<AnyElement>, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// A section with nothing in it yet: the heading, and one quiet line saying so.
+///
+/// The hint is `fg_tertiary`, not `fg_disabled`. It used to be `fg_disabled`, which is the
+/// quietest rung in the scale and is the role for content that is *permanently* unavailable;
+/// `—` under a section that is still loading, or that a release has none of, is a
+/// disabled-by-context value — §1.4's own example for `fg.tertiary` — and it is the only
+/// thing on the panel at that moment. One rung too quiet is how a loading section reads as a
+/// broken one.
 fn section_placeholder(title: &'static str, hint: &'static str, cx: &App) -> AnyElement {
     v_flex()
         .w_full()
         .mt(space::SM)
         .gap(space::XS)
         .child(section_heading(title, cx))
-        .child(common::label_small(hint).text_color(role::fg_disabled(cx)))
+        .child(common::label_small(hint).text_color(role::fg_tertiary(cx)))
         .into_any_element()
 }
 
@@ -3758,6 +3819,14 @@ fn section_heading(title: &str, cx: &App) -> impl IntoElement {
         .text_color(role::fg_tertiary(cx))
 }
 
+/// Width of a detail row's key column, so every value in the panel starts at the same x.
+///
+/// One measure for every section rather than one per row: a key column sized to its own longest
+/// key gives `App Version` more room than `Chart` and puts the two rows' values on two different
+/// left edges, which is the same spine the resource table and the Port Forward list are built on.
+/// Sized to the longest key the panel draws, `App Version`, at LABEL.
+const DETAIL_KEY_WIDTH: f32 = 88.0;
+
 fn detail_row(label: &'static str, value: String, cx: &App) -> AnyElement {
     h_flex()
         .w_full()
@@ -3766,10 +3835,12 @@ fn detail_row(label: &'static str, value: String, cx: &App) -> AnyElement {
         .items_start()
         .child(
             div()
-                .w(px(88.0))
+                .w(px(DETAIL_KEY_WIDTH))
                 .flex_none()
-                .text_size(design::text::CAPTION)
-                .line_height(design::text::CAPTION_LINE_HEIGHT)
+                // A key/value key is LABEL on the scale, not CAPTION: CAPTION
+                // is the section-head and table-header slot.
+                .text_size(design::text::LABEL)
+                .line_height(design::text::LABEL_LINE_HEIGHT)
                 .text_color(role::fg_tertiary(cx))
                 .child(label),
         )
@@ -3796,8 +3867,10 @@ fn detail_row(label: &'static str, value: String, cx: &App) -> AnyElement {
                     .min_w(px(0.))
                     .whitespace_nowrap()
                     .text_ellipsis()
-                    .text_size(design::text::CAPTION)
-                    .line_height(design::text::CAPTION_LINE_HEIGHT)
+                    // The value is the pane's content: BODY, not the
+                    // metadata size the key wears.
+                    .text_size(design::text::BODY)
+                    .line_height(design::text::BODY_LINE_HEIGHT)
                     .text_color(role::fg_primary(cx))
                     .child(value),
                 whole,
@@ -3806,14 +3879,14 @@ fn detail_row(label: &'static str, value: String, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
-/// The channel a release status wears in a cell.
+/// The mark ink a release status wears in a cell.
 ///
 /// `UI-SPEC.md` §4.4 turns the health vocabulary upside down for a table: a
 /// deployed release is the normal case and wears `fg_tertiary` grey, and only a
-/// release that is pending or broken is coloured. The severity mapping above is
-/// unchanged, so every other reader of it — the empty state, the menu, the
-/// tooltip — still agrees; this is only what the dot and the words beside it paint.
-fn status_ink(severity: Severity, cx: &App) -> Hsla {
+/// release that is pending or broken is coloured. The severity mapping itself is
+/// unchanged, so every other reader of it — the empty state, the menu, the tooltip
+/// — still agrees; this is only what the *mark* paints.
+fn status_mark_ink(severity: Severity, cx: &App) -> Hsla {
     match severity {
         Severity::Success => role::fg_tertiary(cx),
         Severity::Warning => role::warning(cx),
@@ -3821,6 +3894,24 @@ fn status_ink(severity: Severity, cx: &App) -> Hsla {
         Severity::Info => role::info(cx),
         Severity::Neutral | Severity::Muted => role::fg_disabled(cx),
     }
+}
+
+/// The word ink beside the mark, which is a different role and not a quieter copy
+/// of the mark's.
+///
+/// `design::role` splits every channel in two on purpose: a 16px glyph and a
+/// 12px word do not read at the same contrast, and asking one colour to do both
+/// buys the mark's legibility at the word's expense. This cell was painting both
+/// in the mark ink, which is that failure in one place — and it showed: a `pending`
+/// word in the mark's amber sat under the 4.5:1 body floor rather than the
+/// graphic floor, and a `failed` one with it.
+///
+/// [`role::status_word_for`] is the product's own answer and the Port Forward
+/// list's, so the two tables that both put a mark and a word in a cell now read
+/// their status from one place. It keeps §4.4's inversion too: `Success` is grey,
+/// one rung above the mark.
+fn status_word_ink(severity: Severity, cx: &App) -> Hsla {
+    role::status_word_for(severity, cx)
 }
 
 /// The mark that leads a status cell: one of the health shapes, at the marker token.
@@ -3839,7 +3930,7 @@ fn status_mark(severity: Severity, cx: &App) -> AnyElement {
     Icon::new(design::health_icon(severity))
         .flex_none()
         .with_size(Size::Size(design::size::STATUS_MARKER))
-        .text_color(status_ink(severity, cx))
+        .text_color(status_mark_ink(severity, cx))
         .into_any_element()
 }
 
@@ -5105,7 +5196,7 @@ mod tests {
         }
         assert_eq!(
             HelmReleaseAction::Uninstall.command_label(),
-            "Uninstall Selected Release"
+            "Uninstall selected release…"
         );
     }
 

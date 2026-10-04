@@ -10,7 +10,6 @@ use k8s_core::cluster::{Client, Cluster, ClusterId, ClusterRegistry, Health};
 use k8s_core::cluster_data::data_source_for_cluster;
 use k8s_core::controller::{Controller, ControllerEvent, Scope, StoreEvent, StoreOp, WatchOptions};
 use k8s_core::discovery::{ResourceCatalog, ResourceEntry, ResourceScope};
-use k8s_core::hotbar::{Hotbar, HotbarError, cluster_index};
 use k8s_core::latency::LatencyTier;
 use k8s_core::ops;
 use kube_core::{ApiResource, DynamicObject};
@@ -885,9 +884,15 @@ async fn server_version(registry: &Arc<ClusterRegistry>, cluster: ClusterId) -> 
 }
 
 impl ClusterSession {
-    pub fn load_hotbar(registry: &ClusterRegistry) -> (Hotbar, Option<HotbarError>) {
-        let index = cluster_index(registry);
-        Hotbar::load_default(|key| index.get(key).copied())
+    /// The cluster the reader was last on, when the registry still has it.
+    ///
+    /// This is the job the rail's first slot used to do: reopen on the context you were
+    /// last using. A remembered cluster the kubeconfig has since lost is a stale
+    /// preference, not a claim on the app, and [`Self::from_registry_with_cluster`]
+    /// refuses every context when it is handed an id the registry does not have, so the
+    /// check belongs here. The registry's own order answers instead.
+    pub fn remembered_cluster(registry: &ClusterRegistry) -> Option<ClusterId> {
+        crate::settings::last_cluster().filter(|id| registry.get(*id).is_some())
     }
 
     #[cfg(test)]
@@ -897,20 +902,7 @@ impl ClusterSession {
 
     #[cfg(not(test))]
     pub fn from_registry(registry: Arc<ClusterRegistry>, handle: Handle) -> Self {
-        let (hotbar, error) = Self::load_hotbar(&registry);
-        Self::from_loaded_hotbar(registry, handle, hotbar, error)
-    }
-
-    fn from_loaded_hotbar(
-        registry: Arc<ClusterRegistry>,
-        handle: Handle,
-        hotbar: Hotbar,
-        _error: Option<HotbarError>,
-    ) -> Self {
-        let selected = hotbar
-            .active_bank()
-            .and_then(|bank| bank.slots.first())
-            .map(|slot| slot.cluster_id);
+        let selected = Self::remembered_cluster(&registry);
         Self::from_registry_with_cluster(registry, handle, selected)
     }
 
@@ -955,7 +947,7 @@ impl ClusterSession {
         }
     }
 
-    pub fn reload_hotbar_session(&self) -> Result<Self, String> {
+    pub fn reload_session(&self) -> Result<Self, String> {
         let registry = Arc::clone(
             self.registry()
                 .ok_or_else(|| SELECTED_CONTEXT_UNAVAILABLE.to_owned())?,
@@ -964,11 +956,10 @@ impl ClusterSession {
             .tokio_handle()
             .ok_or_else(|| SELECTED_CONTEXT_UNAVAILABLE.to_owned())?
             .clone();
-        let (hotbar, _error) = Self::load_hotbar(&registry);
-        let selected = hotbar
-            .active_bank()
-            .and_then(|bank| bank.slots.first())
-            .map(|slot| slot.cluster_id);
+        let selected = self
+            .cluster_id()
+            .filter(|id| registry.get(*id).is_some())
+            .or_else(|| Self::remembered_cluster(&registry));
         Ok(Self::from_registry_with_cluster(registry, handle, selected))
     }
 
@@ -2614,8 +2605,30 @@ current-context: alpha-ctx
         Arc::new(registry)
     }
 
+    /// Answers what [`ClusterSession::remembered_cluster`] says with `settings` written
+    /// into the settings file, then puts the file back the way it was.
+    ///
+    /// The reader has no App to hand, so the resume is answered from the file itself.
+    fn remembered_cluster_with(
+        settings: Option<ClusterId>,
+        registry: &ClusterRegistry,
+    ) -> Option<ClusterId> {
+        let path = crate::settings::user_settings_path().expect("a settings path");
+        let text = match settings {
+            Some(cluster) => format!(
+                "{{\"lastCluster\":{}}}",
+                serde_json::to_value(cluster).expect("a cluster id")
+            ),
+            None => "{}".to_owned(),
+        };
+        std::fs::write(&path, text).expect("write settings");
+        let remembered = ClusterSession::remembered_cluster(registry);
+        let _ = std::fs::remove_file(&path);
+        remembered
+    }
+
     #[tokio::test]
-    async fn startup_hotbar_selects_resolved_slot_before_first_context() {
+    async fn startup_resumes_the_cluster_the_reader_was_last_on() {
         let registry = inline_switch_registry().await;
         let beta = registry
             .clusters()
@@ -2623,36 +2636,34 @@ current-context: alpha-ctx
             .find(|cluster| cluster.name() == "beta-ctx")
             .expect("beta context")
             .id();
-        let mut hotbar = Hotbar::default();
-        let bank = hotbar.create_bank("default").expect("bank");
-        hotbar.add_slot(bank, beta, "beta-ctx").expect("slot");
 
-        let session = ClusterSession::from_loaded_hotbar(
+        let session = ClusterSession::from_registry_with_cluster(
             Arc::clone(&registry),
             Handle::current(),
-            hotbar,
-            None,
+            remembered_cluster_with(Some(beta), &registry),
         );
         assert_eq!(session.cluster_name(), Some("beta-ctx"));
     }
 
     #[tokio::test]
-    async fn an_unresolved_startup_slot_never_blocks_the_current_context() {
+    async fn a_remembered_cluster_the_registry_has_lost_never_blocks_the_current_context() {
         let registry = inline_switch_registry().await;
-        // A hotbar slot is a convenience, not a claim about the app. One that
-        // names a cluster the registry does not have used to take kubeconfig
-        // loading down with it, leaving the window on "No Context" with an
-        // error naming an internal cluster id.
-        let session = ClusterSession::from_loaded_hotbar(
-            Arc::clone(&registry),
-            Handle::current(),
-            Hotbar::default(),
-            Some(HotbarError::UnresolvedSlot {
-                cluster_id: "missing-id".to_owned(),
-                label: "missing-ctx".to_owned(),
-            }),
+        // A remembered cluster is a preference, not a claim on the app. One the
+        // registry does not have used to take kubeconfig loading down with it,
+        // leaving the window on "No Context" with an error naming an internal
+        // cluster id.
+        let stale = ClusterId::from_bits(0x0000_0000_dead_beef);
+        let remembered = remembered_cluster_with(Some(stale), &registry);
+        assert!(
+            remembered.is_none(),
+            "a cluster the registry does not have is not a resume"
         );
 
+        let session = ClusterSession::from_registry_with_cluster(
+            Arc::clone(&registry),
+            Handle::current(),
+            remembered,
+        );
         assert!(
             session.cluster_id().is_some(),
             "the app still loads its context"
@@ -2665,13 +2676,12 @@ current-context: alpha-ctx
     }
 
     #[tokio::test]
-    async fn empty_hotbar_keeps_first_context_default() {
+    async fn no_remembered_cluster_keeps_first_context_default() {
         let registry = inline_switch_registry().await;
-        let session = ClusterSession::from_loaded_hotbar(
+        let session = ClusterSession::from_registry_with_cluster(
             Arc::clone(&registry),
             Handle::current(),
-            Hotbar::default(),
-            None,
+            remembered_cluster_with(None, &registry),
         );
         assert_eq!(session.cluster_name(), Some("alpha-ctx"));
     }

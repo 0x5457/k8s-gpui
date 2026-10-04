@@ -226,7 +226,7 @@ fn spawn_local_terminal(
     eprintln!(
         "k8s-gpui: {} starting in namespace {}",
         files.trace_label(),
-        namespace,
+        files.namespace(),
     );
     let args = local_shell_args(cfg!(unix));
     let env = files.env();
@@ -1250,7 +1250,7 @@ fn restart_button() -> AnyElement {
 fn loading_bar(cx: &App) -> AnyElement {
     Progress::new(TERMINAL_LOADING_BAR_ID)
         .loading(true)
-        .color(cx.theme().accent)
+        .color(k8s_ui::design::role::accent(cx))
         .w(design::size::UPDATE_PROGRESS)
         .max_w_full()
         .h(design::space::XS)
@@ -1275,8 +1275,10 @@ fn spawn_forward(
     let namespace = request.namespace.clone();
     let name = request.name.to_string();
     let remote_port = request.remote_port;
-    // The port the user asked for, so a taken port is bound to something else and reported
-    // instead of being dropped.
+    // The port the user asked for. A taken port ends the forward rather than
+    // quietly binding a different one: a forward on a port nobody typed is a
+    // tunnel to the right place that the reader has no way to find, and the cost
+    // of refusing is one sentence and a re-typed number.
     let local_port = request.local_port;
     let resource = k8s_ui::table_view::pods_resource();
     let (binding_tx, binding) = tokio::sync::oneshot::channel();
@@ -1308,10 +1310,6 @@ fn spawn_forward(
                 return;
             }
         };
-        // The dialog shows the substitution, so the process log names the port that answers now.
-        for fallback in session.fallbacks() {
-            eprintln!("k8s-gpui: port forward: {}", fallback.notice());
-        }
         let Some(local_port) = session.local_ports().first().copied() else {
             let _ = binding_tx.send(Err(
                 "The port forward did not bind a local port. Check the port-forward request."
@@ -1376,6 +1374,10 @@ struct SessionFiles {
     /// session that made it.
     sequence: u64,
     env: Vec<(String, String)>,
+    /// The namespace this session is actually in. It differs from the scope that
+    /// was asked for whenever that scope is all namespaces, which is why it is
+    /// recorded rather than read back out of the environment.
+    namespace: String,
     /// Keeps the temporary kubeconfig alive until the session ends.
     _kubeconfig: k8s_core::kubectl_shell::SessionKubeconfig,
 }
@@ -1385,19 +1387,20 @@ impl SessionFiles {
     fn prepare(
         cluster: &Cluster,
         snapshot: &kube::config::Kubeconfig,
-        namespace: Option<&str>,
+        scope: Option<&str>,
     ) -> Result<Self, String> {
         let sequence = SESSION_SEQ.fetch_add(1, Ordering::Relaxed);
         let dir =
             std::env::temp_dir().join(format!("k8s-gpui-term-{}-{sequence}", std::process::id()));
         ensure_private_dir(&dir).map_err(|error| error.to_string())?;
+        // A shell is in exactly one namespace, so "all namespaces" is a filter on
+        // what the app lists and not a state kubectl can be in. Writing it into
+        // the session kubeconfig pinned the context to a namespace that does not
+        // exist, so the session keeps the namespace its context already names and
+        // the person gets the shell they would get in their own terminal.
+        let namespace = scope.filter(|scope| *scope != ALL_NAMESPACES);
         let kubeconfig = match namespace {
             None => k8s_core::kubectl_shell::write_session_kubeconfig_from(cluster, snapshot, &dir),
-            Some(namespace) if namespace == ALL_NAMESPACES => {
-                k8s_core::kubectl_shell::write_session_kubeconfig_from_all_namespaces(
-                    cluster, snapshot, &dir,
-                )
-            }
             Some(namespace) => {
                 k8s_core::kubectl_shell::write_session_kubeconfig_from_with_namespace(
                     cluster,
@@ -1420,11 +1423,14 @@ impl SessionFiles {
             let _ = std::fs::remove_dir_all(&dir);
             return Err(error);
         }
-        let env_namespace = namespace.unwrap_or_else(|| cluster.client().default_namespace());
-        let env = k8s_core::kubectl_shell::shell_env(cluster, &kubeconfig, env_namespace);
+        let namespace = namespace
+            .map(str::to_owned)
+            .unwrap_or_else(|| cluster.client().default_namespace().to_owned());
+        let env = k8s_core::kubectl_shell::shell_env(cluster, &kubeconfig, &namespace);
         Ok(Self {
             dir,
             sequence,
+            namespace,
             env,
             _kubeconfig: kubeconfig,
         })
@@ -1432,6 +1438,11 @@ impl SessionFiles {
 
     fn env(&self) -> HashMap<String, String> {
         self.env.iter().cloned().collect()
+    }
+
+    /// The namespace the session is in, for a diagnostic line.
+    fn namespace(&self) -> &str {
+        &self.namespace
     }
 
     /// Names this session for a diagnostic line.
@@ -1627,51 +1638,35 @@ current-context: test
         );
         drop(files);
 
-        let all = TerminalRequest {
+        // The app is scoped to all namespaces, but a shell is in one namespace:
+        // the session keeps the one its context already names, and says so both in
+        // the kubeconfig and in the variable a script would read.
+        let unscoped = TerminalRequest {
             kind: TerminalKind::Local,
             context: Some("test".to_owned()),
             namespace: None,
         };
-        let files = SessionFiles::prepare(cluster, &snapshot, Some(local_namespace(&all)))
-            .expect("all namespaces environment");
+        let files = SessionFiles::prepare(cluster, &snapshot, Some(local_namespace(&unscoped)))
+            .expect("unscoped environment");
         assert_eq!(
             files
                 .env
                 .iter()
                 .find(|(key, _)| key == "K8S_GPUI_NAMESPACE")
                 .map(|(_, value)| value.as_str()),
-            Some(ALL_NAMESPACES)
+            Some("default"),
+            "the variable has to name a namespace, because that is what it is for"
         );
-        let all_written =
-            kube::config::Kubeconfig::read_from(files._kubeconfig.path()).expect("read all");
+        let unscoped_written =
+            kube::config::Kubeconfig::read_from(files._kubeconfig.path()).expect("read unscoped");
         assert_eq!(
-            all_written.contexts[0]
+            unscoped_written.contexts[0]
                 .context
                 .as_ref()
                 .and_then(|context| context.namespace.as_deref()),
-            None
+            Some("default")
         );
         drop(files);
-
-        let files = SessionFiles::prepare(cluster, &snapshot, None)
-            .expect("preserve context namespace environment");
-        let preserved =
-            kube::config::Kubeconfig::read_from(files._kubeconfig.path()).expect("read preserved");
-        assert_eq!(
-            preserved.contexts[0]
-                .context
-                .as_ref()
-                .and_then(|context| context.namespace.as_deref()),
-            Some("default")
-        );
-        assert_eq!(
-            files
-                .env
-                .iter()
-                .find(|(key, _)| key == "K8S_GPUI_NAMESPACE")
-                .map(|(_, value)| value.as_str()),
-            Some("default")
-        );
     }
 
     #[tokio::test]

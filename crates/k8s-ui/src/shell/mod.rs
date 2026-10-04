@@ -9,7 +9,6 @@
 //! `gpui_kit::component` rather than reimplemented.
 
 pub mod commands;
-mod hotbar;
 mod panels;
 mod status_bar;
 mod tree;
@@ -47,12 +46,11 @@ use k8s_core::cluster::{ClusterId, ClusterRegistry, Health};
 use k8s_core::cluster_data::{ClusterDataSource, data_source_for_cluster};
 use k8s_core::discovery::{ResourceCatalog, ResourceEntry};
 use k8s_core::helm::{Helm, HelmError};
-use k8s_core::hotbar::Hotbar;
 use k8s_core::latency::LatencyTier;
 use k8s_core::machines::{
     ConnectionEffect as CoreConnectionEffect, ConnectionEvent as CoreConnectionEvent,
     ConnectionMachine as CoreConnectionMachine, ConnectionState as CoreConnectionState,
-    HotbarEffect, HotbarEvent, HotbarMachine, SearchHit,
+    SearchHit,
 };
 use statig::blocking::StateMachine;
 use statig::prelude::IntoStateMachineExt as _;
@@ -98,14 +96,6 @@ use crate::{
 #[cfg(test)]
 use k8s_core::controller::{StoreEvent, StoreOp};
 use kube_core::{ApiResource, DynamicObject, GroupVersionKind};
-
-actions!(
-    k8s_hotbar,
-    [
-        /// Toggle the Hotbar rail.
-        ToggleHotbar
-    ]
-);
 
 actions!(
     k8s_shell,
@@ -204,7 +194,11 @@ pub struct UseKeymapPreset {
     pub preset: String,
 }
 
-/// Switch to a cluster in the active Hotbar bank slot.
+/// Switch to a context by its position in the context switcher.
+///
+/// The rail counted slots and is gone, so the keystrokes count contexts the way the
+/// switcher lists them: `alt-1` is the first one. Switching cluster from the keyboard is
+/// how a reader with six clusters works, so it does not go with the rail.
 #[derive(
     Clone,
     PartialEq,
@@ -212,25 +206,10 @@ pub struct UseKeymapPreset {
     gpui_kit::private::schemars::JsonSchema,
     gpui_kit::Action,
 )]
-#[action(namespace = k8s_hotbar)]
+#[action(namespace = k8s_shell)]
 #[serde(crate = "gpui_kit::private::serde", deny_unknown_fields)]
 #[schemars(crate = "gpui_kit::private::schemars")]
 pub struct SwitchCluster {
-    pub slot: usize,
-}
-
-/// Switch the active Hotbar bank.
-#[derive(
-    Clone,
-    PartialEq,
-    private_serde::Deserialize,
-    gpui_kit::private::schemars::JsonSchema,
-    gpui_kit::Action,
-)]
-#[action(namespace = k8s_hotbar)]
-#[serde(crate = "gpui_kit::private::serde", deny_unknown_fields)]
-#[schemars(crate = "gpui_kit::private::schemars")]
-pub struct SwitchBank {
     pub index: usize,
 }
 
@@ -393,7 +372,6 @@ enum DialogInputKind {
     Scale,
     PortForward,
     PortForwardLocal,
-    BankName,
     HelmChartReference,
 }
 
@@ -409,38 +387,31 @@ impl DialogInputKind {
     ) {
         match self {
             Self::Scale => (
-                "Replica Count",
-                "Replica Count",
+                "Replica count",
+                "Replica count",
                 "Enter a whole number of 0 or more.",
-                "Clear Replica Count",
+                "Clear replica count",
                 9,
             ),
             Self::PortForward => (
                 "80",
-                "Remote Port",
+                "Remote port",
                 "Enter a container port from 1 through 65535.",
-                "Clear Remote Port",
+                "Clear remote port",
                 5,
             ),
             Self::PortForwardLocal => (
                 "8080",
-                "Local Port",
+                "Local port",
                 "Leave empty to assign a free local port.",
-                "Clear Local Port",
+                "Clear local port",
                 5,
-            ),
-            Self::BankName => (
-                "Bank Name",
-                "Bank Name",
-                "Name this group of contexts, such as production or staging.",
-                "Clear Bank Name",
-                32,
             ),
             Self::HelmChartReference => (
                 "repo/chart or /path/to/chart",
-                "Chart Reference",
+                "Chart reference",
                 "Enter repo/chart or a local chart path. Helm resolves the chart version. The current release values stay the same.",
-                "Clear Chart Reference",
+                "Clear chart reference",
                 512,
             ),
         }
@@ -492,17 +463,6 @@ enum Dialog {
         view: Entity<HelmView>,
         input: Option<Entity<TextInput>>,
         error: Option<String>,
-    },
-    /// Create or rename a Hotbar bank.
-    HotbarBankName {
-        index: Option<usize>,
-        input: Entity<TextInput>,
-        error: Option<String>,
-    },
-    /// Confirm removal of a Hotbar bank and its slots.
-    HotbarRemove {
-        index: usize,
-        name: SharedString,
     },
     ConfirmTabClose {
         request: TabCloseRequest,
@@ -838,17 +798,12 @@ pub(super) fn status_bar_item_height() -> f32 {
     status_bar_height() - 1.0
 }
 
-fn hotbar_width() -> f32 {
-    f32::from(design::size::HOTBAR_RAIL)
-}
-
 /// Panel geometry used to move a divider with the pointer.
 #[derive(Clone, Copy)]
 struct PanelGeometry {
     viewport_width: f32,
     viewport_height: f32,
     status_height: f32,
-    hotbar_width: f32,
     left_width: f32,
     right_width: f32,
     dock_height: f32,
@@ -859,7 +814,6 @@ impl PanelGeometry {
         viewport_width: f32,
         viewport_height: f32,
         status_height: f32,
-        hotbar_width: f32,
         left_width: f32,
         right_width: f32,
         dock_height: f32,
@@ -868,7 +822,6 @@ impl PanelGeometry {
             viewport_width,
             viewport_height,
             status_height,
-            hotbar_width,
             left_width,
             right_width,
             dock_height,
@@ -886,7 +839,7 @@ impl PanelGeometry {
     /// Window coordinate of the panel edge the divider sits on.
     fn edge(&self, target: DragTarget) -> f32 {
         match target {
-            DragTarget::Left => self.hotbar_width + self.left_width,
+            DragTarget::Left => self.left_width,
             DragTarget::Right => self.viewport_width - self.right_width,
             DragTarget::Dock => self.viewport_height - self.status_height - self.dock_height,
         }
@@ -895,7 +848,7 @@ impl PanelGeometry {
     /// Panel size for a divider edge on the pointer axis.
     fn panel_size(&self, target: DragTarget, edge: f32) -> f32 {
         match target {
-            DragTarget::Left => edge - self.hotbar_width,
+            DragTarget::Left => edge,
             DragTarget::Right => self.viewport_width - edge,
             DragTarget::Dock => self.viewport_height - self.status_height - edge,
         }
@@ -941,33 +894,22 @@ fn dock_height_max_with_strips(
     available.clamp(dock_height_min(), dock_height_limit())
 }
 
-fn min_full_width(sidebar_visible: bool, inspector_visible: bool, hotbar_visible: bool) -> f32 {
+fn min_full_width(sidebar_visible: bool, inspector_visible: bool) -> f32 {
     let divider = f32::from(design::border::HIT);
     f32::from(design::size::CENTER_MIN)
         + if sidebar_visible { divider } else { 0.0 }
         + if inspector_visible { divider } else { 0.0 }
-        + if hotbar_visible { hotbar_width() } else { 0.0 }
 }
 
-fn left_width_max_with_hotbar(
-    viewport_width: f32,
-    right_width: f32,
-    inspector_visible: bool,
-    hotbar_visible: bool,
-) -> f32 {
-    let reserved = min_full_width(true, inspector_visible, hotbar_visible)
-        + if inspector_visible { right_width } else { 0.0 };
+fn left_width_max(viewport_width: f32, right_width: f32, inspector_visible: bool) -> f32 {
+    let reserved =
+        min_full_width(true, inspector_visible) + if inspector_visible { right_width } else { 0.0 };
     (viewport_width - reserved).clamp(left_width_min(), left_width_limit())
 }
 
-fn right_width_max_with_hotbar(
-    viewport_width: f32,
-    left_width: f32,
-    sidebar_visible: bool,
-    hotbar_visible: bool,
-) -> f32 {
-    let reserved = min_full_width(sidebar_visible, true, hotbar_visible)
-        + if sidebar_visible { left_width } else { 0.0 };
+fn right_width_max(viewport_width: f32, left_width: f32, sidebar_visible: bool) -> f32 {
+    let reserved =
+        min_full_width(sidebar_visible, true) + if sidebar_visible { left_width } else { 0.0 };
     (viewport_width - reserved).clamp(right_width_min(), right_width_limit())
 }
 
@@ -978,23 +920,17 @@ fn right_width_max_with_hotbar(
 /// to 420 on a wide window and then narrowed it gets 280 until they widen it again, and gets
 /// 420 back — not 280 forever. Overwriting the remembered width with the temporary one is how
 /// a layout rule ends up destroying the choice it was meant to serve.
-fn constrained_panel_widths_with_hotbar(
+fn constrained_panel_widths(
     viewport_width: f32,
     sidebar_visible: bool,
     inspector_visible: bool,
-    hotbar_visible: bool,
     left_width: f32,
     right_width: f32,
 ) -> (f32, f32) {
     let left = if sidebar_visible {
         left_width.clamp(
             left_width_min(),
-            left_width_max_with_hotbar(
-                viewport_width,
-                right_width,
-                inspector_visible,
-                hotbar_visible,
-            ),
+            left_width_max(viewport_width, right_width, inspector_visible),
         )
     } else {
         left_width.clamp(left_width_min(), left_width_limit())
@@ -1003,8 +939,7 @@ fn constrained_panel_widths_with_hotbar(
     let right = if inspector_visible {
         right_width.clamp(
             right_width_min(),
-            right_width_max_with_hotbar(viewport_width, left, sidebar_visible, hotbar_visible)
-                .min(ceiling),
+            right_width_max(viewport_width, left, sidebar_visible).min(ceiling),
         )
     } else {
         right_width.clamp(right_width_min(), ceiling)
@@ -1829,14 +1764,19 @@ fn routed_inspector_binding(
         if !route.active.get() {
             return;
         }
-        if let InspectorUpdate::Selection(Some(selection)) = &update
+        if let InspectorUpdate::Selection(Some(selection), _) = &update
             && route.record(selection, inspector.read(cx).is_applying())
         {
             let identity = route.identity(base);
             inspector.update(cx, |panel, _| panel.set_session_identity(identity));
         }
         inspector.update(cx, |panel, cx| match update {
-            InspectorUpdate::Selection(selection) => panel.set_selection(selection, cx),
+            // The count is set on every push, including the empty one, so clearing
+            // the table's selection clears the panel's sentence with it.
+            InspectorUpdate::Selection(selection, rows) => {
+                panel.set_selected_rows(rows, cx);
+                panel.set_selection(selection, cx);
+            }
             InspectorUpdate::Yaml(yaml) => panel.set_yaml(yaml, cx),
         });
     })
@@ -1960,28 +1900,17 @@ fn cluster_names(registry: &ClusterRegistry) -> Vec<SharedString> {
         .collect()
 }
 
-/// The cluster the active Hotbar bank claims, when the registry still has it.
+/// The context the app opens on: the one the reader was last on when the registry
+/// still has it, and the kubeconfig's own current context when it does not.
 ///
-/// A slot is a convenience for reaching a cluster, not a claim on the app: a slot
-/// that names a cluster the registry has since lost only loses its own claim, and
-/// the caller falls back to the kubeconfig's current context. Refusing every
-/// context because one saved slot went stale would make a dead convenience
-/// permanent.
-fn hotbar_cluster(hotbar: &Hotbar, has_cluster: impl Fn(ClusterId) -> bool) -> Option<ClusterId> {
-    let slot = hotbar.active_bank()?.slots.first()?;
-    has_cluster(slot.cluster_id).then_some(slot.cluster_id)
-}
-
-fn first_valid_hotbar_cluster(registry: &ClusterRegistry) -> Option<ClusterId> {
-    let (hotbar, _) = ClusterSession::load_hotbar(registry);
-    hotbar_cluster(&hotbar, |id| registry.get(id).is_some())
-}
-
+/// A remembered context is a preference, not a claim on the app, so one the registry
+/// has lost only loses its own claim. Refusing every context because a remembered one
+/// went stale would make a dead preference permanent.
 fn preferred_cluster(
     registry: &ClusterRegistry,
-    hotbar_choice: Option<ClusterId>,
+    remembered: Option<ClusterId>,
 ) -> Option<ClusterId> {
-    hotbar_choice
+    remembered
         .filter(|id| registry.get(*id).is_some())
         .or_else(|| registry.current_cluster_id())
 }
@@ -1993,11 +1922,13 @@ fn select_startup_session(session: ClusterSession) -> ClusterSession {
     let Some(handle) = session.tokio_handle().cloned() else {
         return session;
     };
+    // A test has no settings file of its own, so the registry's current context is the
+    // only answer there. A run reads the cluster the reader last switched to.
     #[cfg(test)]
-    let hotbar_choice = None;
+    let remembered = None;
     #[cfg(not(test))]
-    let hotbar_choice = first_valid_hotbar_cluster(&registry);
-    let selected = preferred_cluster(&registry, hotbar_choice);
+    let remembered = crate::settings::last_cluster();
+    let selected = preferred_cluster(&registry, remembered);
     ClusterSession::from_registry_with_cluster(registry, handle, selected)
 }
 
@@ -2006,9 +1937,10 @@ fn reloaded_session(
     handle: tokio::runtime::Handle,
     preferred: Option<ClusterId>,
 ) -> Result<ClusterSession, String> {
+    let remembered = crate::settings::last_cluster();
     let selected = preferred
         .filter(|id| registry.get(*id).is_some())
-        .or_else(|| preferred_cluster(&registry, first_valid_hotbar_cluster(&registry)));
+        .or_else(|| preferred_cluster(&registry, remembered));
     let session = ClusterSession::from_registry_with_cluster(registry, handle, selected);
     match session {
         ClusterSession::Ready { .. } => Ok(session),
@@ -2092,8 +2024,23 @@ impl ResourceSubscription for DemoSubscription {
 
 #[cfg(test)]
 fn demo_events() -> Vec<SourceEvent> {
+    // The three pods a cluster the reader is looking at a problem in. A pod with no
+    // `status` at all is not a shape an API server produces, and under `Only problems` —
+    // which grades a row by its own status and calls a missing one *not* a fault — a
+    // statusless fixture leaves the Overview's route landing on an empty table.
+    const WAITING: [&str; 3] = ["", "CrashLoopBackOff", "ImagePullBackOff"];
     let mut events = vec![SourceEvent::Init];
     events.extend((0..3).map(|index| {
+        let waiting = WAITING[index];
+        let container = serde_json::json!({
+            "name": "app",
+            "ready": waiting.is_empty(),
+            "state": if waiting.is_empty() {
+                serde_json::json!({ "running": { "startedAt": "2024-01-01T00:00:00Z" } })
+            } else {
+                serde_json::json!({ "waiting": { "reason": waiting } })
+            },
+        });
         let object = Arc::new(
             serde_json::from_value(serde_json::json!({
                 "apiVersion": "v1",
@@ -2102,6 +2049,11 @@ fn demo_events() -> Vec<SourceEvent> {
                     "name": format!("demo-{index}"),
                     "namespace": "default",
                     "uid": format!("uid-demo-{index}"),
+                    "creationTimestamp": "2024-01-01T00:00:00Z",
+                },
+                "status": {
+                    "phase": "Running",
+                    "containerStatuses": [container],
                 },
             }))
             .expect("demo pod"),
@@ -2165,7 +2117,7 @@ const PALETTE_CURRENT_BADGE: &str = "Current";
 /// keymap use, so the button cannot drift from the command it stands for.
 fn reload_kubeconfigs_action() -> ToastAction {
     ToastAction {
-        label: "Reload Kubeconfigs",
+        label: "Reload kubeconfigs",
         run: Rc::new(
             |shell: &mut Shell, window: &mut Window, cx: &mut Context<Shell>| {
                 shell.dispatch(ReloadKubeconfigs, window, cx);
@@ -2382,24 +2334,8 @@ pub struct Shell {
     tree_filter: String,
     tree_filter_input: Entity<TextInput>,
     tree_focus_handle: FocusHandle,
-    /// First focus stop in the resource sidebar.
-    hotbar_focus_handle: FocusHandle,
-    hotbar_bank_focus: FocusHandle,
-    /// Whether the bank menu is open, so the trigger can report it and stay selected.
-    ///
-    /// gpui-kit's `DropdownMenu` owns the menu entity and its dismissal, so all the shell has
-    /// to keep is the open flag its own trigger reads.
-    hotbar_bank_open: bool,
     /// Whether the resource header's overflow menu is open.
-    ///
-    /// Its own flag rather than a shared one with the hotbar's, because two
-    /// menus in one window are two independent facts and one flag for both makes
-    /// opening the second close the first from under the reader.
     resource_menu_open: bool,
-    hotbar_add_focus: FocusHandle,
-    hotbar_hide_focus: FocusHandle,
-    hotbar_slot_cursor: usize,
-    hotbar_scroll: ScrollHandle,
     tree_scroll: ScrollHandle,
     tabs_scroll: ScrollHandle,
     pinned_tabs_scroll: ScrollHandle,
@@ -2548,12 +2484,7 @@ pub struct Shell {
     /// Cluster operations used by the UI.
     cluster_handle: Option<ClusterHandle>,
     terminal_services: Option<TerminalServices>,
-    /// Hotbar state machine and effect channel.
-    hotbar_machine: StateMachine<HotbarMachine>,
-    hotbar_effects: UnboundedReceiver<HotbarEffect>,
-    hotbar_load_error: Option<String>,
-    hotbar_open: bool,
-    settings_layout_saved: Option<(bool, bool)>,
+    settings_layout_saved: Option<bool>,
     /// Weak shell handle for callbacks.
     shell_weak: WeakEntity<Shell>,
     /// Current transient feedback message.
@@ -2676,7 +2607,7 @@ impl Shell {
 
         // A real session loads the tree after the catalog. A demo shell starts populated.
         let tree = match &session {
-            Some(session) => ResourceTree::empty(session.cluster_name().unwrap_or("No Context")),
+            Some(session) => ResourceTree::empty(session.cluster_name().unwrap_or("No context")),
             None => ResourceTree::demo(),
         };
         let collapsed = tree.default_collapsed();
@@ -2696,7 +2627,7 @@ impl Shell {
                 .filter(|clusters| !clusters.is_empty())
                 .unwrap_or_else(|| {
                     vec![SharedString::from(
-                        session.cluster_name().unwrap_or("No Context"),
+                        session.cluster_name().unwrap_or("No context"),
                     )]
                 }),
             None => tree.cluster_names(),
@@ -2886,22 +2817,10 @@ impl Shell {
                 this.on_keymap_status_changed(cx);
             })
         });
-        // A missing registry produces an empty Hotbar.
-        let (hotbar_effects_tx, hotbar_effects) = unbounded_channel();
-        let mut hotbar_machine = HotbarMachine::new(hotbar_effects_tx).state_machine();
-        let (hotbar, hotbar_load_error) = match session.as_ref().and_then(ClusterSession::registry)
-        {
-            Some(registry) => {
-                let (hotbar, error) = ClusterSession::load_hotbar(registry);
-                (hotbar, error.map(|error| error.to_string()))
-            }
-            None => (Hotbar::default(), None),
-        };
-        hotbar_machine.handle(&HotbarEvent::Load(hotbar));
         let palette_shell = shell_weak.clone();
         let palette_input = cx.new(|cx| {
             TextInput::new(
-                "Search Commands",
+                "Search commands",
                 cx,
                 move |text, cx| {
                     let shell = palette_shell.clone();
@@ -2921,9 +2840,9 @@ impl Shell {
                 },
             )
             .with_accessibility(
-                "Command Search",
+                "Command search",
                 "Type to filter commands. Use Up and Down to navigate. Press Enter to run. Press Escape to close.",
-                "Clear Command Search",
+                "Clear command search",
             )
             .with_width(px(
                 panels::PALETTE_WIDTH - f32::from(design::space::XL),
@@ -2931,7 +2850,7 @@ impl Shell {
         });
         let tree_filter_shell = shell_weak.clone();
         let tree_filter_input = cx.new(|cx| {
-            TextInput::new("Filter Resources", cx, move |text, cx| {
+            TextInput::new("Filter resources", cx, move |text, cx| {
                 let shell = tree_filter_shell.clone();
                 let text = text.to_owned();
                 cx.defer(move |cx| {
@@ -2941,9 +2860,9 @@ impl Shell {
                 });
             })
             .with_accessibility(
-                "Filter Resources",
+                "Filter resources",
                 "Type to filter resources. Press Escape to clear the filter.",
-                "Clear Resource Filter",
+                "Clear resource filter",
             )
             .with_width(px(
                 f32::from(design::size::SIDEBAR_MIN) - f32::from(design::space::SM) * 2.
@@ -2954,10 +2873,6 @@ impl Shell {
         let mut shell = Self {
             cluster_handle,
             terminal_services: None,
-            hotbar_machine,
-            hotbar_effects,
-            hotbar_load_error,
-            hotbar_open: true,
             settings_layout_saved: None,
             shell_weak,
             toast: None,
@@ -3014,15 +2929,7 @@ impl Shell {
             tree_filter: String::new(),
             tree_filter_input,
             tree_focus_handle: cx.focus_handle().tab_stop(true).tab_index(0),
-            // The Hotbar is the first sidebar focus stop.
-            hotbar_focus_handle: cx.focus_handle().tab_stop(true),
-            hotbar_bank_focus: cx.focus_handle().tab_stop(true).tab_index(0isize),
-            hotbar_bank_open: false,
             resource_menu_open: false,
-            hotbar_add_focus: cx.focus_handle().tab_stop(true).tab_index(0isize),
-            hotbar_hide_focus: cx.focus_handle().tab_stop(true).tab_index(0isize),
-            hotbar_slot_cursor: 0,
-            hotbar_scroll: ScrollHandle::new(),
             tree_scroll: ScrollHandle::new(),
             tabs_scroll: ScrollHandle::new(),
             pinned_tabs_scroll: ScrollHandle::new(),
@@ -3075,10 +2982,11 @@ impl Shell {
                     preview: None,
                 },
                 // `secondary-2` is SwitchTab(1), so the registry carries Deployments at index 1
-                // and the window opens on Pods at index 0. Overview is not a registry slot: it
-                // is opened on demand from the sidebar row, which is the only place a reader
-                // goes looking for it. A startup tab that nothing opens is a view somebody has
-                // to close before they can see the table they came for.
+                // and `secondary-1` opens the Pods table at index 0. Overview is not a registry
+                // slot: `land_on_the_starting_screen` opens it when there is nothing to read, and
+                // the sidebar row and the palette command open it on demand, which is the only
+                // place a reader goes looking for it. A startup slot that nothing opens is a view
+                // somebody has to close before they can see the table they came for.
                 CenterTab {
                     content: TabContent::Resource,
                     kind: SharedString::from("Deployment"),
@@ -3213,10 +3121,41 @@ impl Shell {
         };
         shell.sync_resource_inspector_route();
         shell.rebuild_commands();
+        shell.land_on_the_starting_screen(cx);
         if matches!(shell.namespace_state, NamespaceState::Loading) {
             shell.start_namespace_load(cx);
         }
         shell
+    }
+
+    /// The tab the window opens on.
+    ///
+    /// Production builds the shell before kubeconfigs are read (`k8s-app` starts
+    /// the shell on a session that is still loading and replaces it when the read
+    /// lands), so "no registry yet" is the ordinary first frame of every launch and
+    /// not a corner case. It is also the whole of a first run: no kubeconfig, an
+    /// unreadable one, or one whose contexts all failed to load.
+    ///
+    /// The Overview is the answer because it is the only tab that can give one — it
+    /// names the files that were read and carries the one control that fixes every
+    /// way of being here — and because a recovered session lands on the same tab
+    /// rather than leaving the reader somewhere the session never intended. It is
+    /// the same tab the sidebar's Overview row and the palette's overview command
+    /// open, by the same call, so the three cannot drift apart. The Pods registry
+    /// slot used to hold this place: `ensure_tab_view` skips index 0, so the window
+    /// opened on an empty table beside an empty tree and the explanation stayed one
+    /// click away and never shown. The slot stays, because `secondary-1` is a chord
+    /// and the Pods table is where it goes.
+    ///
+    /// The demo shell keeps the registry slot: it has a populated tree and no
+    /// arrival to explain, so there is nothing for the Overview to say.
+    fn land_on_the_starting_screen(&mut self, cx: &mut Context<Self>) -> bool {
+        let has_no_registry = self
+            .session
+            .as_ref()
+            .is_some_and(|session| session.registry().is_none());
+        has_no_registry
+            && self.open_special_tab(TabContent::Overview, "Overview", IconName::Monitor, cx)
     }
 
     /// The Settings window title names the visible pane, so two tabs stay tellable apart.
@@ -3235,7 +3174,7 @@ impl Shell {
 
     fn active_view_title(&self) -> SharedString {
         if self.open_tabs.is_empty() {
-            return SharedString::from("No Open View");
+            return SharedString::from("No open view");
         }
         self.tabs
             .get(self.active_tab)
@@ -3755,14 +3694,14 @@ impl Shell {
             .bg(design::role::surface_chrome(cx).alpha(1.0))
             .child(
                 // The filter field, the group head and the rows share one leading inset
-                // (`space::SM`), so the three bands the sidebar is made of start on the same
-                // edge. The field also owns the band's top padding: it used to have
+                // (`tree::SIDEBAR_INSET`), so the three bands the sidebar is made of start on the
+                // same edge. The field also owns the band's top padding: it used to have
                 // `pt(space::SM)` and no bottom padding, which left it flush against the group
                 // head's own rule — two adjacent bands with nothing between them.
                 h_flex()
                     .flex_none()
-                    .px(design::space::SM)
-                    .py(design::space::SM)
+                    .px(tree::SIDEBAR_INSET)
+                    .py(tree::SIDEBAR_INSET)
                     .child(self.tree_filter_input.clone()),
             )
             .when(empty, |this| {
@@ -3770,14 +3709,15 @@ impl Shell {
                     h_flex()
                         .id("tree-filter-empty")
                         .role(Role::Status)
-                        .px(design::space::MD)
-                        .py(design::space::SM)
+                        .px(tree::SIDEBAR_INSET)
+                        .py(design::space::MD)
                         .child(
                             Label::new(
                                 "No matching resources. Clear the filter to see all resources.",
                             )
                             .text_size(design::text::BODY)
-                            .text_color(design::colors(cx).text_muted),
+                            .line_height(design::text::BODY_LINE_HEIGHT)
+                            .text_color(design::role::fg_secondary(cx)),
                         ),
                 )
             })
@@ -4762,7 +4702,7 @@ impl Shell {
                 .as_ref()
                 .and_then(|resource| Self::selection_for_row(row, resource))
         });
-        self.set_resource_selection(source_tab, selection);
+        self.set_resource_selection(source_tab, selection.clone());
         if self.active_resource_tab != Some(source_tab) {
             return;
         }
@@ -4781,6 +4721,25 @@ impl Shell {
             }
         }
         if source_tab == self.active_tab {
+            // Choosing a row REVEALS the Inspector when it is closed.
+            //
+            // It used to only populate it, so a person who clicked a Pod got a
+            // highlight and nothing else: the panel they were about to read was
+            // filled in and invisible. The four things that opened it — the panel
+            // toggle, Describe, Events, and the YAML chord — are all things a
+            // first-time reader has no reason to know, and a click that appears
+            // to do nothing is this product's worst first impression. Every
+            // master-detail desktop app answers it the same way: choose a row,
+            // see the row.
+            //
+            // It OPENS rather than materialises, and once open it stays open — the
+            // reader closes it with the toggle they would use anywhere else, and
+            // no later selection change re-opens it against them. Clearing the
+            // selection never opens it either: an empty table has nothing to say
+            // and an empty panel beside it is the worse answer.
+            if selection.is_some() && !self.inspector_open {
+                self.inspector_open = true;
+            }
             self.sync_active_inspector_selection(cx);
         }
         cx.notify();
@@ -5011,20 +4970,18 @@ impl Shell {
 
     fn enter_settings_layout(&mut self) {
         if self.settings_layout_saved.is_none() {
-            self.settings_layout_saved = Some((self.sidebar_open, self.hotbar_open));
+            self.settings_layout_saved = Some(self.sidebar_open);
         }
         // Settings draws its own category column inside the content area, so the resource tree
         // stays on screen beside it. It used to be hidden here as well as by
         // `panel_visibility`, which left the sidebar and Inspector toggles disabled with a toast
         // as their only behaviour, and the only way back was closing the Settings tab.
-        self.hotbar_open = false;
         self.constrain_layout(self.viewport_width, self.viewport_height);
     }
 
     fn leave_settings_layout(&mut self) {
-        if let Some((sidebar_open, hotbar_open)) = self.settings_layout_saved.take() {
+        if let Some(sidebar_open) = self.settings_layout_saved.take() {
             self.sidebar_open = sidebar_open;
-            self.hotbar_open = hotbar_open;
             self.constrain_layout(self.viewport_width, self.viewport_height);
         }
     }
@@ -5155,10 +5112,6 @@ impl Shell {
             .map(|handle| Rc::new(handle) as Rc<dyn ObjectOps>)
     }
 
-    fn hotbar_visible_for_layout(&self, sidebar_visible: bool) -> bool {
-        !self.settings_active() && sidebar_visible && self.hotbar_open
-    }
-
     /// The three panel facts one frame's layout needs, so the row, the width arithmetic and
     /// the divider all answer the same question instead of three near-equal ones.
     fn panel_layout(&self, width: f32) -> (bool, InspectorLayout) {
@@ -5276,11 +5229,10 @@ impl Shell {
 
     fn constrain_layout(&mut self, viewport_width: f32, viewport_height: f32) {
         let (sidebar_visible, inspector) = self.panel_layout(viewport_width);
-        let (left_width, right_width) = constrained_panel_widths_with_hotbar(
+        let (left_width, right_width) = constrained_panel_widths(
             viewport_width,
             sidebar_visible,
             inspector.takes_width(),
-            self.hotbar_visible_for_layout(sidebar_visible),
             self.left_width,
             self.right_width_chosen,
         );
@@ -5343,7 +5295,6 @@ impl Shell {
         match self.dialog {
             Some(
                 Dialog::ConfirmDelete { .. }
-                | Dialog::HotbarRemove { .. }
                 | Dialog::ConfirmTabClose { .. }
                 | Dialog::HelmConfirm { input: None, .. },
             ) => 2,
@@ -5352,7 +5303,6 @@ impl Shell {
             Some(
                 Dialog::Exec { .. }
                 | Dialog::Scale { .. }
-                | Dialog::HotbarBankName { .. }
                 | Dialog::HelmConfirm { input: Some(_), .. },
             ) => 3,
             None => 0,
@@ -5517,32 +5467,22 @@ impl Shell {
             return;
         }
         if self.active_cluster >= self.clusters.len() {
-            if let Some(result) = self
+            if let Some(next) = self
                 .session
                 .as_ref()
-                .map(ClusterSession::reload_hotbar_session)
+                .map(ClusterSession::reload_session)
+                .and_then(Result::ok)
             {
-                match result {
-                    Ok(next) => {
-                        if let Some(name) = next.cluster_name()
-                            && let Some(index) = self
-                                .clusters
-                                .iter()
-                                .position(|cluster| cluster.as_ref() == name)
-                        {
-                            self.active_cluster = index;
-                        }
-                        self.apply_session(next, cx);
-                        return;
-                    }
-                    Err(reason) => self.notify(
-                        "The Hotbar failed to load. Check the Hotbar file, then try again."
-                            .to_owned(),
-                        design::Severity::Warning,
-                        Some(reason),
-                        cx,
-                    ),
+                if let Some(name) = next.cluster_name()
+                    && let Some(index) = self
+                        .clusters
+                        .iter()
+                        .position(|cluster| cluster.as_ref() == name)
+                {
+                    self.active_cluster = index;
                 }
+                self.apply_session(next, cx);
+                return;
             }
         } else if let Some(next) = self.session.as_ref().and_then(|session| {
             self.clusters
@@ -5610,6 +5550,9 @@ impl Shell {
             return false;
         };
         self.active_cluster = index;
+        if let Some(cluster) = next.cluster_id() {
+            crate::settings::remember_cluster(cx, cluster);
+        }
         self.apply_session(next, cx)
     }
 
@@ -5634,10 +5577,6 @@ impl Shell {
     fn is_stable_shell_focus(&self, handle: &FocusHandle, cx: &App) -> bool {
         *handle == self.focus_handle
             || *handle == self.tree_focus_handle
-            || *handle == self.hotbar_focus_handle
-            || *handle == self.hotbar_bank_focus
-            || *handle == self.hotbar_add_focus
-            || *handle == self.hotbar_hide_focus
             || *handle == self.center_tabs_focus
             || *handle == self.top_bar_focus
             || *handle == self.top_bar_cluster_focus
@@ -5843,7 +5782,7 @@ impl Shell {
         let name = session
             .cluster_name()
             .map(SharedString::from)
-            .unwrap_or_else(|| SharedString::from("No Context"));
+            .unwrap_or_else(|| SharedString::from("No context"));
         self.namespace = session
             .cluster_id()
             .and_then(|id| self.namespace_by_cluster.get(&id).cloned())
@@ -5894,12 +5833,6 @@ impl Shell {
         if matches!(self.namespace_state, NamespaceState::Loading) {
             self.start_namespace_load(cx);
         }
-        let (hotbar, hotbar_error) = session
-            .registry()
-            .map(|registry| ClusterSession::load_hotbar(registry))
-            .unwrap_or((Hotbar::default(), None));
-        self.hotbar_load_error = hotbar_error.map(|error| error.to_string());
-        self.dispatch_hotbar(HotbarEvent::Load(hotbar), cx);
         self.search.update(cx, |search, cx| {
             search.set_executor(SearchExecutor::from_session(&session), cx);
         });
@@ -5953,6 +5886,16 @@ impl Shell {
         self.dock_panel.update(cx, |panel, cx| {
             panel.set_log_factory(factory, cx);
         });
+        // Losing the cluster outright leaves the Dock's own context-keyed close with
+        // nothing to key on, because there is no new context to differ from the old
+        // one. `close_cluster_sessions` is the shell's seam for that arrival: the
+        // shells, tunnels and log streams of a cluster the app can no longer reach
+        // are stopped where the session went away rather than living until a later
+        // switch happens to notice.
+        if session.cluster_id().is_none() {
+            self.dock_panel
+                .update(cx, |panel, cx| panel.close_cluster_sessions(cx));
+        }
 
         self.start_health_probe(cx);
         self.start_catalog_load(cx);
@@ -6717,7 +6660,6 @@ impl Shell {
             Some(
                 Dialog::Scale { input, .. }
                 | Dialog::PortForward { input, .. }
-                | Dialog::HotbarBankName { input, .. }
                 | Dialog::HelmConfirm {
                     input: Some(input), ..
                 },
@@ -6838,10 +6780,6 @@ impl Shell {
         let invalid = match &self.dialog {
             Some(Dialog::Scale { .. }) => parse_replicas(&text).err().map(str::to_owned),
             Some(Dialog::PortForward { .. }) => parse_port(&text).err().map(str::to_owned),
-            Some(Dialog::HotbarBankName { .. }) => text
-                .trim()
-                .is_empty()
-                .then(|| "Enter a bank name.".to_owned()),
             Some(Dialog::HelmConfirm { input: Some(_), .. }) => {
                 parse_chart_reference(&text).err().map(str::to_owned)
             }
@@ -6850,8 +6788,7 @@ impl Shell {
         input.update(cx, |input, cx| input.set_invalid(invalid.is_some(), cx));
         match &mut self.dialog {
             Some(Dialog::Scale { error, .. }) => *error = parse_replicas(&text).err(),
-            Some(Dialog::PortForward { error, .. })
-            | Some(Dialog::HotbarBankName { error, .. }) => *error = invalid,
+            Some(Dialog::PortForward { error, .. }) => *error = invalid,
             Some(Dialog::HelmConfirm {
                 action: HelmAction::Upgrade { chart, .. },
                 error,
@@ -7070,301 +7007,14 @@ impl Shell {
         self.invoke_update_action(UpdateActionKind::Restart, cx);
     }
 
-    // Hotbar actions
-
-    fn hotbar(&self) -> Option<&Hotbar> {
-        self.hotbar_machine.state().hotbar()
-    }
-
-    /// Dispatch a Hotbar event and process its effects.
-    fn dispatch_hotbar(&mut self, event: HotbarEvent, cx: &mut Context<Self>) {
-        self.hotbar_machine.handle(&event);
-        while let Ok(effect) = self.hotbar_effects.try_recv() {
-            self.run_hotbar_effect(effect, cx);
-        }
-    }
-
-    fn run_hotbar_effect(&mut self, effect: HotbarEffect, cx: &mut Context<Self>) {
-        match effect {
-            HotbarEffect::Persist => {
-                let saved = self.hotbar().map(Hotbar::save_default).unwrap_or(Ok(()));
-                if let Err(error) = saved {
-                    self.notify(
-                        "The app did not save the Hotbar. Check the file permissions, then try again."
-                            .to_owned(),
-                        design::Severity::Error,
-                        Some(error.to_string()),
-                        cx,
-                    );
-                    return;
-                }
-            }
-            HotbarEffect::Notify {
-                reason: Some(reason),
-            } => {
-                self.toast(reason, design::Severity::Warning, cx);
-            }
-            HotbarEffect::Notify { reason: None } => {}
-        }
-        cx.notify();
-    }
-
-    fn toggle_hotbar(&mut self, _: &ToggleHotbar, _window: &mut Window, cx: &mut Context<Self>) {
-        if self.settings_active() {
-            self.toast(
-                "The resource Hotbar is unavailable while Settings is open. Close Settings to use it.".to_owned(),
-                design::Severity::Info,
-                cx,
-            );
-            return;
-        }
-        self.hotbar_open = !self.hotbar_open;
-        let width = self.viewport_width;
-        let height = self.viewport_height;
-        self.constrain_layout(width, height);
-        cx.notify();
-    }
-
-    /// Switch to the cluster stored in a Hotbar slot.
-    fn switch_hotbar_cluster(&mut self, cluster_id: ClusterId, cx: &mut Context<Self>) -> bool {
-        let Some(session) = self.session.clone() else {
-            return false;
-        };
-        let Some(registry) = session.registry() else {
-            return false;
-        };
-        let Some(cluster) = registry
-            .clusters()
-            .iter()
-            .find(|cluster| cluster.id() == cluster_id)
-        else {
-            self.toast(
-                "That context is no longer in your kubeconfig. Reload kubeconfigs and try again."
-                    .to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return false;
-        };
-        let Some(index) = self
-            .clusters
-            .iter()
-            .position(|name| name.as_ref() == cluster.name())
-        else {
-            self.toast(
-                "That context is no longer in your kubeconfig. Reload kubeconfigs and try again."
-                    .to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return false;
-        };
-        self.switch_cluster(index, cx)
-    }
-
-    /// Switch clusters from a Hotbar slot action.
-    fn on_hotbar_switch_cluster(
+    /// Switch clusters from a keystroke that names the context's place in the switcher.
+    fn on_switch_cluster(
         &mut self,
         action: &SwitchCluster,
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        self.switch_hotbar_slot(action.slot, cx);
-    }
-
-    /// Switch banks from a Hotbar bank action.
-    fn on_hotbar_switch_bank(
-        &mut self,
-        action: &SwitchBank,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.switch_hotbar_bank(action.index, cx);
-    }
-
-    fn switch_hotbar_slot(&mut self, slot: usize, cx: &mut Context<Self>) {
-        let Some((bank_index, cluster_id)) = self.hotbar().and_then(|hotbar| {
-            let bank = hotbar.active_bank()?;
-            let entry = bank.slots.get(slot)?;
-            Some((hotbar.active, entry.cluster_id))
-        }) else {
-            return;
-        };
-        self.hotbar_slot_cursor = slot.min(k8s_core::hotbar::MAX_SLOTS_PER_BANK - 1);
-
-        if self.switch_hotbar_cluster(cluster_id, cx) {
-            self.dispatch_hotbar(
-                HotbarEvent::SwitchSlot {
-                    bank: bank_index,
-                    slot,
-                },
-                cx,
-            );
-            self.run_hotbar_effect(HotbarEffect::Persist, cx);
-        }
-    }
-
-    fn switch_hotbar_bank(&mut self, index: usize, cx: &mut Context<Self>) {
-        self.dispatch_hotbar(HotbarEvent::SwitchBank { index }, cx);
-        let count = self
-            .hotbar()
-            .and_then(Hotbar::active_bank)
-            .map_or(0, |bank| bank.slots.len());
-        self.hotbar_slot_cursor = self.hotbar_slot_cursor.min(count.saturating_sub(1));
-    }
-
-    /// Add the current cluster to the active bank.
-    fn add_current_cluster_to_hotbar(&mut self, cx: &mut Context<Self>) {
-        let Some(session) = self.session.clone() else {
-            self.toast(
-                "Select a context to use the Hotbar.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return;
-        };
-        let (Some(cluster_id), Some(name)) = (
-            session.cluster_id(),
-            session.cluster_name().map(str::to_owned),
-        ) else {
-            self.toast(
-                "Select a context to use the Hotbar.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return;
-        };
-        if self.hotbar().is_none() {
-            self.dispatch_hotbar(
-                HotbarEvent::CreateBank {
-                    name: "default".to_owned(),
-                },
-                cx,
-            );
-        }
-        self.dispatch_hotbar(
-            HotbarEvent::AddSlot {
-                bank: self.hotbar().map_or(0, |hotbar| hotbar.active),
-                slot: k8s_core::hotbar::Slot::new(cluster_id, name),
-            },
-            cx,
-        );
-    }
-
-    /// Open the bank name input.
-    fn open_hotbar_bank_dialog(
-        &mut self,
-        index: Option<usize>,
-        initial: String,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        let epoch = self.dialog_input_epoch.wrapping_add(1);
-        self.dialog_input_epoch = epoch;
-        let input = self.new_dialog_input(
-            DialogInputKind::BankName,
-            initial,
-            epoch,
-            dialog_width(f32::from(window.viewport_size().width)),
-            cx,
-        );
-        self.dialog = Some(Dialog::HotbarBankName {
-            index,
-            input,
-            error: None,
-        });
-        self.open_dialog_focus(window, cx);
-    }
-
-    /// Create or rename a Hotbar bank.
-    fn confirm_hotbar_bank_name(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Dialog::HotbarBankName { index, input, .. }) = self.dialog.as_ref() else {
-            return;
-        };
-        let text = input.read(cx).text().trim().to_owned();
-        if text.is_empty() {
-            if let Some(Dialog::HotbarBankName { error, .. }) = self.dialog.as_mut() {
-                *error = Some("Enter a bank name.".to_owned());
-            }
-            if let Some(input) = self.dialog_input() {
-                input.update(cx, |input, cx| input.set_invalid(true, cx));
-            }
-            cx.notify();
-            return;
-        }
-        let index = *index;
-        self.dialog = None;
-        self.close_dialog_focus(window, cx);
-        match index {
-            None => {
-                self.dispatch_hotbar(HotbarEvent::CreateBank { name: text }, cx);
-            }
-            Some(index) => {
-                self.dispatch_hotbar(HotbarEvent::RenameBank { index, name: text }, cx);
-            }
-        }
-    }
-
-    /// Open the bank removal confirmation.
-    fn open_hotbar_remove_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(hotbar) = self.hotbar() else {
-            self.toast(
-                "No Hotbar banks exist. Create one from the Command Palette.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return;
-        };
-        let Some(bank) = hotbar.active_bank() else {
-            return;
-        };
-        self.dialog = Some(Dialog::HotbarRemove {
-            index: hotbar.active,
-            name: bank.name.clone().into(),
-        });
-        self.open_dialog_focus(window, cx);
-    }
-
-    fn confirm_hotbar_remove(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some(Dialog::HotbarRemove { index, .. }) = self.dialog.take() else {
-            return;
-        };
-        self.close_dialog_focus(window, cx);
-        self.dispatch_hotbar(HotbarEvent::RemoveBank { index }, cx);
-    }
-
-    fn command_hotbar_add_cluster(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
-        self.add_current_cluster_to_hotbar(cx);
-    }
-
-    fn command_hotbar_create_bank(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let next = self.hotbar().map_or(1, |hotbar| hotbar.banks.len() + 1);
-        self.open_hotbar_bank_dialog(None, format!("Bank {next}"), window, cx);
-    }
-
-    fn command_hotbar_rename_bank(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let Some((index, name)) = self.hotbar().map(|hotbar| {
-            (
-                hotbar.active,
-                hotbar
-                    .active_bank()
-                    .map(|bank| bank.name.clone())
-                    .unwrap_or_default(),
-            )
-        }) else {
-            self.toast(
-                "No Hotbar banks exist. Create one from the Command Palette.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
-            return;
-        };
-        self.open_hotbar_bank_dialog(Some(index), name, window, cx);
-    }
-
-    /// Remove the active Hotbar bank after confirmation.
-    fn command_hotbar_remove_bank(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        self.open_hotbar_remove_dialog(window, cx);
+        self.switch_cluster(action.index, cx);
     }
 
     /// Open a shell in the selected Pod container.
@@ -7668,7 +7318,6 @@ impl Shell {
     /// Run the primary action for the current dialog.
     fn confirm_dialog(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         match &self.dialog {
-            Some(Dialog::HotbarRemove { .. }) => self.confirm_hotbar_remove(window, cx),
             Some(Dialog::ConfirmTabClose { request }) => {
                 let request = *request;
                 self.dialog = None;
@@ -7801,7 +7450,6 @@ impl Shell {
             Some(
                 Dialog::PortForward { .. }
                     | Dialog::Scale { .. }
-                    | Dialog::HotbarBankName { .. }
                     | Dialog::HelmConfirm { input: Some(_), .. }
             )
         ) {
@@ -7822,9 +7470,6 @@ impl Shell {
                     match &self.dialog {
                         Some(Dialog::PortForward { .. }) => self.confirm_port_forward(window, cx),
                         Some(Dialog::Scale { .. }) => self.confirm_scale(window, cx),
-                        Some(Dialog::HotbarBankName { .. }) => {
-                            self.confirm_hotbar_bank_name(window, cx)
-                        }
                         Some(Dialog::HelmConfirm { .. }) => self.confirm_helm(window, cx),
                         _ => {}
                     }
@@ -8121,6 +7766,38 @@ impl Shell {
         source.update(cx, |panel, cx| panel.apply(cx));
     }
 
+    /// Decides whether a one-object action may act on what the table has selected.
+    ///
+    /// The table takes a range with Shift and a set with Ctrl, while the Inspector, the Dock and
+    /// every object action read a single row. Acting on the anchor of a five-row selection
+    /// restarts one Pod and leaves the reader believing it acted on five, so a multi-row
+    /// selection stops the action here, before the view runs it. Delete and Scale state their
+    /// own multi-row answers; the four that call this had none.
+    fn one_object_row(
+        &mut self,
+        view: &Entity<PodsView>,
+        action: &str,
+        missing: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let count = view.read(cx).selection_count();
+        if count > 1 {
+            self.toast(
+                format!(
+                    "{action} acts on one object, so the {count} selected rows were left alone. Select a single row, then choose {action}."
+                ),
+                design::Severity::Warning,
+                cx,
+            );
+            return false;
+        }
+        if count == 0 {
+            self.toast(missing.to_owned(), design::Severity::Warning, cx);
+            return false;
+        }
+        true
+    }
+
     /// Show logs for the selected Pod.
     fn command_show_logs(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let Some(view) = self.active_resource_view() else {
@@ -8131,6 +7808,9 @@ impl Shell {
             );
             return;
         };
+        if !self.one_object_row(&view, "Show logs", "Select a Pod to stream its logs.", cx) {
+            return;
+        }
         let Some(request) = view.read(cx).log_request(cx) else {
             self.toast(
                 "Select a Pod to stream its logs.".to_owned(),
@@ -8192,12 +7872,7 @@ impl Shell {
             );
             return;
         };
-        if view.read(cx).selection_ref(cx).is_none() {
-            self.toast(
-                "Select a pod to open a shell.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
+        if !self.one_object_row(&view, "Exec", "Select a pod to open a shell.", cx) {
             return;
         }
         view.update(cx, |view, cx| view.request_exec(window, cx));
@@ -8228,12 +7903,12 @@ impl Shell {
             );
             return;
         };
-        if view.read(cx).selection_ref(cx).is_none() {
-            self.toast(
-                "Select a Pod before you start a port forward.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
+        if !self.one_object_row(
+            &view,
+            "Start port forward",
+            "Select a Pod before you start a port forward.",
+            cx,
+        ) {
             return;
         }
         view.update(cx, |view, cx| view.request_port_forward(window, cx));
@@ -8248,12 +7923,7 @@ impl Shell {
             );
             return;
         };
-        if view.read(cx).selection_ref(cx).is_none() {
-            self.toast(
-                "Select a workload row to restart it.".to_owned(),
-                design::Severity::Warning,
-                cx,
-            );
+        if !self.one_object_row(&view, "Restart", "Select a workload row to restart it.", cx) {
             return;
         }
         view.update(cx, |view, cx| view.request_restart(cx));
@@ -8989,7 +8659,7 @@ impl Shell {
     fn command_open_forwards(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         if self.open_special_tab(
             TabContent::Forwards,
-            "Port Forwards",
+            "Port forwards",
             IconName::ArrowRightLeft,
             cx,
         ) {
@@ -9364,7 +9034,7 @@ impl Shell {
                 "context.status",
                 "loading",
                 "Context",
-                "Contexts Are Loading".to_owned(),
+                "Contexts are loading…".to_owned(),
                 "Loading",
                 "Wait for kubeconfig contexts to finish loading.",
                 IconName::Server,
@@ -9373,7 +9043,7 @@ impl Shell {
                 "context.status",
                 "failed",
                 "Context",
-                "Contexts Unavailable".to_owned(),
+                "Contexts unavailable".to_owned(),
                 "Unavailable",
                 "Fix the kubeconfig files, then refresh kubeconfigs.",
                 IconName::Server,
@@ -9383,7 +9053,7 @@ impl Shell {
                     "context.status",
                     "empty",
                     "Context",
-                    "No Contexts Available".to_owned(),
+                    "No contexts available".to_owned(),
                     "Empty",
                     "Add a context to your kubeconfig and refresh.",
                     IconName::Server,
@@ -9394,7 +9064,7 @@ impl Shell {
                     "context.status",
                     "empty",
                     "Context",
-                    "No Active Context".to_owned(),
+                    "No active context".to_owned(),
                     "Empty",
                     "Choose a context from this list to switch to it.",
                     IconName::Server,
@@ -9454,7 +9124,7 @@ impl Shell {
                 "namespace.status",
                 "loading",
                 "Namespace",
-                "Namespaces Are Loading".to_owned(),
+                "Namespaces are loading…".to_owned(),
                 "Loading",
                 "Wait for the namespace list to finish loading.",
                 IconName::Folder,
@@ -9463,7 +9133,7 @@ impl Shell {
                 "namespace.status",
                 "failed",
                 "Namespace",
-                "Namespace List Unavailable".to_owned(),
+                "Namespace list unavailable".to_owned(),
                 "Unavailable",
                 "Refresh the namespace list, then try again.",
                 IconName::Folder,
@@ -9473,7 +9143,7 @@ impl Shell {
                     "namespace.status",
                     "empty",
                     "Namespace",
-                    "No Namespaces Found".to_owned(),
+                    "No namespaces found".to_owned(),
                     "Empty",
                     "All namespaces remains available. Add namespaces to narrow the scope.",
                     IconName::Folder,
@@ -9513,7 +9183,7 @@ impl Shell {
             commands.push(Self::current_palette_command(
                 "kind.open",
                 &identity_key,
-                "Resource Kinds",
+                "Resource kinds",
                 labels
                     .get(kind.as_str())
                     .map_or_else(|| kind.to_string(), |label| (*label).to_owned()),
@@ -9524,8 +9194,8 @@ impl Shell {
             commands.push(Self::palette_status_command(
                 "kind.status",
                 "empty",
-                "Resource Kinds",
-                "No Active Context".to_owned(),
+                "Resource kinds",
+                "No active context".to_owned(),
                 "Empty",
                 "Select a context before opening a resource kind.",
                 IconName::ListTree,
@@ -9563,7 +9233,7 @@ impl Shell {
             commands.push(Command {
                 id: stable_command_id("kind.open", &identity_key),
                 label: row.label,
-                group: SharedString::from("Resource Kinds"),
+                group: SharedString::from("Resource kinds"),
                 icon: design::kind_icon(kind.as_ref()),
                 run: CommandRun::ShellFn(Rc::new(move |shell, window, cx| {
                     shell.switch_kind_by_name(&target, handler_identity.as_ref(), window, cx);
@@ -9575,8 +9245,8 @@ impl Shell {
             CatalogState::Loading => commands.push(Self::palette_status_command(
                 "kind.status",
                 "loading",
-                "Resource Kinds",
-                "Resource Kinds Are Loading".to_owned(),
+                "Resource kinds",
+                "Resource kinds are loading…".to_owned(),
                 "Loading",
                 "Wait for the resource catalog to finish loading.",
                 IconName::ListTree,
@@ -9584,8 +9254,8 @@ impl Shell {
             CatalogState::Failed(_) => commands.push(Self::palette_status_command(
                 "kind.status",
                 "failed",
-                "Resource Kinds",
-                "Resource Kinds Unavailable".to_owned(),
+                "Resource kinds",
+                "Resource kinds unavailable".to_owned(),
                 "Unavailable",
                 "Refresh resources, then try again.",
                 IconName::ListTree,
@@ -9593,8 +9263,8 @@ impl Shell {
             CatalogState::Ready if kind_rows == 0 => commands.push(Self::palette_status_command(
                 "kind.status",
                 "empty",
-                "Resource Kinds",
-                "No Resource Kinds Found".to_owned(),
+                "Resource kinds",
+                "No resource kinds found".to_owned(),
                 "Empty",
                 "Refresh resources after installing a resource API.",
                 IconName::ListTree,
@@ -9964,7 +9634,8 @@ impl Shell {
         self.on_catalog_loaded(result, cx);
     }
 
-    fn bind_catalog_to_tabs(&mut self, catalog: &ResourceCatalog) {
+    fn bind_catalog_to_tabs(&mut self, catalog: &ResourceCatalog, cx: &mut Context<Self>) {
+        let mut dropped_active = false;
         for index in 0..self.tabs.len() {
             if self.tabs[index].content != TabContent::Resource {
                 continue;
@@ -9979,7 +9650,16 @@ impl Shell {
             self.tabs[index].resource = entry.as_ref().map(ResourceEntry::to_api_resource);
             if changed && index != 0 {
                 self.views[index] = None;
+                // The Inspector's copy of this tab's row dies with the table it came from. A
+                // dropped table cannot select that row again, and a copy that outlives it leaves
+                // the Inspector naming an object no table has selected — the state where Apply
+                // reaches a Pod the reader cannot see.
+                self.resource_selections.remove(&index);
+                dropped_active |= index == self.active_tab;
             }
+        }
+        if dropped_active {
+            self.sync_active_inspector_selection(cx);
         }
     }
 
@@ -10015,7 +9695,7 @@ impl Shell {
                     self.collapsed_for_new_catalog(&cluster)
                 };
                 self.collapsed = collapsed;
-                self.bind_catalog_to_tabs(&catalog);
+                self.bind_catalog_to_tabs(&catalog, cx);
                 self.search
                     .update(cx, |search, cx| search.set_catalog(&catalog, cx));
                 self.catalog_state = CatalogState::Ready;
@@ -10157,7 +9837,7 @@ impl Shell {
             .unwrap_or_else(|| SharedString::from("cluster"));
         self.tree = ResourceTree::from_catalog(&catalog, &cluster);
         // Name-based collapse IDs remain valid after the tree rebuilds.
-        self.bind_catalog_to_tabs(&catalog);
+        self.bind_catalog_to_tabs(&catalog, cx);
         self.search
             .update(cx, |search, cx| search.set_catalog(&catalog, cx));
         self.catalog_state = CatalogState::Ready;
@@ -10636,13 +10316,10 @@ impl Shell {
     }
 
     fn panel_geometry(&self, viewport_width: f32, viewport_height: f32) -> PanelGeometry {
-        let (sidebar_visible, _) = self.panel_visibility(viewport_width);
-        let hotbar_visible = self.hotbar_visible_for_layout(sidebar_visible);
         PanelGeometry::new(
             viewport_width,
             viewport_height,
             status_bar_height(),
-            if hotbar_visible { hotbar_width() } else { 0.0 },
             self.left_width,
             self.right_width,
             self.dock_height,
@@ -10666,7 +10343,6 @@ impl Shell {
         self.viewport_width = f32::from(viewport.width);
         self.viewport_height = f32::from(viewport.height);
         let (sidebar_visible, inspector_visible) = self.panel_visibility(self.viewport_width);
-        let hotbar_visible = self.hotbar_visible_for_layout(sidebar_visible);
         let geometry = self.panel_geometry(self.viewport_width, self.viewport_height);
         let panel_size = geometry.dragged_panel_size(
             drag.target,
@@ -10677,23 +10353,13 @@ impl Shell {
             DragTarget::Left => {
                 self.left_width = panel_size.clamp(
                     left_width_min(),
-                    left_width_max_with_hotbar(
-                        self.viewport_width,
-                        self.right_width,
-                        inspector_visible,
-                        hotbar_visible,
-                    ),
+                    left_width_max(self.viewport_width, self.right_width, inspector_visible),
                 );
             }
             DragTarget::Right => {
                 self.right_width_chosen = panel_size.clamp(
                     right_width_min(),
-                    right_width_max_with_hotbar(
-                        self.viewport_width,
-                        self.left_width,
-                        sidebar_visible,
-                        hotbar_visible,
-                    ),
+                    right_width_max(self.viewport_width, self.left_width, sidebar_visible),
                 );
             }
             DragTarget::Dock => {
@@ -10731,12 +10397,9 @@ impl Shell {
         let width = self.viewport_width;
         let height = self.viewport_height;
         let (sidebar_visible, inspector_visible) = self.panel_visibility(width);
-        let hotbar_visible = self.hotbar_visible_for_layout(sidebar_visible);
-        let left_max =
-            left_width_max_with_hotbar(width, self.right_width, inspector_visible, hotbar_visible);
-        let right_max =
-            right_width_max_with_hotbar(width, self.left_width, sidebar_visible, hotbar_visible)
-                .min(inspector_width_ceiling(width).unwrap_or(right_width_limit()));
+        let left_max = left_width_max(width, self.right_width, inspector_visible);
+        let right_max = right_width_max(width, self.left_width, sidebar_visible)
+            .min(inspector_width_ceiling(width).unwrap_or(right_width_limit()));
         let update_strip_visible =
             self.update_state.shows_strip() && self.update_state.phase != UpdatePhase::Unsupported;
         let dock_max = dock_height_max_with_strips(
@@ -10814,7 +10477,7 @@ impl Shell {
         let hint = shell_label(design::text::CAPTION, EMPTY_VIEW_HINT)
             .text_color(design::colors(cx).text_muted);
         let palette_chord = keymap::binding_for_context(PALETTE_ACTION, PALETTE_CONTEXT, cx);
-        let palette_tooltip = empty_state_tooltip("Open the Command Palette", palette_chord);
+        let palette_tooltip = empty_state_tooltip("Open the command palette", palette_chord);
         // Both actions run the same path as the keymap, so the button and its chord agree.
         let palette_action = div()
             .id("center-empty-palette-control")
@@ -10822,7 +10485,8 @@ impl Shell {
             .tooltip(palette_tooltip)
             .child(
                 Button::new("center-empty-palette")
-                    .label("Command Palette")
+                    .label("Command palette")
+                    .accessibility_label("Open the command palette")
                     .primary()
                     .with_size(Size::Medium)
                     .tab_index(0isize)
@@ -10836,6 +10500,7 @@ impl Shell {
             .child(
                 Button::new("center-empty-pods")
                     .label("Show Pods")
+                    .accessibility_label("Show the Pods view")
                     .ghost()
                     .with_size(Size::Medium)
                     .tab_index(1isize)
@@ -10853,7 +10518,13 @@ impl Shell {
                     .media(
                         EmptyMedia::new()
                             .with_variant(EmptyMediaVariant::Icon)
-                            .child(Icon::new(IconName::BookOpen)),
+                            // `EmptyMedia` puts the lead mark in `theme().foreground`, which is
+                            // the ink of the view the reader is already in; the resting glyph ink
+                            // leads without claiming that rank. The tile's own size is the
+                            // component's and stays there.
+                            .child(
+                                Icon::new(IconName::BookOpen).text_color(design::icon::resting(cx)),
+                            ),
                     )
                     .title(EmptyTitle::new().child(title))
                     .description(EmptyDescription::new().child(hint)),
@@ -10926,9 +10597,9 @@ impl Shell {
         // Hover is a paint-time state, so the rail width is a group style on the line.
         let hover = DividerPaint::Hover;
         let (label, value) = match target {
-            DragTarget::Left => ("Resize Sidebar", self.left_width),
-            DragTarget::Right => ("Resize Inspector", self.right_width),
-            DragTarget::Dock => ("Resize Dock", self.dock_height),
+            DragTarget::Left => ("Resize sidebar", self.left_width),
+            DragTarget::Right => ("Resize inspector", self.right_width),
+            DragTarget::Dock => ("Resize dock", self.dock_height),
         };
         div()
             .id(id)
@@ -11009,15 +10680,6 @@ impl Render for Shell {
                 && let Some(message) = status.toast_message()
             {
                 self.toast(message, status.toast_severity(), cx);
-            }
-            // Report a Hotbar load failure after startup.
-            if let Some(reason) = self.hotbar_load_error.take() {
-                self.notify(
-                    "The Hotbar failed to load. Check the Hotbar file, then try again.".to_owned(),
-                    design::Severity::Warning,
-                    Some(reason),
-                    cx,
-                );
             }
             if window.focused(cx).is_none() {
                 window.focus(&self.focus_handle, cx);
@@ -11206,7 +10868,7 @@ impl Render for Shell {
         let cluster = self
             .clusters
             .get(self.active_cluster)
-            .map_or("No Context", |name| name.as_ref());
+            .map_or("No context", |name| name.as_ref());
         let title = format!("{} — {cluster}", self.active_view_title());
         if title != self.window_title {
             window.set_window_title(&title);
@@ -11285,12 +10947,10 @@ impl Render for Shell {
             .on_action(cx.listener(Self::pause_updates))
             .on_action(cx.listener(Self::resume_updates))
             .on_action(cx.listener(Self::copy_selected_pod_name))
-            .on_action(cx.listener(Self::toggle_hotbar))
             .on_action(cx.listener(Self::refresh_view))
             .on_action(cx.listener(Self::check_for_updates))
             .on_action(cx.listener(Self::restart_to_update))
-            .on_action(cx.listener(Self::on_hotbar_switch_cluster))
-            .on_action(cx.listener(Self::on_hotbar_switch_bank))
+            .on_action(cx.listener(Self::on_switch_cluster))
             .on_action(cx.listener(Self::search_resources))
             .on_action(cx.listener(Self::reload_kubeconfigs))
             .on_mouse_move(cx.listener(Self::on_root_mouse_move))
@@ -11320,10 +10980,7 @@ impl Render for Shell {
                     // over the title bar or under the status bar to become an overlay.
                     .relative()
                     .when(sidebar_visible, |this| {
-                        this.when(self.hotbar_open, |this| {
-                            this.child(self.render_hotbar_rail(window, cx))
-                        })
-                        .child(self.render_tree_with_filter(window, cx))
+                        this.child(self.render_tree_with_filter(window, cx))
                         .child(self.render_divider(
                             DragTarget::Left,
                             CursorStyle::ResizeLeftRight,
@@ -11837,7 +11494,7 @@ mod empty_center_tests {
         assert!(shell.read_with(cx, |shell, _| shell.open_tabs.is_empty()));
         assert_eq!(
             shell.read_with(cx, |shell, _| shell.active_view_title().to_string()),
-            "No Open View"
+            "No open view"
         );
         assert!(shell.read_with(cx, |shell, _| {
             !shell
@@ -11902,13 +11559,15 @@ mod dialog_focus_tests {
 
     use super::*;
 
-    /// Open the two-button alert whose trailing button removes a Hotbar bank for good.
-    fn open_remove_bank(cx: &mut gpui_kit::VisualTestContext, shell: &gpui_kit::Entity<Shell>) {
+    /// Open a two-button alert whose trailing button does something for good.
+    fn open_destructive_alert(
+        cx: &mut gpui_kit::VisualTestContext,
+        shell: &gpui_kit::Entity<Shell>,
+    ) {
         cx.update(|window, cx| {
             shell.update(cx, |shell, cx| {
-                shell.dialog = Some(Dialog::HotbarRemove {
-                    index: 0,
-                    name: "work".into(),
+                shell.dialog = Some(Dialog::ConfirmTabClose {
+                    request: TabCloseRequest::All,
                 });
                 shell.open_dialog_focus(window, cx);
             });
@@ -11930,7 +11589,7 @@ mod dialog_focus_tests {
         init_app(cx);
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
         cx.simulate_resize(gpui_kit::size(px(1440.), px(800.)));
-        open_remove_bank(cx, &shell);
+        open_destructive_alert(cx, &shell);
 
         assert_eq!(focus_index(cx, &shell), 0, "Cancel is the default");
         let cancel = shell.read_with(cx, |shell, _| shell.dialog_button_focus(0));
@@ -12102,7 +11761,6 @@ mod dock_focus_tests {
 mod command_row_copy_tests {
     use super::*;
     use gpui_kit::TestAppContext;
-    use k8s_core::hotbar::{Bank, Slot};
 
     fn labels(commands: &[Command]) -> Vec<String> {
         commands
@@ -12194,12 +11852,12 @@ mod command_row_copy_tests {
     /// pickers have to say it the same way.
     /// `modality.md > Best practices` asks a modal view for a title that names its
     /// task, and a title that also carries a breadcrumb can only truncate.
-    /// A Hotbar slot is a convenience, so a slot that names a cluster the registry
+    /// A remembered context is a preference, so one that names a cluster the registry
     /// has lost loses its own claim instead of every context.
-    /// The same rule at the seam the app starts through: a stale slot leaves the
+    /// The same rule at the seam the app starts through: a stale one leaves the
     /// registry's own current context as the cluster the session opens.
     #[gpui_kit::test]
-    fn a_stale_hotbar_slot_leaves_the_current_context_loading(cx: &mut TestAppContext) {
+    fn a_stale_remembered_context_leaves_the_current_context_loading(cx: &mut TestAppContext) {
         init_app(cx);
         cx.dispatcher.allow_parking();
         // The registry load is plain async with no view behind it, so the test owns its own
@@ -12209,8 +11867,7 @@ mod command_row_copy_tests {
             .build()
             .expect("tokio runtime");
         let handle = runtime.handle().clone();
-        let path =
-            std::env::temp_dir().join(format!("k8s-gpui-stale-hotbar-{}.yaml", std::process::id()));
+        let path = std::env::temp_dir().join(format!("k8s-gpui-stale-resume-{}.yaml", std::process::id()));
         std::fs::write(
             &path,
             r#"
@@ -12237,24 +11894,13 @@ current-context: alpha-ctx
         );
         let _ = std::fs::remove_file(&path);
 
-        let mut bank = Bank::new("first");
-        bank.slots.push(Slot::new(
-            ClusterId::from_bits(0xbd6b_74f6_561b_e50e),
-            "alpha-ctx",
-        ));
-        let hotbar = Hotbar {
-            banks: vec![bank],
-            active: 0,
-        };
-        let selected = preferred_cluster(
-            &registry,
-            hotbar_cluster(&hotbar, |id| registry.get(id).is_some()),
-        );
+        let stale = ClusterId::from_bits(0xbd6b_74f6_561b_e50e);
+        let selected = preferred_cluster(&registry, Some(stale));
         let session = ClusterSession::from_registry_with_cluster(registry, handle, selected);
 
         assert!(
             matches!(session, ClusterSession::Ready { .. }),
-            "one stale slot must not cost the app every context"
+            "one stale remembered context must not cost the app every context"
         );
     }
 }

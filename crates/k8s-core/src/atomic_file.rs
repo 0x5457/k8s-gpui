@@ -90,8 +90,8 @@ where
 
 /// Writes a JSON file the app owns, creating its directory if it needs one.
 ///
-/// The twin of [`read_json_if_present`], and the reason the preferences, the hotbar
-/// banks, the applied-spec history and the update state all stopped carrying the
+/// The twin of [`read_json_if_present`], and the reason the preferences, the window
+/// layout, the applied-spec history and the update state all stopped carrying the
 /// same six lines: serialise pretty, make sure the parent exists and is private,
 /// write atomically. A file this writes is read back by the next run, so a partial
 /// one is worse than no file at all - hence the atomic write rather than a direct

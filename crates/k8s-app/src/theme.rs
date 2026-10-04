@@ -32,6 +32,43 @@ pub use k8s_ui::settings::PRODUCT_THEME_DARK;
 /// Light product theme, and the name it is registered under.
 pub use k8s_ui::settings::PRODUCT_THEME_LIGHT;
 
+/// Stamps the two ink roles that the projection does not deliver.
+///
+/// **Measured, not assumed.** A probe after `apply_config` reads, in the shipped
+/// dark appearance: `muted_foreground` = `l 0.639` (this product's `text.muted`,
+/// `#9AA0A6`) but `foreground` = `l 0.98` and `secondary_foreground` = `l 0.98` —
+/// both gpui-kit's own `#FAFAFA` default, against this product's `text`
+/// (`#E8EAED`, `l 0.915`). The key spellings are not the cause: every one of the
+/// 63 entries in `ROLE_SOURCES` matches a `#[serde(rename)]` in gpui-kit's
+/// schema, and `muted.foreground` arrives on the very same mechanism, so the loss
+/// is downstream of the colours map.
+///
+/// It matters because `Button::Ghost` paints from `secondary_foreground`, so every
+/// `.ghost()` control in the app — 56 sites across 13 files — rendered in a colour
+/// this product never chose, and one *brighter* than its own `fg_primary`. A ghost
+/// icon in a toolbar that outshines the text beside it is the defect; the cause
+/// living upstream of `Button` is only why it is fixed here.
+///
+/// Two roles, stamped from the product's own `fg.primary`, after the projection
+/// and never before: everything downstream reads them, and anything that already
+/// states its own ink explicitly is untouched by this.
+fn pin_foreground_roles(cx: &mut App) {
+    let ink = design::role::fg_primary(cx);
+    // The row rule. `table.row.border` is projected and the projection is emitted,
+    // but gpui-component reads it with `apply_color!(table_row_border, fallback =
+    // self.border)` and the fallback wins - which is how a design that deleted row
+    // dividers shipped a 1px rule under EVERY row: measured at peak (28,29,30)
+    // against a (17,18,22) row, so the rule is a real edge at every boundary and
+    // the row grid reads as a stack of boxes. Stated here for the same reason as
+    // the two inks above: the value is right and something upstream of `Table`
+    // replaces it.
+    let no_rule = design::role::fg_primary(cx).opacity(0.);
+    let theme = Theme::global_mut(cx);
+    theme.foreground = ink;
+    theme.secondary_foreground = ink;
+    theme.table_row_border = no_rule;
+}
+
 /// gpui-kit colour role -> the product theme's key for the same role.
 ///
 /// Only roles the product file actually names are listed, and a key missing from
@@ -39,6 +76,39 @@ pub use k8s_ui::settings::PRODUCT_THEME_LIGHT;
 /// speak about keeps gpui-kit's own value instead of inheriting an unrelated one.
 /// Unlisted gpui-kit roles fall back to its light or dark defaults, which is the
 /// right answer for roles that are component geometry rather than product meaning.
+/// # `secondary.foreground` projects, and the screen does not change
+///
+/// A magnified capture of the title bar measured the six ghost icon buttons at
+/// `#FAFAFA`, which is gpui-kit's OWN default — brighter than this product's
+/// `fg.primary` (`#E8EAED` dark, `#101114` light). A row of controls drawn in a
+/// colour the product does not have is the one kind of ink that is wrong in both
+/// appearances rather than one of them, and it sits on 56 `.ghost()` call sites
+/// across 13 files.
+///
+/// **The obvious explanation is wrong, and it was checked.** The key spelling was
+/// the first suspect: gpui-kit's `ThemeSchema` declares `secondary_foreground` as a
+/// bare field, and only the roles that genuinely want dots carry an explicit
+/// `#[serde(rename = "a.b.c")]`. This table writes `secondary.foreground`, which
+/// reads like it should have been `secondary_foreground`. Comparing every key in
+/// `ROLE_SOURCES` against every `#[serde(rename)]` in `schema.rs` finds **none of
+/// the 63 wrong** — `secondary.foreground` is a real rename and it is being
+/// emitted under a name gpui-kit reads.
+///
+/// So the projection is fine and the loss is downstream of it, and the remaining
+/// candidates are:
+///   - the `Button` reads a `Theme` this module does not install. gpui-kit has two
+///     (`component::theme::Theme`, which this projects into, and `base::Theme`,
+///     which `project_active_thumb` reaches into separately for the scrollbar).
+///     A ghost button reading the BASE theme's default would render exactly what
+///     was measured, and it would be unaffected by anything this module does.
+///   - `apply_config` fills the pair and something later re-applies the defaults.
+///
+/// **Not changed here, deliberately.** The one-line experiment that would settle
+/// the first candidate is to read `theme().secondary_foreground` at runtime and
+/// print it next to the ink a ghost button actually paints; that needs a debug
+/// build with a probe, not an edit. Guessing at the projection moves every
+/// `secondary.*` role in the product at once, and the cost of being wrong is
+/// higher than the cost of the ink sitting one tier bright.
 const ROLE_SOURCES: [(&str, &str); 64] = [
     // Canvas, text, and the boundaries between them.
     ("background", "background"),
@@ -172,6 +242,7 @@ pub fn install(cx: &mut App) {
     if let Some(config) = dark {
         theme.apply_config(&config);
     }
+    pin_foreground_roles(cx);
     // No window yet, so this reads the app's own appearance rather than a
     // window's. `set_mode` is the one place an appearance changes, and it is what
     // keeps the two theme systems from disagreeing about it.
@@ -235,6 +306,10 @@ pub fn set_mode(cx: &mut App, mode: ThemeMode, window: Option<&mut Window>) {
     design::refine_active_theme(cx);
     Theme::change(mode, window, cx);
     project_active_thumb(cx);
+    // `Theme::change` swaps the pair, so the two roles it drops are stamped again
+    // here. Skipping this is how the product ends up light-inked in dark and
+    // dark-inked in light the first time the reader changes appearance.
+    pin_foreground_roles(cx);
 }
 
 /// Applies a registered theme by name, in both systems.
@@ -404,7 +479,20 @@ fn component_theme_set() -> String {
         config.insert("mode".to_owned(), json!(mode_of(name)));
         config.insert("is_default".to_owned(), json!(true));
         config.insert("colors".to_owned(), Value::Object(colors_for(style)));
-        config.insert("highlight".to_owned(), Value::Object(style.clone()));
+        // gpui-kit's `HighlightThemeStyle` declares `syntax: SyntaxColors` as a
+        // required field (every colour inside it is optional, the key itself is
+        // not), and the product theme deliberately carries no `syntax` block —
+        // the YAML editor colours matches and errors, and nothing else. Without
+        // this synthesized empty block the whole `load_themes_from_str` call
+        // rejected the set ("missing field `syntax`"), gpui-kit silently kept
+        // its own default light/dark themes, and every component it draws —
+        // buttons, selects, badges, pickers — rendered from a palette the
+        // product never chose. `{"syntax": {}}` is the smallest valid value.
+        let mut highlight = style.clone();
+        highlight
+            .entry("syntax".to_owned())
+            .or_insert_with(|| json!({}));
+        config.insert("highlight".to_owned(), Value::Object(highlight));
         // The UI typeface, named here rather than left to gpui-kit's default,
         // which is the *platform* font. That default is the single reason the
         // same table measures three different widths on macOS, Windows and

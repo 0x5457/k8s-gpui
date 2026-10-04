@@ -1,14 +1,19 @@
 //! Status bar and notification center.
 //!
-//! The bar shows nearby status and activity counts. The notification center
-//! keeps detailed failures expandable and keeps success and information in history.
+//! The one thing on the bar is **can I trust what the app is telling me**: the connection state
+//! leads the strip, and every other item is either something that has gone wrong or the one
+//! control that goes somewhere. A count that cannot be acted on from here does not belong on a
+//! strip this permanent, and one was deleted for that reason rather than being relabelled.
+//!
+//! The notification center keeps detailed failures expandable and keeps success and information in
+//! history.
 
 use std::cmp::Ordering;
 
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Icon, RoleOverride, Sizable, h_flex, v_flex};
+use gpui_kit::component::{ActiveTheme, Icon, RoleOverride, Sizable, Size, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, FocusHandle, Hsla, InteractiveElement, IntoElement,
@@ -314,20 +319,6 @@ fn forward_summary_presentation(summary: ForwardSummary) -> (IconName, Severity)
     (design::health_icon(severity), severity)
 }
 
-/// Severity for the operations count.
-///
-/// The count is pending writes on the view in the centre tab, so a zero means nothing is in
-/// flight. It used to wear a *static* loading spinner, which claimed work that does not exist and
-/// borrowed the same glyph the log stream used to mean `Connecting`. The shape now comes from the
-/// shared health vocabulary, and only a non-zero count is marked at all.
-fn operations_severity(count: usize) -> Severity {
-    if count > 0 {
-        Severity::Info
-    } else {
-        Severity::Muted
-    }
-}
-
 /// Shape and severity for a log stream state.
 ///
 /// The Dock renders its own chip with this information, but the Dock is not rendered at all while
@@ -552,25 +543,12 @@ fn connection_text(connection: &ConnectionState) -> String {
 /// A count the bar reports, with the sentence that says what it counts.
 ///
 /// The bar's readouts are one Tab stop, so a reader who lands on the bar has to be able to
-/// answer "what is this?" from the element itself. The count alone is not that answer: `0
-/// operations` is the pending writes on the view in the centre tab, and it reads 0 whenever no
-/// resource view is open. So the sentence is announced as well as hovered, and a screen reader
-/// user gets the same scope a pointer user does.
+/// answer "what is this?" from the element itself, and a count without its scope is not that
+/// answer: `3 sessions` is three terminal sessions in the Dock and nothing else. So the scope
+/// sentence is announced as well as hovered, and a screen reader user gets the same scope a
+/// pointer user does.
 fn metric_announcement(label: &str, scope: &str) -> String {
     format!("{label}. {scope}")
-}
-
-/// Why the operations count reads what it reads.
-///
-/// The count is the pending writes on the view in the centre tab. With no resource view open
-/// there is nothing it could be counting, and saying "0 operations" there reads as a quiet
-/// cluster rather than as a bar with nothing to report.
-fn operations_scope(has_resource_view: bool) -> &'static str {
-    if has_resource_view {
-        "Pending operations on the view in the centre tab"
-    } else {
-        "No resource view is open, so nothing can be pending"
-    }
 }
 
 /// The bar's one count readout.
@@ -580,6 +558,13 @@ fn operations_scope(has_resource_view: bool) -> &'static str {
 /// is pinned to the bar's own height so a count arriving or leaving cannot make the row jump:
 /// `UI-SPEC` §4.17 asks for 24px and §8's 克制 group asks twice over that a permanent strip
 /// should not change shape to say something that did not change.
+///
+/// **The line height is stated with the size, on every label on this strip.** gpui-kit's `Label`
+/// hard-codes a 1.25rem line box, so a caption that carried only its size sat on a 20px line
+/// inside a 23px row and a 6px dot centred on the row sat about four pixels above the words
+/// beside it. The bar's whole contract is that a count, a state and the link are one row of
+/// peers, and a reader cannot compare two captions that are not on one baseline. It is the same
+/// wall `Label` re-applies `theme().foreground` over, and the same fix.
 ///
 /// `cx` is here so the item states its own ink instead of inheriting the bar's. A readout that
 /// takes its colour from whatever it happens to be sitting on is one theme move away from a
@@ -605,10 +590,14 @@ fn status_metric(
         .items_center()
         .role(Role::Status)
         .aria_label(metric_announcement(&label, &tooltip))
-        .child(icon.text_color(ink))
+        // The mark is a control's glyph and the count is its word, so the two state
+        // their inks separately rather than sharing the local: same rung today, and
+        // the glyph stops drifting the moment one of them is changed alone.
+        .child(icon.text_color(design::icon::resting(cx)))
         .child(
             Label::new(label)
                 .text_size(design::text::CAPTION)
+                .line_height(design::text::CAPTION_LINE_HEIGHT)
                 .text_color(ink),
         );
     metric.interactivity().tooltip(common::hover_hint(tooltip));
@@ -630,7 +619,7 @@ fn status_mark_dot(cx: &App, severity: Severity) -> AnyElement {
         .flex_none()
         .size(design::size::STATUS_DOT)
         .rounded_full()
-        .bg(design::role::status_for(severity, cx))
+        .bg(design::icon::status(cx, severity))
         .into_any_element()
 }
 
@@ -659,6 +648,7 @@ fn log_status_metric(
         .child(
             Label::new(text)
                 .text_size(design::text::CAPTION)
+                .line_height(design::text::CAPTION_LINE_HEIGHT)
                 .text_color(ink),
         );
     metric.interactivity().tooltip(common::hover_hint(tooltip));
@@ -711,6 +701,7 @@ impl Shell {
             .child(
                 Label::new(word)
                     .text_size(design::text::CAPTION)
+                    .line_height(design::text::CAPTION_LINE_HEIGHT)
                     .text_color(design::role::status_word_for(severity, cx)),
             )
             // The confidence mark is a second question on the same cell — "could the app get an
@@ -721,7 +712,7 @@ impl Shell {
             .when_some(marker, |this, marker| {
                 this.child(
                     Icon::new(marker)
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(design::confidence::foreground(confidence, cx)),
                 )
             });
@@ -756,15 +747,11 @@ impl Shell {
     ///
     /// # The compact band
     ///
-    /// Below [`super::chrome_compact_width`] — one number, the window's own floor — the three
+    /// Below [`super::chrome_compact_width`] — one number, the window's own floor — the two
     /// *optional counts* go and everything the bar exists for stays: the connection state, the log
     /// state (a state, not a count, and the Dock hides its own chip while it is collapsed), and the
     /// destination with its lane. Each shed item keeps another path, and no path is a hover:
     ///
-    /// - **operations** — the pending writes on the view in the centre tab. Its only other home is
-    ///   that view: the count is a property of the open tab, so opening the tab is the path, and
-    ///   there is no palette command for it. Stated rather than papered over — a second invented
-    ///   command for a number the reader can see on the thing it counts would be a worse answer.
     /// - **sessions** — the Dock's own chips; `dock.toggle` opens it, and the terminal is on it.
     /// - **notifications** — the top bar's bell, and the `view.notifications` palette command,
     ///   which is the same chord the bell presses.
@@ -773,34 +760,23 @@ impl Shell {
         let plane = design::role::surface_chrome(cx);
         let summary = self.status_summary(cx);
         let compact = f32::from(window.viewport_size().width) < super::chrome_compact_width();
-        // The operations count is only meaningful on top of a resource view, and it reads 0 when
-        // there is none, so the scope sentence has to say which of the two is on screen.
-        let operations_tooltip = operations_scope(self.active_resource_view().is_some()).to_owned();
         // Reading order runs along the bar, so the connection and the confidence of that reading
         // come before the activity counts. It is the item that stays on screen while the table is
         // scrolled, which makes it the bar's reason to exist.
         let mut items = vec![self.render_cluster_health(cx)];
-        // Running work, open sessions and notifications are four different
-        // questions, so each one keeps its own label — and each one is drawn only when its count
-        // has something to say.
-        items.extend((!compact && summary.operations > 0).then(|| {
-            status_metric(
-                "status-bar-operations",
-                Icon::new(design::health_icon(operations_severity(summary.operations))).xsmall(),
-                summary.operations,
-                "operation",
-                "operations",
-                operations_tooltip,
-                cx,
-            )
-        }));
+        // Open sessions and notifications are two different questions, so each one keeps its own
+        // label — and each one is drawn only when its count has something to say.
+        //
+        // The noun says *terminal*. Beside `Connection` and `Port forwards`, a bare `2 sessions`
+        // reads as API sessions, and the reader's next question is which sessions they are; the
+        // word costs 20px on an item that is usually two digits and one word wide.
         items.extend((!compact && summary.sessions > 0).then(|| {
             status_metric(
                 "status-bar-sessions",
-                Icon::new(IconName::SquareTerminal).xsmall(),
+                Icon::new(IconName::SquareTerminal).with_size(Size::Size(design::icon::IN_ROW)),
                 summary.sessions,
-                "session",
-                "sessions",
+                "terminal session",
+                "terminal sessions",
                 "Terminal sessions open in the Dock".to_owned(),
                 cx,
             )
@@ -813,7 +789,7 @@ impl Shell {
         items.extend((!compact && summary.active_notifications > 0).then(|| {
             status_metric(
                 "status-bar-notifications",
-                Icon::new(IconName::Bell).xsmall(),
+                Icon::new(IconName::Bell).with_size(Size::Size(design::icon::IN_ROW)),
                 summary.active_notifications,
                 "active notification",
                 "active notifications",
@@ -833,7 +809,9 @@ impl Shell {
             let (icon, severity) = log_status_presentation(log_status);
             log_status_metric(
                 "status-bar-log-stream",
-                Icon::new(icon).xsmall().text_color(severity.marker(cx)),
+                Icon::new(icon)
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    .text_color(design::icon::status(cx, severity)),
                 log_status,
                 format!("Log stream in the Dock: {log_status}"),
                 cx,
@@ -941,13 +919,6 @@ impl Shell {
         // no glyph, exactly as the three counts draw no item: the check arrives with the forwards
         // that earned it, and the words beside it are the same either way.
         let icon = (severity != Severity::Muted).then_some(icon);
-        // Nothing to say borrows the readouts' ink. `role::status_for` sends `Muted` a step
-        // quieter than the bar's own text on purpose, and the one item that is on the strip
-        // because it is a control must not also be the quietest thing on it.
-        let icon_color = match severity {
-            Severity::Muted => design::role::fg_secondary(cx),
-            _ => severity.marker(cx),
-        };
         // A quiet wash of the bar's own ink. The ghost button's hover was the accent token, which
         // spends one of the screen's two accent places on a status bar that asks for none.
         let hover = design::state::hover_on(
@@ -986,11 +957,16 @@ impl Shell {
                 }
             }))
             .when_some(icon, |this, icon| {
-                this.child(Icon::new(icon).xsmall().text_color(icon_color))
+                this.child(
+                    Icon::new(icon)
+                        .with_size(Size::Size(design::icon::IN_ROW))
+                        .text_color(design::icon::status(cx, severity)),
+                )
             })
             .child(
                 Label::new(FORWARD_LINK_NAME)
                     .text_size(design::text::CAPTION)
+                    .line_height(design::text::CAPTION_LINE_HEIGHT)
                     .text_color(label_ink),
             )
             // The count's own lane, reserved whether or not there is a count, so a count
@@ -1007,6 +983,7 @@ impl Shell {
                         this.child(
                             Label::new(count)
                                 .text_size(design::text::CAPTION)
+                                .line_height(design::text::CAPTION_LINE_HEIGHT)
                                 .text_color(design::role::fg_secondary(cx)),
                         )
                     }),
@@ -1165,6 +1142,7 @@ impl Shell {
                 .child(
                     Label::new("No notifications")
                         .text_size(design::text::CAPTION)
+                        .line_height(design::text::CAPTION_LINE_HEIGHT)
                         .text_color(design::colors(cx).text_muted),
                 )
                 .into_any_element()
@@ -1237,11 +1215,14 @@ impl Shell {
                         this.border_b_1()
                             .border_color(popover_rule(raised, colors.border_variant))
                     })
-                    .child(Label::new("Notifications").text_size(design::text::TITLE))
+                    // The panel-title treatment the palette and the switchers
+                    // share, not a bare Label that drifts from them.
+                    .child(common::label_panel_title("Notifications"))
                     .when(count > 0, |this| {
                         this.child(
                             Label::new(notification_count_label(count))
                                 .text_size(design::text::CAPTION)
+                                .line_height(design::text::CAPTION_LINE_HEIGHT)
                                 .text_color(colors.text_muted),
                         )
                     })
@@ -1292,12 +1273,13 @@ impl Shell {
                         .aria_label(status_label.clone())
                         .child(
                             Icon::new(IconName::Info)
-                                .xsmall()
-                                .text_color(colors.text_muted),
+                                .with_size(Size::Size(design::icon::IN_ROW))
+                                .text_color(design::icon::resting(cx)),
                         )
                         .child(
                             Label::new(status_label)
                                 .text_size(design::text::CAPTION)
+                                .line_height(design::text::CAPTION_LINE_HEIGHT)
                                 .text_color(colors.text_muted),
                         ),
                 )
@@ -1393,22 +1375,25 @@ impl Shell {
             })
             .child(
                 Icon::new(design::health_icon(notification.severity))
-                    .xsmall()
-                    .text_color(notification.severity.marker(cx)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    .text_color(design::icon::status(cx, notification.severity)),
             )
             .child(
                 v_flex()
                     .flex_1()
                     .min_w(px(0.))
-                    .gap(px(2.0))
+                    .gap(space::XXS)
                     .child(
-                        Label::new(notification.message.clone()).text_size(design::text::CAPTION),
+                        Label::new(notification.message.clone())
+                            .text_size(design::text::CAPTION)
+                            .line_height(design::text::CAPTION_LINE_HEIGHT),
                     )
                     .when(expanded, |this| {
                         this.when_some(notification.detail.clone(), |this, detail| {
                             this.child(
                                 Label::new(detail)
                                     .text_size(design::text::CAPTION)
+                                    .line_height(design::text::CAPTION_LINE_HEIGHT)
                                     .text_color(colors.text_muted),
                             )
                         })
@@ -1424,6 +1409,7 @@ impl Shell {
                     .child(
                         Label::new(format_age(notification.at.elapsed().as_secs()))
                             .text_size(design::text::CAPTION)
+                            .line_height(design::text::CAPTION_LINE_HEIGHT)
                             .text_color(colors.text_muted),
                     ),
             )
@@ -1434,8 +1420,8 @@ impl Shell {
                     } else {
                         IconName::ChevronDown
                     })
-                    .xsmall()
-                    .text_color(colors.text_muted),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    .text_color(design::icon::resting(cx)),
                 )
             });
         row.into_any_element()
@@ -1674,16 +1660,16 @@ mod tests {
 
         let resting = cx.debug_bounds("status-bar").expect("the status bar");
         assert_eq!(resting.size.height, px(super::super::status_bar_height()));
-        for absent in [
-            "status-bar-operations",
-            "status-bar-sessions",
-            "status-bar-notifications",
-        ] {
+        for absent in ["status-bar-sessions", "status-bar-notifications"] {
             assert!(
                 cx.debug_bounds(absent).is_none(),
                 "{absent} has nothing to report and must not occupy the bar"
             );
         }
+        // The operations count is not drawn at anything. It counted unconfirmed writes the
+        // centre view already badges on the rows themselves, it had no path out of the bar, and
+        // a reader cannot act on it from here.
+        assert!(cx.debug_bounds("status-bar-operations").is_none());
         assert!(
             cx.debug_bounds("status-bar-port-forwards").is_some(),
             "§14.6's link is how the forwards list is opened, so it stays with a count of zero"
@@ -1701,9 +1687,8 @@ mod tests {
         cx.run_until_parked();
 
         assert!(cx.debug_bounds("status-bar-notifications").is_some());
-        for still_absent in ["status-bar-operations", "status-bar-sessions"] {
-            assert!(cx.debug_bounds(still_absent).is_none());
-        }
+        assert!(cx.debug_bounds("status-bar-sessions").is_none());
+        assert!(cx.debug_bounds("status-bar-operations").is_none());
         let reporting = cx.debug_bounds("status-bar").expect("the status bar");
         assert_eq!(
             reporting.size.height, resting.size.height,
@@ -1784,22 +1769,24 @@ mod tests {
     ///
     /// The metrics are `Role::Status`, which is not a tab stop, so the bar took one handle for the
     /// whole strip and the numbers became reachable. That only helps if the element answers the
-    /// question the reader arrives with, and a bare `0 operations` does not: the count is the
-    /// pending writes on the view in the centre tab, and with no resource view open it is 0 for a
-    /// reason that is not "nothing is happening". So the scope sentence is announced, not just
-    /// hovered.
+    /// question the reader arrives with, and a bare `3 sessions` does not beside `Connection` and
+    /// `Port forwards`: it reads as API sessions. So the noun and the scope sentence are both
+    /// announced, not just hovered.
+    ///
+    /// This test used to hold the operations count's two scope sentences. That count is gone —
+    /// it counted unconfirmed writes that the centre view already badges on the rows themselves,
+    /// and it had no path out of the bar — so there is no second scope to disagree with.
     #[test]
     fn a_reachable_readout_announces_its_scope() {
         assert_eq!(
-            metric_announcement("0 operations", operations_scope(false)),
-            "0 operations. No resource view is open, so nothing can be pending"
+            metric_announcement("3 terminal sessions", "Terminal sessions open in the Dock"),
+            "3 terminal sessions. Terminal sessions open in the Dock"
         );
         assert_eq!(
-            metric_announcement("3 operations", operations_scope(true)),
-            "3 operations. Pending operations on the view in the centre tab"
+            design::format::count_with_noun(2, "terminal session", "terminal sessions"),
+            "2 terminal sessions",
+            "the drawn noun has to carry the same word as the announced one"
         );
-        // The two cases must not read the same, or the sentence is decoration.
-        assert_ne!(operations_scope(true), operations_scope(false));
         assert_eq!(
             metric_announcement(&log_status_text("Live"), "Terminal log stream in the Dock"),
             "Logs · Live. Terminal log stream in the Dock"
@@ -1813,7 +1800,8 @@ mod tests {
     /// This file used to keep a private glyph map, and one of its entries was `LoadCircle` — the
     /// same glyph the operations metric drew as a *static* spinner next to a zero. One shape was
     /// saying "nothing is running" and "connecting" in the same strip, and the static one claimed
-    /// work that did not exist.
+    /// work that did not exist. The operations metric is gone; the collision it caused was the
+    /// symptom, and the shared vocabulary is the fix that outlives it.
     #[test]
     fn log_stream_state_is_shaped_and_named_in_the_bar() {
         let states = [
@@ -1849,14 +1837,6 @@ mod tests {
             log_status_presentation("Paused"),
             (IconName::Dash, Severity::Muted)
         );
-        // Nothing in the bar may claim a spinner is turning when the count is zero.
-        assert_ne!(
-            design::health_icon(operations_severity(0)),
-            IconName::LoaderCircle,
-            "a zero count cannot wear a static loading spinner"
-        );
-        assert_eq!(operations_severity(0), Severity::Muted);
-        assert_eq!(operations_severity(3), Severity::Info);
     }
 
     /// `DESIGN.md` §4 makes `design::health_icon` the app's only status-shape vocabulary, and the

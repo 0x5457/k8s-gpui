@@ -246,6 +246,38 @@ pub(super) fn reusable_button(id: impl Into<ElementId>, label: impl Into<SharedS
         .tab_index(0isize)
 }
 
+/// Puts a chrome control's LABEL on the type scale, for a caller who cannot.
+///
+/// gpui-kit resolves a `Button`'s label through `button_text_size`, and the
+/// `Size::Size(_)` arm returns `text_base()` — 16px, three steps above
+/// `text::BODY`. A button on a chrome band that names its own `Size` therefore
+/// paints its label louder than the tab titles above it, and
+/// `Button::content_style(_, icon_size)` is the only other lever and it is
+/// `pub(crate)`.
+///
+/// So the label rides in as a `CHILD` at the token the band wants, which is what
+/// the two title-bar switchers already do, and the button's own accessible label
+/// carries the words for a screen reader — otherwise the control would have a
+/// visible name and no announced one.
+///
+/// One helper rather than twenty inline `div`s, because twenty inline copies is
+/// how a second size turns up: this is the only place in the product that says
+/// what a chrome button's label is.
+pub(crate) fn labelled(
+    button: Button,
+    text: impl Into<SharedString>,
+) -> Button {
+    let text = text.into();
+    button
+        .child(
+            div()
+                .text_size(design::text::BODY)
+                .line_height(design::text::BODY_LINE_HEIGHT)
+                .child(text.clone()),
+        )
+        .accessibility_label(text)
+}
+
 /// The shared control rhythm for an icon-only control, on the same 28px target.
 pub(super) fn reusable_icon_button(
     id: impl Into<ElementId>,
@@ -255,10 +287,29 @@ pub(super) fn reusable_icon_button(
     Button::new(id)
         .icon(icon)
         .ghost()
-        .with_size(Size::Size(design::size::CONTROL))
-        .w(design::size::CONTROL)
+    // gpui-kit derives a Button's glyph from its BOX at 0.75, and overwrites
+    // whatever size the caller asked for, so the box is the only lever a caller
+    // has on the glyph. At `size::CONTROL` (28px) that is a 21px glyph, which is
+    // in no lane: the toolbar lane is 16, the navigation lane is 14, and a 21px
+    // mark beside a 16px one is the ragged icon column this product spent a wave
+    // removing. `icon::IN_TOOLBAR / 0.75` is the box that derives exactly the
+    // toolbar lane, and it is still wider than `size::HIT_MIN`, so the target a
+    // pointer has to hit does not shrink to accommodate a glyph.
+    .with_size(Size::Size(icon_button_box()))
+    .w(icon_button_box())
         .accessibility_label(label)
         .tab_index(0isize)
+}
+
+/// The box an icon-only button takes so that gpui-kit derives
+/// [`design::icon::IN_TOOLBAR`] for its glyph.
+///
+/// A function because `Pixels` division is not a const operation, and a function
+/// because the 0.75 belongs to gpui-kit rather than to this product: it is the
+/// inverse of the rule the lane is written in, and a constant that said 0.75
+/// would be a second place to be wrong when that rule changes.
+fn icon_button_box() -> Pixels {
+    design::icon::IN_TOOLBAR / 0.75
 }
 
 // ---------------------------------------------------------------------------
@@ -283,7 +334,9 @@ impl RenderOnce for LoadingBar {
     fn render(self, _window: &mut Window, cx: &mut App) -> impl IntoElement {
         Progress::new("loading-bar")
             .loading(true)
-            .color(cx.theme().accent)
+            // The role layer's accent, contrast-solved on every surface — the
+            // theme's seed would read as a second blue beside it.
+            .color(design::role::accent(cx))
             .w(design::size::UPDATE_PROGRESS)
             .max_w_full()
             .h(space::XS)
@@ -294,15 +347,6 @@ impl RenderOnce for LoadingBar {
 // Empty state
 // ---------------------------------------------------------------------------
 
-/// The measure `UI-SPEC` §2.3 gives an empty state's description: 40ch.
-///
-/// `ch` is the advance of `0`, which on the UI face is 0.6em at every size — the
-/// same constant `settings::MONO_ADVANCE_EM` states for the data face. gpui-kit's
-/// `EmptyHeader` caps itself at `24rem` (384px), which is 49ch of 13px: a
-/// percentage of nothing is not a measure, and a sentence that runs 384px wide
-/// makes the reader's eye travel the whole panel to reach its second line.
-pub(crate) const EMPTY_MEASURE_CH: f32 = 40.0;
-
 /// The reason a panel shows when there is no cluster to talk to.
 ///
 /// One string, because the overview routes on it by value - a failed load whose
@@ -310,8 +354,12 @@ pub(crate) const EMPTY_MEASURE_CH: f32 = 40.0;
 /// definitions would quietly stop recognising each other.
 pub(crate) const NOT_CONNECTED_REASON: &str = "Not connected to a cluster.";
 
-/// The size `UI-SPEC` §4.13 gives the glyph that leads an empty state.
-const EMPTY_ICON: Pixels = design::size::ICON_LARGE;
+/// The size the glyph that leads an empty state is drawn at.
+///
+/// `design::icon::LEAD`, named rather than restated: every empty state in this
+/// product goes through [`empty_state`], so the lane is stated once here and the
+/// surfaces inherit it.
+const EMPTY_ICON: Pixels = design::icon::LEAD;
 
 /// Shows an icon, title, and next step.
 pub(crate) fn empty_state(
@@ -412,7 +460,7 @@ impl RenderOnce for EmptyState {
             // `mb_2()` of its own, which on top of the header gap put 16px
             // between the glyph and the title — neither step legal as a sum.
             .gap(space::SM)
-            .max_w(px(f32::from(design::text::BODY) * 0.6 * EMPTY_MEASURE_CH))
+            .max_w(design::size::EMPTY_MEASURE)
             .media(
                 EmptyMedia::new()
                     .with_variant(EmptyMediaVariant::Default)
@@ -942,7 +990,11 @@ mod tests {
                 .size_full()
                 .id("empty-harness-scroll")
                 .overflow_y_scroll()
-                .child(empty_state(IconName::Server, "No clusters", self.0))
+                .child(empty_state(
+                    design::glyph::state::no_cluster(),
+                    "No clusters",
+                    self.0,
+                ))
         }
     }
 

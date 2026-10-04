@@ -39,6 +39,10 @@ use k8s_ui::settings::ThemeChoice;
 use k8s_ui::shell::{UseDarkTheme, UseLightTheme, UseSystemTheme, UseTheme};
 
 /// The window's own title, before the surface names the pane inside it.
+///
+/// The surface overwrites this on its first frame with `Settings · <page>`, so
+/// this is only what the desktop shows between the window appearing and the
+/// view drawing — which is why it names the window and not a page.
 const WINDOW_TITLE: &str = "Settings";
 
 /// How a window tells the reader that something happened.
@@ -91,6 +95,12 @@ pub fn open_settings_window(
     let handle = cx
         .open_window(settings_window_options(), move |window, cx| {
             crate::watch_system_appearance(window);
+            // A window opened after the theme was chosen arrives at the desktop's
+            // default appearance, and nothing else applies the app's choice to it
+            // — so it opened light while the main window was dark. This has to
+            // come after the observer, not before: the observer stays silent under
+            // a forced theme, so there is no second application coming along.
+            crate::adopt_app_theme(window, cx);
             cx.new(|cx| Root::new(view, window, cx).bordered(false))
         })
         .map_err(|error| format!("The Settings window could not be opened: {error}"))?;
@@ -298,9 +308,20 @@ fn open_user_keymap(notice: &Notice, cx: &mut App) {
 /// The window's geometry and chrome.
 ///
 /// Server-side decorations, like the main window: a client-side frame drawn by
-/// gpui-kit's `Root` would be a second frame around a window the window manager has
-/// already framed. The minimum is the settings surface's own row floor rather than
-/// the shell's, because this window has no sidebar or inspector to give width away.
+/// gpui-kit's `Root` would be a second frame around a window the window manager
+/// has already framed. Both numbers are the surface's own, and both are the
+/// product's window floor rather than the layout's arithmetic: the default size
+/// opens on the layout the surface is built for — the navigation rail beside the
+/// full content measure — rather than on the category strip it falls back to in
+/// a narrower pane, and the minimum is the shell's floor, which is above the
+/// width at which that fallback would engage. So this window never draws the
+/// fallback, and a resize can only widen it.
+///
+/// `appears_transparent: false` and an opaque background because the surface
+/// paints its own plane from `surface_app` upward: a transparent title bar over
+/// an app-painted window lets the desktop's own background show through the
+/// top band, which is the one place in this window where the app's theme and
+/// the desktop's disagree.
 fn settings_window_options() -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(Bounds::new(

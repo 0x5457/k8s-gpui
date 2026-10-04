@@ -152,6 +152,22 @@ echo "[run] $app (context=$context theme=$theme workspace=$workspace)"
 # Only the app class, never the whole process name: a build's own binary path
 # differs per target directory, and an agent's `--keep` instance is still theirs.
 stale="$(pgrep -f 'k8s-app' 2>/dev/null | grep -v "^${app_pid:-0}$" || true)"
+# The script's OWN command line contains the app path, because it was given
+# `--app .../k8s-app` on argv, so `pgrep -f k8s-app` matches the harness as well
+# as the app. Without this filter the harness kills itself and the run exits 143
+# with an empty artifact directory, which reads exactly like "the app did not
+# start". Every process in this script's own group is excluded for the same
+# reason: a subshell inherits the same argv.
+if [[ -n "$stale" ]]; then
+    stale="$(printf '%s\n' "$stale" | grep -v "^$$\$" | while read -r pid; do
+        [[ -n "$pid" ]] || continue
+        # Same process group as this script, or an ancestor of it.
+        if [[ "$(ps -o pgid= -p "$pid" 2>/dev/null | tr -d ' ')" == "$(ps -o pgid= -p $$ | tr -d ' ')" ]]; then
+            continue
+        fi
+        printf '%s\n' "$pid"
+    done)"
+fi
 if [[ -n "$stale" ]]; then
     stale_count="$(wc -w <<<"$stale")"
     echo "[stale] killing $stale_count earlier k8s-app instance(s): $stale"
@@ -225,6 +241,9 @@ press() {
         local IFS='+'
         for part in $chord; do
             if [[ -z "$key" ]]; then
+                # wtype names the Meta key `logo` (also `win`), never `super` — a
+                # documented `super+shift+p` chord was a silent no-op on it.
+                [[ "$part" == super ]] && part=logo
                 mods+=("$part")
             else
                 key="$part"
@@ -297,7 +316,9 @@ for item in "${seq[@]+"${seq[@]}"}"; do
             sleep "${keys#sleep:}"
         elif [[ -n "$keys" ]]; then
             # shellcheck disable=SC2206
-            press ${keys}
+            # Quotes keep a multi-word chord (-k escape, -M logo …) one argument;
+            # unquoted it split and only the first word ever reached wtype.
+            press "${keys}"
             sleep "${STEP_SETTLE:-1.2}"
         fi
     else

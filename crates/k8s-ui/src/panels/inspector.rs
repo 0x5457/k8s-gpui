@@ -12,13 +12,13 @@ use gpui_kit::component::button::{Button, ButtonCustomVariant, ButtonVariants as
 use gpui_kit::component::kbd::Kbd;
 use gpui_kit::component::label::Label;
 use gpui_kit::component::tooltip::Tooltip;
-use gpui_kit::component::{ActiveTheme, Disableable as _, Icon, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{Disableable as _, Icon, Sizable, Size, h_flex, v_flex};
 use gpui_kit::prelude::FluentBuilder as _;
 use gpui_kit::{Animation, AnimationExt as _, Radians};
 use gpui_kit::{
     AnyElement, AnyView, App, AppContext as _, ClickEvent, ClipboardItem, Context, Div, ElementId,
-    Entity, FocusHandle, Hsla, InteractiveElement, IntoElement, KeyDownEvent, Keystroke,
-    ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
+    Entity, FocusHandle, FontFeatures, Hsla, InteractiveElement, IntoElement, KeyDownEvent,
+    Keystroke, ParentElement, Pixels, Render, Role, ScrollHandle, SharedString, Stateful,
     StatefulInteractiveElement, Styled, Subscription, Task, UniformListScrollHandle, WeakEntity,
     Window, div, point, px, uniform_list,
 };
@@ -87,7 +87,6 @@ const INSPECTOR_PROBLEMS_TAB_INDEX: isize = 4;
 /// keeps the first tab stop. The destructive action never takes focus by itself, and the
 /// ascending indices below are that claim: the walk meets the safe action before the write.
 const REVIEW_KEEP_EDITING_TAB_INDEX: isize = 5;
-const REVIEW_CHECK_TAB_INDEX: isize = 6;
 const REVIEW_APPLY_TAB_INDEX: isize = 7;
 /// The fold on a long diff, after the summary it sits under.
 const REVIEW_EXPAND_TAB_INDEX: isize = 8;
@@ -143,10 +142,13 @@ const APPLY_INVALID_REASON: &str =
     "The YAML has a problem. Fix every problem in the list, then preview again.";
 const APPLY_STALE_REVIEW_REASON: &str =
     "The YAML changed while the review was open. Review the new text, then apply again.";
-const RETRY_BUTTON_WIDTH: f32 = 72.0;
 /// Severity marker slot. Always present, so a marked row keeps the same key and value
 /// columns as an unmarked one.
-const DESCRIBE_MARKER_SLOT: gpui_kit::Pixels = design::size::ICON;
+///
+/// The slot is the icon lane itself, because the three marks it holds — a severity, a
+/// managed-field lock and a disclosure chevron — are one size and would otherwise disagree
+/// inside the same 16px reservation.
+const DESCRIBE_MARKER_SLOT: gpui_kit::Pixels = design::icon::IN_ROW;
 /// Narrowest value column a two-column describe row may leave beside its key.
 ///
 /// A value is YAML, a port range or a condition message. Below this it stops being skimmable,
@@ -290,14 +292,11 @@ const UID_INLINE_CHARS: usize = 36;
 /// any width the shell ever floats the panel at, so the overlay frame was a branch no shipped
 /// width could reach.
 const INSPECTOR_OVERLAY_BELOW: f32 = 320.0;
-/// Height of one tab in the Inspector's tab strip.
-///
-/// `design::size::TAB_BAR` is 28px and this is the pill inside it, so the strip reads as a band
-/// with a rounded shape in it rather than as four rectangles painted edge to edge. It is the same
-/// 22px the centre tab strip and the Dock strip use inside their own 28px bars — `CENTER_TAB_HEIGHT`
-/// in `shell/panels.rs` and `DOCK_TAB_HEIGHT` in `panels/dock.rs` — and it is stated here rather
-/// than taken from one of them because the three are three files and this one owns its own strip.
-const INSPECTOR_TAB_HEIGHT: Pixels = px(22.);
+/// Height of one tab in the Inspector's tab strip: the shared tab pill, so the strip
+/// reads as a band with a rounded shape in it rather than as four rectangles painted
+/// edge to edge. The centre tab strip and the Dock strip draw the same pill inside
+/// their own bars.
+const INSPECTOR_TAB_HEIGHT: Pixels = design::size::TAB_PILL;
 /// The one word this panel prints for a field that has no value.
 ///
 /// `resources {}` and `finalizers []` are the API server's source format leaking through the
@@ -423,6 +422,24 @@ gpui_kit::actions!(
     ]
 );
 
+/// The four tabs, and the four glyphs, measured rather than chosen by eye.
+///
+/// Ink coverage normalised by each mark's own peak, off a 4x capture
+/// (`size::TAB_PILL`'s 28px measures 112 capture px, which pins the scale):
+/// `FileCode` 0.229, `Bell` 0.144, `TextQuote` 0.123, `SignalHigh` 0.078.
+///
+/// So the heavy mark in this strip is the **document**, on the tab whose whole
+/// subject is a document, and it is heavy because that glyph fills more of its
+/// box — not because it is drawn larger. All four are one size, the strip is
+/// shared with the centre and Dock tabs, and selection changes no size, so the
+/// only lever on this number is the shape itself.
+///
+/// **It stays.** Swapping a correct glyph for a lighter one buys 0.08 of ink and
+/// costs the tab the mark that names it; a reader who has learned that the
+/// document tab carries a document does not have to be told what it is. The
+/// number is recorded here so the next person to look at this strip and think
+/// the file mark is too heavy can read what it was measured against instead of
+/// looking again.
 const TABS: [TabSpec; 3] = [
     TabSpec {
         label: "YAML",
@@ -554,6 +571,7 @@ enum LoadKind {
 }
 
 type ApplyHandler = Box<dyn Fn(ApplyRequest, &mut App)>;
+#[cfg(test)]
 type ApplyCallback = Box<dyn Fn(ApplyRequest)>;
 type CheckHandler = std::rc::Rc<dyn Fn(ApplyRequest, &mut App)>;
 
@@ -641,13 +659,18 @@ struct PendingApply {
 ///
 /// A local parse cannot see a schema violation, an immutable field, an unknown enum value, or a
 /// missing required field. Those are the failures that surface after an apply has already
-/// half-succeeded, which is the worst moment to learn about them, so the review can ask the
-/// server first and state its answer before anything is written.
+/// half-succeeded, which is the worst moment to learn about them, so the review asks the server
+/// first and states its answer before anything is written.
+///
+/// The real apply does not ask for strict field validation, so nothing short of this check tells
+/// a reader that their document has a field the schema rejects. An answer the reader has to go
+/// and ask for is an answer most of them do not have, and on the last screen before a write that
+/// is the same as having none.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 enum ApplyCheckState {
-    /// Nobody has asked yet. The review says so rather than implying it was checked.
+    /// No verdict for the document on screen. Opening a review starts the request, so this is
+    /// what the panel carries between reviews.
     #[default]
-    NotRun,
     Running,
     /// The server accepted the document and returned the object it would store.
     Valid,
@@ -1170,6 +1193,8 @@ pub struct InspectorPanel {
     editable: bool,
     validation_error: Option<String>,
     applied_at: Option<Instant>,
+    /// The channel this file's tests answer on; production uses `apply_handler`.
+    #[cfg(test)]
     on_apply: Option<ApplyCallback>,
     apply_handler: Option<ApplyHandler>,
     apply_request: Option<ApplyRequest>,
@@ -1223,6 +1248,13 @@ pub struct InspectorPanel {
     session: InspectorSession,
     selection: Option<ObjectRef>,
     selection_target: Option<ApplyTarget>,
+    /// How many rows the table had selected when it pushed [`Self::selection`].
+    ///
+    /// The table owns the selection; this panel owns what to say about it. It shows one object, so
+    /// with several rows selected its header is about to describe one of them and say nothing
+    /// about the rest. Zero and one are the same fact here — one object on screen — so only two
+    /// and up change anything.
+    selected_rows: usize,
     load_epoch: u64,
     describe_states: HashMap<String, LoadState<DescribeData>>,
     events_states: HashMap<String, EventsEntry>,
@@ -1343,6 +1375,11 @@ pub struct InspectorPanel {
     /// panel that quietly moved it would leave the table showing one object and the panel showing
     /// another, with nothing on screen saying so.
     related_trail: Vec<ObjectRef>,
+    /// How many rows the table had selected at each step of [`Self::related_trail`], so going back
+    /// restores the count instead of quietly dropping it.
+    ///
+    /// Pushed and popped in the same two places as the trail itself, and nowhere else.
+    related_rows: Vec<usize>,
     /// When the deep link was last copied, so the control can say so for as long as the other
     /// copy controls do.
     linked_at: Option<Instant>,
@@ -1395,7 +1432,10 @@ impl InspectorBindingInput for Option<Entity<InspectorPanel>> {
         self.map(|inspector| {
             InspectorBinding::new(move |update, cx| {
                 inspector.update(cx, |panel, cx| match update {
-                    InspectorUpdate::Selection(selection) => panel.set_selection(selection, cx),
+                    InspectorUpdate::Selection(selection, rows) => {
+                        panel.set_selected_rows(rows, cx);
+                        panel.set_selection(selection, cx);
+                    }
                     InspectorUpdate::Yaml(yaml) => panel.set_yaml(yaml, cx),
                 });
             })
@@ -1422,6 +1462,7 @@ impl InspectorPanel {
             editable: false,
             validation_error: None,
             applied_at: None,
+            #[cfg(test)]
             on_apply: None,
             apply_handler: None,
             apply_request: None,
@@ -1432,6 +1473,7 @@ impl InspectorPanel {
             pending_apply: None,
             diff_expanded: false,
             related_trail: Vec::new(),
+            related_rows: Vec::new(),
             linked_at: None,
             link_cluster: None,
             applied_text: None,
@@ -1469,6 +1511,7 @@ impl InspectorPanel {
             session: InspectorSession::default(),
             selection: None,
             selection_target: None,
+            selected_rows: 1,
             load_epoch: 0,
             describe_states: HashMap::new(),
             events_states: HashMap::new(),
@@ -1537,6 +1580,11 @@ impl InspectorPanel {
         }
         self.focused_tab = index;
         self.tabs_scroll.scroll_to_item(tab_scroll_index(index));
+        // The reason a Metrics tab could not open has been read the moment the reader picks
+        // another tab. It used to survive until some unrelated command cleared it, and it lives
+        // in the one status strip the panel draws — the YAML toolbar's — where it sat above
+        // "Unsaved changes" on the tab a reader lands on after every object.
+        self.metrics_notice = None;
         if index != InspectorTab::Metrics as usize || self.metrics_tab_visible() {
             self.active_tab = index;
         }
@@ -2026,6 +2074,26 @@ impl InspectorPanel {
         self.load_selection(selection, cx);
     }
 
+    /// States how many rows the table had selected when it pushed the selection on screen.
+    ///
+    /// The caller owns the number because the table owns the selection, and this panel owns the
+    /// sentence because it is the only surface that shows one object out of many. The table's own
+    /// selection bar says how many rows are selected, and the four actions that hit exactly one
+    /// object refuse the selection by naming the count; without this the Inspector was the one
+    /// surface that answered a different question — it showed the anchor and said nothing, so a
+    /// reader with eight rows selected read a header that looked like it described all of them.
+    ///
+    /// Push it on every selection, not only when it grows: a stale count outlives the selection
+    /// that justified it, and a banner that names rows nobody has selected any more is worse than
+    /// no banner.
+    pub fn set_selected_rows(&mut self, rows: usize, cx: &mut Context<Self>) {
+        if self.selected_rows == rows {
+            return;
+        }
+        self.selected_rows = rows;
+        cx.notify();
+    }
+
     pub fn set_yaml(&mut self, yaml: Option<String>, cx: &mut Context<Self>) {
         if self.yaml_view.read(cx).is_dirty() {
             self.pending = Some(PendingLoad::Yaml(yaml));
@@ -2108,7 +2176,11 @@ impl InspectorPanel {
     }
 
     pub(crate) fn has_apply_handler(&self) -> bool {
-        self.apply_handler.is_some() || self.on_apply.is_some()
+        #[cfg(test)]
+        if self.on_apply.is_some() {
+            return true;
+        }
+        self.apply_handler.is_some()
     }
 
     fn apply_error_is_unknown(reason: &str) -> bool {
@@ -2136,6 +2208,7 @@ impl InspectorPanel {
         }
     }
 
+    #[cfg(test)]
     pub fn set_on_apply(&mut self, callback: impl Fn(ApplyRequest) + 'static) {
         self.on_apply = Some(Box::new(callback));
         self.clear_unavailable_error();
@@ -2261,8 +2334,19 @@ impl InspectorPanel {
     pub fn apply_target(&self) -> Option<ApplyTarget> {
         self.current_apply_target().cloned()
     }
+
+    /// The request this panel is acting on, or is about to.
+    ///
+    /// The shell drops any reply that does not belong to the request it is holding, which is the
+    /// right guard for an apply and the wrong one for a check: a check belongs to a review that
+    /// has not been confirmed, so before the write there was no in-flight request to name and
+    /// every verdict was discarded on arrival. The review's own request answers while it is open.
     pub fn current_apply_request(&self) -> Option<ApplyRequest> {
-        self.apply_request.clone()
+        self.apply_request.clone().or_else(|| {
+            self.pending_apply
+                .as_ref()
+                .map(|pending| ApplyRequest::new(pending.request_id, pending.target.clone(), pending.yaml.clone()))
+        })
     }
 
     pub fn pending_selection(&self) -> Option<InspectorSelection> {
@@ -2291,6 +2375,22 @@ impl InspectorPanel {
                 "The YAML still shows {current}. Cancel the changes to load the selected object."
             ),
         ))
+    }
+
+    /// What the panel is holding back, and why, for whichever of the two things it is.
+    ///
+    /// One sentence used to cover both, and it named the wrong one for half of them: a document
+    /// the table refreshed for the object *already selected* is not a selection change, and
+    /// telling a reader to "cancel before the next selection loads" about a live update of the
+    /// object in front of them sent them looking for a navigation that was never going to happen.
+    fn pending_reason(&self) -> (&'static str, String) {
+        self.apply_blocked_by_pending().unwrap_or_else(|| {
+            (
+                "Unsaved changes",
+                "The cluster sent a newer document for this object. Apply or cancel to see it."
+                    .to_owned(),
+            )
+        })
     }
 
     /// Why Apply cannot run right now, or `None` when it can. This is what the toolbar shows as
@@ -2444,6 +2544,7 @@ impl InspectorPanel {
             // "back" that returns to an object they left two clicks ago is a surprise, not a
             // shortcut.
             self.related_trail.clear();
+            self.related_rows.clear();
         } else if self.yaml_view.read(cx).text().as_deref() != yaml.as_deref() {
             // Same object, new content: keep the caret, selection, scroll, and IME state
             // so a live update does not interrupt typing or a composition.
@@ -2552,10 +2653,6 @@ impl InspectorPanel {
         }
     }
 
-    pub fn discard_changes(&mut self, cx: &mut Context<Self>) {
-        self.revert(cx);
-    }
-
     pub fn discard_dirty(&mut self, cx: &mut Context<Self>) {
         self.revert(cx);
     }
@@ -2633,6 +2730,11 @@ impl InspectorPanel {
                 // `WRITE-OPS.md` §10.4: the fold is per review, never remembered.
                 self.diff_expanded = false;
                 self.problem_cursor = 0;
+                // The review asks the server itself. It used to offer a button, which made the
+                // only check that can see a schema violation an optional step beside the write —
+                // and a review of an object about to be changed, answered by a diff of text, is
+                // not an answer.
+                self.check_pending_apply(cx);
                 cx.notify();
             }
             Err(error) => {
@@ -2698,15 +2800,17 @@ impl InspectorPanel {
         self.editable = false;
         self.yaml_view
             .update(cx, |view, cx| view.set_editable(false, cx));
-        if let Some(handler) = &self.apply_handler {
-            handler(request, cx);
-            cx.notify();
+        let Some(handler) = &self.apply_handler else {
+            // Only this file's tests leave `apply_handler` unset.
+            #[cfg(test)]
+            if let Some(on_apply) = &self.on_apply {
+                on_apply(request.clone());
+                self.mark_applied(request, cx);
+            }
             return;
-        }
-        if let Some(on_apply) = &self.on_apply {
-            on_apply(request.clone());
-            self.mark_applied(request, cx);
-        }
+        };
+        handler(request, cx);
+        cx.notify();
     }
 
     /// Drops a review without writing anything.
@@ -2721,27 +2825,27 @@ impl InspectorPanel {
 
     /// Asks the API server to validate the document under review without storing it.
     ///
-    /// The check never blocks the apply. It answers a question the local diff cannot: would the
-    /// server accept this document at all. A person about to write to a cluster should be able
-    /// to ask that first, and a person who would rather not wait can still apply straight away.
+    /// The review runs this itself when it opens; it is a separate entry point only because the
+    /// shell owns the transport. It never blocks the apply and it never writes, so it answers a
+    /// question the local diff cannot — would the server accept this document at all — and the
+    /// reader does not have to know it is there to get it.
     ///
     /// The shell owns the request, exactly as it owns the apply, and reports the outcome back
     /// through [`Self::apply_check_finished`].
     pub fn check_pending_apply(&mut self, cx: &mut Context<Self>) {
+        self.apply_check = ApplyCheckState::Running;
         let Some(pending) = self.pending_apply.clone() else {
             return;
         };
         let Some(handler) = self.check_handler.clone() else {
-            // No session to ask. Saying so beats a button that silently does nothing.
+            // No session to ask. Saying so beats a line that claims a verdict nobody produced.
             self.apply_check = ApplyCheckState::Failed {
-                reason: "Not connected to a context. Select a context, then check the change."
-                    .to_owned(),
+                reason: "No cluster connection to validate this document against.".to_owned(),
             };
             cx.notify();
             return;
         };
         let request = ApplyRequest::new(pending.request_id, pending.target, pending.yaml);
-        self.apply_check = ApplyCheckState::Running;
         cx.notify();
         handler(request, cx);
     }
@@ -3860,7 +3964,8 @@ impl InspectorPanel {
             return;
         }
         self.related_trail.push(current);
-        self.select_related(target, cx);
+        self.related_rows.push(self.selected_rows);
+        self.select_related(target, 1, cx);
     }
 
     /// Carries out a Related row's action, whichever kind of way out it is.
@@ -3877,15 +3982,20 @@ impl InspectorPanel {
         let Some(previous) = self.related_trail.pop() else {
             return false;
         };
-        self.select_related(previous, cx);
+        let rows = self.related_rows.pop().unwrap_or(1);
+        self.select_related(previous, rows, cx);
         true
     }
 
     /// Puts a followed object on screen without going through the shell.
-    fn select_related(&mut self, target: ObjectRef, cx: &mut Context<Self>) {
+    fn select_related(&mut self, target: ObjectRef, selected_rows: usize, cx: &mut Context<Self>) {
         self.load_yaml(None, cx);
         self.selection = Some(target.clone());
         self.selection_target = Some(ApplyTarget::from_object(target, Some(self.session)));
+        // The count the table pushed described *its* selection, and a followed object is not a row
+        // in it: carrying the number over would have the banner claim that a ConfigMap is one of
+        // eight selected Pods. `go_back` hands the count back with the object it belongs to.
+        self.selected_rows = selected_rows;
         self.invalidate_apply();
         self.reset_selection_loads(cx);
         self.sync_metrics_target(cx);
@@ -3934,13 +4044,22 @@ impl InspectorPanel {
             // The band is not removed. Its height, its rule, and its rail are what hold the tab
             // strip in place, and an Inspector whose title bar collapses the moment you clear the
             // selection is a panel that reflows on every click.
+            //
+            // It held `design::size::ROW` here and nothing at all in the branch below, which is
+            // the same collapse by another name: 32px of chrome with nothing on it against the
+            // 50px the object's own two lines need, so clearing a selection pulled the tab strip,
+            // the three toolbars and the body 18px up the panel and selecting a row pushed them
+            // all back down. Measured at 2x on this product's own cluster, the band with a Pod
+            // selected runs from device y=80 to y=179 and the tab strip's top edge is at y=182;
+            // an empty band 18px shorter puts that edge at y=146. Both branches now answer
+            // [`identity_band_height`].
             return h_flex()
                 .id("inspector-identity")
                 .debug_selector(|| "inspector-identity".to_owned())
                 .flex_none()
                 .w_full()
                 .min_w(px(0.))
-                .h(design::size::ROW)
+                .min_h(identity_band_height())
                 .px(space::SM)
                 .gap(space::SM)
                 .items_center()
@@ -3983,6 +4102,9 @@ impl InspectorPanel {
         // `perf-129-59d5…` is not. `UI-SPEC.md` §7 fixes this for object names everywhere.
         let name = div()
             .id("inspector-identity-name")
+            // The selection banner is measured against this row, and an `id` alone is not
+            // addressable from the harness — only a debug selector is.
+            .debug_selector(|| "inspector-identity-name".to_owned())
             .flex_1()
             .min_w(px(0.))
             .overflow_hidden()
@@ -3992,7 +4114,8 @@ impl InspectorPanel {
             .child(
                 common::label_panel_title(selection.name.clone()).text_color(role::fg_primary(cx)),
             );
-        // The scope line: namespace, then kind, then age — three lanes, one word each.
+        // The scope line: namespace, then kind, then age — three lanes, one word each, on one
+        // decided spine.
         //
         // It used to be one string, `Pod · team-platform-data-ingestion-staging-eu-west-2 ·
         // 1d old`, drawn in one ink at one size, which is a way of saying three things while
@@ -4005,8 +4128,21 @@ impl InspectorPanel {
         // is what clipped the namespace: a 44-character namespace in `team-platform-…` ate the row
         // and the age fell off the end, and the reader lost the one fact that tells them which
         // copy of a Deployment they are looking at. Each lane is its own element now, so the
-        // namespace can give way on its own and the age stays where it is. The middot is `space::XS`
-        // from each neighbour for the reason `UI-SPEC.md` §4.3 fixes it for the centre tab strip.
+        // namespace can give way on its own. The middot is `space::XS` from each neighbour for
+        // the reason `UI-SPEC.md` §4.3 fixes it for the centre tab strip.
+        //
+        // The age ends in the trailing lane rather than beside the kind, and that is the fix for
+        // four values fighting over one line: the metadata a reader reads to *identify* the
+        // object runs left and is allowed to give way, while the age — a fixed-width fact they
+        // compare across objects, which is worth nothing if it moves — sits against the trailing
+        // edge where the copy control above it and the action row below it already are. Three
+        // bands, one trailing spine.
+        //
+        // Truncation is decided per lane rather than per row, and the policy is the same one the
+        // rest of the panel holds: an object's name truncates in the *middle* because the hash is
+        // the half that identifies it, a namespace truncates at the *end* because its tail is the
+        // part that tells one namespace from its sibling, and a fixed-width fact — the kind, the
+        // age — is never truncated at all. Every clipped lane carries its full value as a tooltip.
         let namespace = selection
             .namespace
             .as_deref()
@@ -4026,11 +4162,27 @@ impl InspectorPanel {
         let scope = scope
             .child(identity_lane(kind, IdentityLane::Quiet, cx))
             .when_some(age, |this, age| {
-                this.child(identity_separator(cx)).child(identity_lane(
-                    &age,
-                    IdentityLane::Quiet,
-                    cx,
-                ))
+                // The trailing lane is its own element rather than two more children of the
+                // metadata row: an auto margin on the row itself would push the whole line
+                // right, and the age has to be a column of its own for the spine to mean
+                // anything.
+                //
+                // It takes the separator with it, because the rule on this line is one
+                // separator between every pair of lanes rather than one separator where the
+                // line happens to begin. The kind and the age were the only pair with nothing
+                // between them, and a line that reads `namespace · Pod 3d old` is two joined
+                // phrases where it was built to be three facts. The free space goes to the
+                // LEFT of the separator so the dot keeps one `space::XS` gap to the age, the
+                // same gap it keeps to the kind, rather than drifting against it.
+                this.child(
+                    h_flex()
+                        .ml_auto()
+                        .flex_none()
+                        .items_center()
+                        .gap(space::XS)
+                        .child(identity_separator(cx))
+                        .child(identity_lane(&age, IdentityLane::Quiet, cx)),
+                )
             });
         v_flex()
             .id("inspector-identity")
@@ -4038,6 +4190,11 @@ impl InspectorPanel {
             .flex_none()
             .w_full()
             .min_w(px(0.))
+            // The same floor the empty band holds, so selecting a row cannot move anything under
+            // it. A *minimum* rather than a fixed height, because the two states that add a row
+            // of their own — a multi-row selection's banner, and a host that wires header actions
+            // — have to keep growing the band rather than have their row clipped by it.
+            .min_h(identity_band_height())
             .py(space::XS)
             .px(space::SM)
             .gap(space::XXS)
@@ -4074,6 +4231,9 @@ impl InspectorPanel {
             })
             .role(Role::Region)
             .aria_label(object_accessible_identity(selection))
+            .when_some(self.render_selection_banner(cx), |band, banner| {
+                band.child(banner)
+            })
             .child(
                 h_flex()
                     .w_full()
@@ -4089,8 +4249,13 @@ impl InspectorPanel {
                         kind_glyph(kind, cx).child(
                             Icon::default()
                                 .path(design::kind_icon_path(kind))
-                                .with_size(Size::Size(design::size::KIND_ICON_TITLE))
-                                .text_color(role::fg_tertiary(cx)),
+                                .with_size(Size::Size(design::icon::IN_ROW))
+                                // The resting ink of a control's glyph, and not
+                                // `fg_tertiary`: this sits beside the object's name at
+                                // full strength, so one step quieter than the name reads
+                                // as a kind of object the panel cannot open rather than
+                                // as the panel's quietest word.
+                                .text_color(design::icon::resting(cx)),
                         ),
                     )
                     .child(name)
@@ -4099,6 +4264,81 @@ impl InspectorPanel {
             .child(scope)
             .when_some(self.render_object_actions(cx), |this, row| this.child(row))
             .into_any_element()
+    }
+
+    /// The line that says this panel is showing one object out of a multi-row selection.
+    ///
+    /// It is the one place that fact is written down. The table's selection bar counts the rows and
+    /// the four actions that hit exactly one object refuse the selection by naming the count, so
+    /// the header was the only surface left answering a third question: it named one of eight
+    /// rows as if that were the selection.
+    ///
+    /// It sits above the name rather than under it, because it qualifies the name, and a
+    /// qualification the reader meets after the name is one they have already acted on. It costs a
+    /// single line and only when more than one row is selected: with one row selected the header
+    /// already describes exactly what is on screen, and a caveat there would be read on every
+    /// object the panel ever shows.
+    fn render_selection_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let (selected, shown) = self.selection_banner()?;
+        Some(
+            h_flex()
+                .id("inspector-selection-banner")
+                .debug_selector(|| "inspector-selection-banner".to_owned())
+                .w_full()
+                .min_w(px(0.))
+                .gap(space::XS)
+                .items_center()
+                .role(Role::Status)
+                .aria_label(format!("{selected} · showing {shown}"))
+                // The count is a fixed-width fact and never gives way; the name gives way the way
+                // every object name in this panel gives way, in the middle, because the hash in
+                // `prefix-hash-suffix` is the half that identifies it.
+                .child(
+                    div()
+                        .flex_none()
+                        .child(label_small(selected).text_color(role::fg_secondary(cx))),
+                )
+                .child(identity_separator(cx))
+                .child(
+                    div()
+                        .id("inspector-selection-banner-shown")
+                        .debug_selector(|| "inspector-selection-banner-shown".to_owned())
+                        .flex_1()
+                        .min_w(px(0.))
+                        .overflow_hidden()
+                        .whitespace_nowrap()
+                        .text_ellipsis_middle()
+                        .child(
+                            label_small(format!("showing {shown}"))
+                                .text_color(role::fg_secondary(cx)),
+                        ),
+                )
+                .into_any_element(),
+        )
+    }
+
+    /// The banner's two facts: how many rows the table has selected, and which one is on screen.
+    ///
+    /// `None` with no selection and `None` with a single row, because those are the two cases where
+    /// the header already describes the whole selection.
+    fn selection_banner(&self) -> Option<(String, String)> {
+        let selection = self.selection.as_ref()?;
+        if self.selected_rows < 2 {
+            return None;
+        }
+        // A uid stands in for a missing name, the same fallback every other name of this object
+        // takes, so the banner cannot name the panel's object as nothing.
+        let shown = if selection.name.is_empty() {
+            selection.uid.clone()
+        } else {
+            selection.name.clone()
+        };
+        Some((
+            // The table's own selection bar phrases the count with this helper, so the two
+            // surfaces that answer "how many" answer it in the same words.
+            design::format::count_with_noun(self.selected_rows, "row selected", "rows selected"),
+            shown,
+        ))
     }
 
     /// The 24px back control that appears once the reader has followed a relationship.
@@ -4117,8 +4357,14 @@ impl InspectorPanel {
                 Button::new("inspector-related-back-button")
                     .icon(IconName::ArrowLeft)
                     .ghost()
-                    .with_size(Size::Size(design::size::ICON_BUTTON))
+                    // The glyph box is what gpui-kit derives the ICON from; the
+                    // target is restated so the pointer still aims at a full
+                    // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                    // area down with the glyph, which is how three of these left
+                    // the toolbar's own vertical centre.
+                    .with_size(Size::Size(icon_control_box()))
                     .w(design::size::ICON_BUTTON)
+                    .h(design::size::ICON_BUTTON)
                     .text_color(role::fg_secondary(cx))
                     .accessibility_label(label)
                     .tab_index(INSPECTOR_BACK_TAB_INDEX)
@@ -4163,17 +4409,27 @@ impl InspectorPanel {
                         IconName::Link
                     })
                     .ghost()
-                    .with_size(Size::Size(design::size::ICON_BUTTON))
+                    // The glyph box is what gpui-kit derives the ICON from; the
+                    // target is restated so the pointer still aims at a full
+                    // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                    // area down with the glyph, which is how three of these left
+                    // the toolbar's own vertical centre.
+                    .with_size(Size::Size(icon_control_box()))
                     .w(design::size::ICON_BUTTON)
+                    .h(design::size::ICON_BUTTON)
                     // The copied state changes the *shape* — a tick instead of a chain — and
                     // deliberately not the colour. `UI-SPEC.md` §0's third rule reserves status
                     // ink for things that are wrong, and a copied link is the most ordinary
                     // outcome there is; a green check for "the thing you asked for happened" is
                     // the web's way of saying it, not a platform's.
+                    //
+                    // At rest it is the resting ink and not `fg_tertiary`, which is the
+                    // placeholder and count tier: a chain in the quietest ink beside the
+                    // back arrow at full strength reads as a control that cannot be used.
                     .text_color(if linked {
-                        role::fg_primary(cx)
+                        design::icon::active(cx)
                     } else {
-                        role::fg_tertiary(cx)
+                        design::icon::resting(cx)
                     })
                     .accessibility_label(label)
                     .tab_index(INSPECTOR_LINK_TAB_INDEX)
@@ -4238,12 +4494,18 @@ impl InspectorPanel {
                         Button::new(format!("inspector-action-button-{}", action.id))
                             .icon(action.icon)
                             .ghost()
-                            // `design::size::CONTROL`, the same 28px every icon button in the three
-                            // toolbars is: the row below is `size::ROW` and holds one kind of control,
-                            // so it is one size. It used to be the 24px `ICON_BUTTON` in a 28px band,
-                            // which is the arithmetic a 28px band forces and this row no longer is.
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(design::size::CONTROL)
+                            // One box, from [`icon_control_box`], so the mark is the design's
+                            // sixteen pixels here as it is on every other icon control in this
+                            // panel. It asked for `design::size::CONTROL`, which the component
+                            // reads as 28px of box and answers with a twenty-one-pixel glyph.
+                            // The glyph box is what gpui-kit derives the ICON from; the
+                            // target is restated so the pointer still aims at a full
+                            // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                            // area down with the glyph, which is how three of these left
+                            // the toolbar's own vertical centre.
+                            .with_size(Size::Size(icon_control_box()))
+                            .w(design::size::ICON_BUTTON)
+                            .h(design::size::ICON_BUTTON)
                             // A destructive action is the one place in the header that may carry
                             // status ink, and it carries it as its *rest* colour rather than on
                             // hover, so the reader sees what they are about to press before they
@@ -4318,9 +4580,17 @@ impl InspectorPanel {
             //   `role::surface_raised`, a second surface, and the strip then disagreed with the
             //   other two about what "selected" looks like in the same window.
             // - ink: `role::fg_primary` at `design::text::MEDIUM` when selected, against
-            //   `role::fg_tertiary` at `design::text::REGULAR` when not. The weight is the channel
+            //   `role::fg_secondary` at `design::text::REGULAR` when not. The weight is the channel
             //   that separates in greyscale, where a 12% accent wash over a 1.02:1 chrome step
             //   does not.
+            //
+            // An inactive tab is `fg_secondary` and not `fg_tertiary`, which is the tier measured
+            // off this window's own `22` beside the resource header: a count. A tab title is a
+            // destination the reader has to read to do the job, and three of the four are not the
+            // tab they are on. `common::label_text` already answers `fg_secondary` and this
+            // overrode it, which is how the strip ended up quieter than the helper it was handed.
+            // `shell/panels.rs` reaches the same answer on the centre strip and gives the reason:
+            // at `fg_tertiary` the strip read as disabled.
             //
             // Nothing is reserved for a marker. The 2px accent rail that used to run along the
             // bottom of the open tab is gone, for the reason the guide gives by name: "Do not add
@@ -4330,7 +4600,23 @@ impl InspectorPanel {
             let ink = if selected {
                 role::fg_primary(cx)
             } else {
-                role::fg_tertiary(cx)
+                role::fg_secondary(cx)
+            };
+            // The glyph carries the tab's state too, and `icon::active` is the role that says so.
+            //
+            // It did not, and the strip then drew a mark one full tier above its own word in both
+            // directions — `icon::resting` against a `fg_primary` label on the open tab, and
+            // `icon::resting` against a `fg_tertiary` label on the three closed ones. The other
+            // two strips in the window put the mark in the tab's ink, and the capture agrees: on
+            // the centre strip the open tab's glyph and its word measure the same, and the closed
+            // tab's glyph and its word measure the same. A mark that ignores the state of the thing
+            // it marks is the one channel on the pill that a greyscale reader cannot read, because
+            // a 12% wash over a 1.02:1 step is not a difference and the word's weight is one they
+            // have to already know about.
+            let glyph_ink = if selected {
+                design::icon::active(cx)
+            } else {
+                design::icon::resting(cx)
             };
             h_flex()
                 .id(("inspector-tab", index))
@@ -4344,6 +4630,10 @@ impl InspectorPanel {
                 .flex_none()
                 .rounded(radius::SM)
                 .px(space::SM)
+                // `space::XS` between the mark and its word, not the looser
+                // icon-to-label gap: four pills at the icon lane's width do not fit
+                // the 260px minimum width the product supports, and the two strips
+                // this one is a third of set this gap beside words of their own.
                 .gap(space::XS)
                 .items_center()
                 // The focus ring is reserved and unpainted, as in `panels/dock.rs`, so taking and
@@ -4400,7 +4690,15 @@ impl InspectorPanel {
                     }
                     cx.stop_propagation();
                 }))
-                .child(Icon::new(tab.icon).xsmall().text_color(ink))
+                // The glyph takes the strip's own size rather than
+                // `design::icon::IN_ROW`. The centre tabs and the Dock tabs draw
+                // theirs at the component's tab size, and three strips at one
+                // height are one control: a sixteen-pixel mark in this strip beside
+                // a twelve-pixel mark in the other two would make the Inspector read
+                // as a different kind of tab. One tab lane, one number, and it is
+                // a number the two sibling strips state as well - so it is a
+                // cross-lane decision if it is ever to change.
+                .child(Icon::new(tab.icon).xsmall().text_color(glyph_ink))
                 // The label's ink *and* its weight are stated rather than inherited: gpui-kit's
                 // `Label` re-applies `theme().foreground` after it takes the caller's style, so an
                 // ink set on the pill two children up never reaches the glyph. `panels/dock.rs`
@@ -4444,6 +4742,14 @@ impl InspectorPanel {
                     // across the three strips in this window finds them on one line rather than on
                     // the strip's own top edge.
                     .items_center()
+                    // `space::XXS` between pills, the number `panels/dock.rs` states for the strip
+                    // this one is paired with. Two 22px pills at `radius::SM` with no gap touch, and
+                    // what the notch between their corners leaves is one shape with a waist rather
+                    // than two tabs: at magnification the Dock and the Inspector read as two
+                    // different controls for the same verb. The centre strip answers the same
+                    // question with a middot because §4.3 gives it one; this strip has none, so the
+                    // gap is the whole of its separation.
+                    .gap(space::XXS)
                     .overflow_x_scroll()
                     .restrict_scroll_to_axis()
                     .track_scroll(&self.tabs_scroll)
@@ -4462,10 +4768,17 @@ impl InspectorPanel {
             ));
         }
         if let Some(owners) = &self.conflict_owners {
+            // The owners are the fact; the way out is a field they own, and the panel knows which
+            // fields those are — the editor draws them quieter and the rail locks them. The old
+            // line said "review your changes, then apply again", which is the request that had
+            // just been refused, and a reader following it learns the same thing twice.
             return Some(status_message(
                 Severity::Warning,
-                "Apply conflict. Review your changes, then apply again.",
-                Some(format!("Managed by: {}", owners.join(", "))),
+                "The cluster refused this: another tool owns a field it changes.",
+                Some(format!(
+                    "Owned by {}. Take that field out of your change, or revert to the text the cluster reported.",
+                    owners.join(", ")
+                )),
                 cx,
             ));
         }
@@ -4499,8 +4812,8 @@ impl InspectorPanel {
                     .aria_label("Applying changes")
                     .child(spinner(
                         IconName::LoaderCircle,
-                        cx.theme().accent,
-                        Size::XSmall,
+                        design::role::accent(cx),
+                        Size::Size(design::icon::IN_ROW),
                     ))
                     .child(label_small("Applying changes…").text_color(role::fg_primary(cx)))
                     .into_any_element(),
@@ -4515,12 +4828,7 @@ impl InspectorPanel {
             ));
         }
         if self.has_pending() {
-            let (title, reason) = self.apply_blocked_by_pending().unwrap_or_else(|| {
-                (
-                    "Unsaved changes",
-                    "Apply or cancel before the next selection loads.".to_owned(),
-                )
-            });
+            let (title, reason) = self.pending_reason();
             return Some(status_message(Severity::Warning, title, Some(reason), cx));
         }
         if self.yaml_available && !self.has_apply_handler() {
@@ -4537,10 +4845,14 @@ impl InspectorPanel {
             ));
         }
         if self.yaml_view.read(cx).is_dirty() {
+            // The only state in this function with no reason under it. Every other one answers
+            // "what do I do", because an alert that describes a state without offering a verb
+            // leaves the reader to find the way out themselves — and the two ways out of an edit
+            // are the two controls already sitting in this band.
             return Some(status_message(
                 Severity::Warning,
                 "Unsaved changes",
-                None,
+                Some("Preview to see what the cluster would take, or Cancel to discard them.".to_owned()),
                 cx,
             ));
         }
@@ -4603,7 +4915,7 @@ impl InspectorPanel {
                     .child(
                         Icon::new(design::health_icon(Severity::Error))
                             .flex_none()
-                            .xsmall()
+                            .with_size(Size::Size(design::icon::IN_ROW))
                             .text_color(role::danger(cx)),
                     )
                     .child(
@@ -4763,7 +5075,7 @@ impl InspectorPanel {
                     Icon::new(design::health_icon(Severity::Warning))
                         .flex_none()
                         .mt(space::XXS)
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(ink),
                 )
                 .child(
@@ -4902,19 +5214,26 @@ impl InspectorPanel {
                             IconName::Copy
                         })
                         .ghost()
-                        .with_size(Size::Size(design::size::CONTROL))
-                        .w(design::size::CONTROL)
+                        // The glyph box is what gpui-kit derives the ICON from; the
+                        // target is restated so the pointer still aims at a full
+                        // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                        // area down with the glyph, which is how three of these left
+                        // the toolbar's own vertical centre.
+                        .with_size(Size::Size(icon_control_box()))
+                        .w(design::size::ICON_BUTTON)
+                        .h(design::size::ICON_BUTTON)
                         // The copied state changes the *shape* — a tick instead of a copy glyph —
                         // and deliberately not the colour. This button wore `role::success`, so a
                         // routine confirmation wore the same green the panel reserves for "this is
                         // broken": a reader who has learned to act on that channel has to learn to
                         // ignore it again here, and the header's own copy-link control had already
                         // made the opposite call. `fg_primary` says "this is now the strongest
-                        // thing in the row" and stops there.
+                        // thing in the row" and stops there; at rest it is the glyph's resting
+                        // ink, because `fg_tertiary` here read as a control that cannot be used.
                         .text_color(if copied {
-                            role::fg_primary(cx)
+                            design::icon::active(cx)
                         } else {
-                            role::fg_tertiary(cx)
+                            design::icon::resting(cx)
                         })
                         .accessibility_label(copy_label)
                         .tab_index(COPY_YAML_TAB_INDEX)
@@ -4961,9 +5280,14 @@ impl InspectorPanel {
                 .aria_label(document.clone())
                 .tooltip(common::hover_hint(document))
                 .child(
+                    // The document mark, and the band's own size rather than the row
+                    // lane's: this slot holds nothing else, so the mark's own height
+                    // is the only thing that says whether it is a mark or the line of
+                    // words it stands in for, and a mark as tall as the smallest line
+                    // of type the app prints has stopped being one.
                     Icon::new(IconName::FileCode)
                         .xsmall()
-                        .text_color(role::fg_tertiary(cx)),
+                        .text_color(design::icon::resting(cx)),
                 )
                 .into_any_element()
         });
@@ -5071,9 +5395,6 @@ impl InspectorPanel {
             .child(self.render_yaml_toolbar(cx))
             .when_some(self.render_problems(cx), |this, problems| {
                 this.child(problems)
-            })
-            .when_some(self.render_apply_review(cx), |this, review| {
-                this.child(review)
             })
             .child(
                 div()
@@ -5298,34 +5619,32 @@ impl InspectorPanel {
         )
     }
 
-    /// The review that stands between a parsed change and a write.
+    /// The review stands between a parsed change and a write.
     ///
     /// It names the object a request would touch, shows the local change against the text the
-    /// cluster last reported, keeps the safe action first in the tab order, and can ask the
-    /// server to validate the document without storing it. Nothing here writes: only "Apply to
-    /// cluster" does, and it is never the default focus.
+    /// cluster last reported, states what the API server made of the document, keeps the safe
+    /// action first in the tab order. Nothing here writes: only "Apply to cluster" does, and it
+    /// is never the default focus.
     ///
-    /// The review's own line about what has and has not been verified.
-    ///
-    /// A local diff answers "what text changed". It cannot answer "would the server accept this",
-    /// so the copy states which of the two the reader is looking at rather than implying a
-    /// guarantee the app has not made.
+    /// The line that says whether the server would take this document, which is the one question
+    /// a diff cannot answer and the reason the review exists rather than a plain editor.
     fn apply_check_line(&self, cx: &Context<Self>) -> AnyElement {
-        let (text, color) = match &self.apply_check {
-            ApplyCheckState::NotRun => (
-                "Local diff only. The server has not seen this document.".to_owned(),
-                role::fg_secondary(cx),
-            ),
+        let (title, color, severity, detail) = match &self.apply_check {
             ApplyCheckState::Running => (
-                "Asking the server to validate this document without storing it.".to_owned(),
+                "Asking the API server whether it would take this document.".to_owned(),
                 role::fg_secondary(cx),
+                Severity::Neutral,
+                None,
             ),
             ApplyCheckState::Valid => (
-                "The server accepted this document. Nothing has been written yet.".to_owned(),
+                "The API server would take this document. Nothing has been written yet."
+                    .to_owned(),
                 // Words, so the word inks: this line is the answer a reader acts on, and a
                 // sentence drawn in the mark ink is a sentence read at whatever contrast a 6px
                 // dot happens to clear.
                 role::success_word(cx),
+                Severity::Success,
+                None,
             ),
             ApplyCheckState::Conflict { owners } => {
                 let owners = if owners.is_empty() {
@@ -5334,37 +5653,33 @@ impl InspectorPanel {
                     owners.join(", ")
                 };
                 (
-                    format!("A field this change would take is owned by {owners}."),
+                    format!(
+                        "The API server would refuse this: another tool owns a field it changes ({owners})."
+                    ),
                     role::warning_word(cx),
+                    Severity::Warning,
+                    // A conflict has one exit, and it is in the editor rather than on this
+                    // screen: take the field they own out of your change. Saying "review your
+                    // changes and apply again" sent the reader round the same request that had
+                    // just refused it.
+                    Some(
+                        "Remove the field they own from your change, then apply again. Revert puts the cluster's text back.".to_owned(),
+                    ),
                 )
             }
-            ApplyCheckState::Failed { reason } => (reason.clone(), role::fg_secondary(cx)),
+            ApplyCheckState::Failed { reason } => (
+                "The API server refused this document. Nothing has been written.".to_owned(),
+                role::danger_word(cx),
+                Severity::Error,
+                // The server's own sentence, and the whole point of asking before the write: the
+                // apply itself does not validate strictly, so this is the only place a field the
+                // schema rejects gets named before the change reaches the cluster. It wraps
+                // rather than being clamped, because on this screen the space it takes is the
+                // space the reader needs to see it in.
+                Some(reason.clone()),
+            ),
         };
         let busy = matches!(self.apply_check, ApplyCheckState::Running);
-        // The check sits beside the sentence that says it has not happened, because that
-        // sentence is the reason to run it. In the action row it was the odd one out: a third
-        // button beside the two that decide the write, and at 336px three of them do not fit,
-        // so the row overflowed and clipped the leftmost label in half.
-        let check = div()
-            .id("yaml-review-check")
-            .debug_selector(|| "yaml-review-check".to_owned())
-            .flex_none()
-            .tooltip(common::hover_hint(
-                "Ask the API server to validate this document without storing it",
-            ))
-            .child(
-                Button::new("yaml-review-check")
-                    .label(if busy { "Checking…" } else { "Check" })
-                    // `UI-SPEC.md` §8: a button never has a border. This one used to be
-                    // `outline`, which put a stroke on the one control in the review that is not
-                    // the write - so the loudest thing on the screen was the optional action.
-                    .secondary()
-                    .disabled(busy)
-                    .tab_index(REVIEW_CHECK_TAB_INDEX)
-                    .on_click(
-                        cx.listener(|this, _: &ClickEvent, _, cx| this.check_pending_apply(cx)),
-                    ),
-            );
         h_flex()
             .w_full()
             .min_w(px(0.))
@@ -5375,19 +5690,32 @@ impl InspectorPanel {
                 Icon::new(if busy {
                     IconName::LoaderCircle
                 } else {
-                    IconName::Info
+                    design::health_icon(severity)
                 })
-                .xsmall()
-                .mt(px(2.))
-                .text_color(role::fg_tertiary(cx)),
+                .with_size(Size::Size(design::icon::IN_ROW))
+                // The mark is 16px and the column beside it opens two lines of `label`, so the
+                // mark sits on the first of them rather than centred between both.
+                .mt(space::XXS)
+                // The mark channel when the line is carrying a verdict, and the
+                // resting ink when it is only carrying a wait: a severity glyph in
+                // the quietest ink says nothing, and the answer this line gives is
+                // the one the reader is about to act on.
+                .text_color(if busy {
+                    design::icon::resting(cx)
+                } else {
+                    design::icon::status(cx, severity)
+                }),
             )
             .child(
-                div()
+                v_flex()
                     .flex_1()
                     .min_w(px(0.))
-                    .child(label_small(text).text_color(color)),
+                    .gap(space::XXS)
+                    .child(label_small(title).text_color(color))
+                    .when_some(detail, |this, detail| {
+                        this.child(label_small(detail).text_color(color))
+                    }),
             )
-            .when(!busy, |this| this.child(check))
             .into_any_element()
     }
 
@@ -6051,10 +6379,23 @@ impl InspectorPanel {
                     ))
                     .child(
                         Button::new("inspector-reload")
-                            .icon(IconName::RotateCcw)
+                            .icon(design::glyph::action::reload())
                             .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(design::size::CONTROL)
+                            // The glyph box is what gpui-kit derives the ICON from; the
+                            // target is restated so the pointer still aims at a full
+                            // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                            // area down with the glyph, which is how three of these left
+                            // the toolbar's own vertical centre.
+                            .with_size(Size::Size(icon_control_box()))
+                            .w(design::size::ICON_BUTTON)
+                            .h(design::size::ICON_BUTTON)
+                            // Stated here because nothing above this button states it.
+                            // `Icon` resolves an unset colour against the window's own
+                            // foreground, and a capture of this band measured the reload
+                            // glyph at 243 against 162 for every other mark in the panel:
+                            // the brightest thing on the band was a control that only
+                            // re-reads what the reader is already looking at.
+                            .text_color(design::icon::resting(cx))
                             .accessibility_label(reload_label)
                             .tab_index(INSPECTOR_RELOAD_TAB_INDEX)
                             .on_click(
@@ -6799,44 +7140,109 @@ impl InspectorPanel {
             window_note.unwrap_or_default()
         );
         let reload_label = format!("Reload metrics for {full_title}");
+        // The range is one object, not six buttons. It was a row of independent ghost controls
+        // separated by 1px gaps, so the group had no outside edge, every segment read as its own
+        // control, and the selected fill was a pill floating between two neighbours — the stock
+        // segmented web control the design language rules out by name.
+        //
+        // One plane and one silhouette instead: the group is a single inset field with a
+        // hairline boundary, the two end segments carry the container's radius and the four
+        // between them stay square, and the boundary between neighbours is one 1px rule of the
+        // same weight throughout rather than a gap whose width is the *only* thing telling the
+        // reader where one segment stops and the next begins.
+        let group_plane = role::surface_inset(cx);
+        let group_edge = role::border_subtle(cx);
+        let group_hover = design::state::hover(cx, group_plane);
+        let group_press = design::state::press(cx, group_plane);
+        // The selected fill is the accent over the group's own plane, so it is the accent at the
+        // strength the rest of the app tints with rather than a second, stronger accent.
+        let selected_plane = design::composite_surface(group_plane, role::accent_wash(cx));
+        let features = range_features(cx);
         let range = RANGE_OPTIONS
             .iter()
             .enumerate()
             .map(|(index, (millis, label))| {
                 let selected = self.metrics_range_ms == *millis;
+                let first = index == 0;
+                let last = index + 1 == RANGE_OPTIONS.len();
                 let selector = format!("metrics-range-action-{label}");
                 let tooltip = format!("Show the last {label}");
                 let control_id = format!("metrics-range-{}", *millis as usize);
-                let selected_plane =
-                    design::composite_surface(role::surface_chrome(cx), role::accent_wash(cx));
-                let selected_fill = ButtonCustomVariant::new(cx)
-                    .color(role::accent_wash(cx))
-                    .foreground(role::fg_primary(cx))
-                    .hover(hover_on(selected_plane, role::accent(cx)))
-                    .active(press_on(selected_plane, role::accent(cx)));
+                // Weight is the channel that still separates the open range when the accent is
+                // hidden, which is the test every selection in this app is held to.
+                let ink = if selected {
+                    role::fg_primary(cx)
+                } else {
+                    role::fg_secondary(cx)
+                };
+                // The button paints no plane of its own: a custom variant is transparent in every
+                // state until it is told otherwise, so the wrapper below is the only thing that
+                // wears a fill. That is deliberate — `ButtonRounded` is uniform, so a fill on the
+                // button would round an end segment's *inner* corners as well as its outer ones
+                // and notch the group's plane into the selection. The geometry has to live on a
+                // wrapper that can round per corner, and the button keeps what only it can do:
+                // the hit target, the tab stop, the toggle state and the click.
+                let button = common::labelled(
+                    Button::new(control_id.clone())
+                        .custom(ButtonCustomVariant::new(cx).foreground(ink))
+                        .text_color(ink)
+                        // The same 28px control the reload button beside it uses: one band's
+                        // controls are one height, and a 32px segment inside a 28px row would push
+                        // the group's own boundary past the band. The height is stated because a
+                        // labelled button at an explicit size only takes its padding from it, and a
+                        // control whose height depends on the font is not one control.
+                        .with_size(Size::Size(design::size::CONTROL))
+                        .h(design::size::CONTROL)
+                        .font_weight(if selected {
+                            text::MEDIUM
+                        } else {
+                            text::REGULAR
+                        })
+                        .tab_index(METRICS_RANGE_TAB_INDEX + index as isize)
+                        .toggled(selected)
+                        .on_click(cx.listener(move |panel, _: &ClickEvent, _, cx| {
+                            panel.set_metrics_range(*millis, cx);
+                        })),
+                    *label,
+                )
+                // The two words differ on purpose: a segment reads `1m`, which is a number with
+                // nothing to hang a sentence on, so the announced name says what the segment
+                // actually shows.
+                .accessibility_label(format!("Show the last {label}"));
                 div()
-                    .id(control_id.clone())
+                    .id(control_id)
                     .debug_selector(move || selector.clone())
                     .tooltip(common::hover_hint(tooltip))
                     .flex_1()
                     .min_w(px(0.))
-                    .child(
-                        Button::new(control_id)
-                            .label(*label)
-                            .when(selected, |button| {
-                                button
-                                    .custom(selected_fill)
-                                    .text_color(role::fg_primary(cx))
-                                    .font_weight(text::SEMIBOLD)
+                    .h_full()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    // `1m 15m 1h 6h 24h` share a baseline only if every digit has the same
+                    // advance, so the segments divide the group's width evenly instead of
+                    // shifting as the reader changes range.
+                    .font_features(features.clone())
+                    .when(first, |segment| segment.rounded_l(radius::SM))
+                    .when(last, |segment| segment.rounded_r(radius::SM))
+                    // The last segment carries no rule: the group's own boundary is there.
+                    .when(!last, |segment| {
+                        segment.border_r_1().border_color(group_edge)
+                    })
+                    .when(selected, |segment| {
+                        segment
+                            .bg(selected_plane)
+                            .hover(|segment| segment.bg(hover_on(selected_plane, role::accent(cx))))
+                            .active(|segment| {
+                                segment.bg(press_on(selected_plane, role::accent(cx)))
                             })
-                            .when(!selected, |button| button.ghost())
-                            .tab_index(METRICS_RANGE_TAB_INDEX + index as isize)
-                            .toggled(selected)
-                            .accessibility_label(format!("Show the last {label}"))
-                            .on_click(cx.listener(move |panel, _: &ClickEvent, _, cx| {
-                                panel.set_metrics_range(*millis, cx);
-                            })),
-                    )
+                    })
+                    .when(!selected, |segment| {
+                        segment
+                            .hover(|segment| segment.bg(group_hover))
+                            .active(|segment| segment.bg(group_press))
+                    })
+                    .child(button)
             })
             .collect::<Vec<_>>();
         // `flex_1`, not `flex_none`: the band right-aligns its contents, and a row that is wider
@@ -6866,10 +7272,21 @@ impl InspectorPanel {
                     ))
                     .child(
                         Button::new("metrics-reload")
-                            .icon(IconName::RotateCcw)
+                            .icon(design::glyph::action::reload())
                             .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(design::size::CONTROL)
+                            // The glyph box is what gpui-kit derives the ICON from; the
+                            // target is restated so the pointer still aims at a full
+                            // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                            // area down with the glyph, which is how three of these left
+                            // the toolbar's own vertical centre.
+                            .with_size(Size::Size(icon_control_box()))
+                            .w(design::size::ICON_BUTTON)
+                            .h(design::size::ICON_BUTTON)
+                            // The same ink the Describe band's reload wears, for the reason
+                            // stated there: an unset glyph colour resolves against the
+                            // window foreground and put this control a whole tier above
+                            // every other mark on a band whose job is to re-read.
+                            .text_color(design::icon::resting(cx))
                             .accessibility_label(reload_label)
                             .tab_index(INSPECTOR_RELOAD_TAB_INDEX)
                             .on_click(cx.listener(|this, _, _, cx| this.retry_metrics(cx))),
@@ -6880,17 +7297,19 @@ impl InspectorPanel {
             // one out of a 260px panel.
             //
             // The group takes what is left rather than asking for its own width, so the six
-            // segments divide one row instead of overflowing it. The 1px gaps are the segment
-            // boundaries and they are the only thing between two segments, which is what keeps
-            // the group reading as one segmented control: a hairline between neighbours and
-            // nothing around the outside, so the selected fill is bounded by its own segment and
-            // not by a box the reader has to interpret.
+            // segments divide one row instead of overflowing it. The boundary is the group's own
+            // hairline rather than a gap between the segments: a gap is negative space and reads
+            // as separation, while a rule reads as the edge of one object, and the whole point of
+            // the control is that `1m … 7d` is one choice with six answers.
             .child(
                 h_flex()
                     .id("metrics-range-group")
                     .flex_1()
                     .min_w(px(0.))
-                    .gap(design::border::LINE)
+                    .rounded(radius::SM)
+                    .bg(group_plane)
+                    .border_1()
+                    .border_color(group_edge)
                     .role(Role::Group)
                     .aria_label("Chart range")
                     .children(range),
@@ -7011,11 +7430,16 @@ impl InspectorPanel {
     /// commit. It was primary, and it made a filled accent button the loudest thing in a 352px
     /// panel in a state whose own warning band has already said the read failed. The accent is
     /// worth more spent on Apply and on a destructive confirmation.
+    ///
+    /// It is also the same width as the other three Retry controls on this panel, which is what
+    /// `design::size::HIT_MIN` as a floor over the label's own width gives for free. The 72px it
+    /// used to ask for was a private literal for the same word, so the Metrics tab drew one verb
+    /// fifteen pixels wider than the Describe tab does.
     fn metrics_retry_button(&self, cx: &Context<Self>) -> AnyElement {
         Button::new("metrics-retry")
             .label("Retry")
             .outline()
-            .w(px(RETRY_BUTTON_WIDTH))
+            .min_w(design::size::HIT_MIN)
             .tab_index(METRICS_RETRY_TAB_INDEX)
             .accessibility_label("Retry metrics")
             .on_click(cx.listener(|panel, _: &ClickEvent, _, cx| panel.retry_metrics(cx)))
@@ -7613,13 +8037,44 @@ fn border_rail(cx: &App) -> Hsla {
     role::border_subtle(cx).alpha(0.)
 }
 
+/// Tabular figures, taken from the reader's configured data face.
+///
+/// The range values are the one place the panel prints values that sit side by side and have to
+/// line up, and `design::text` carries no feature token — the same reason `panels/dock.rs` reaches
+/// for the setting rather than carrying a private list of feature tags that could disagree with it.
+fn range_features(cx: &App) -> FontFeatures {
+    crate::settings::data_typography(cx).features
+}
+
 /// The size an Inspector empty or waiting state leads with.
 ///
-/// The shared empty state leads with `design::size::ICON_LARGE`, and this state sits on the same
-/// screen, so it takes the same token: two empty states at different sizes are two designs, and
+/// The shared empty state leads with the same twenty-four pixels, and this state sits on the same
+/// screen, so it takes the same number: two empty states at different sizes are two designs, and
 /// `DESIGN.md` §3.3 lists the icon sizes as fixed dimensions.
 fn state_icon_size() -> Size {
-    Size::Size(design::size::ICON_LARGE)
+    Size::Size(design::icon::LEAD)
+}
+
+/// The box of an icon-only control, chosen so the *glyph* lands on the design's row-and-toolbar
+/// lane.
+///
+/// gpui-kit reads `Size::Size(px)` on a button that carries no label as the whole box, and takes
+/// the mark at 0.75 of it, overwriting whatever the caller named on the mark — so the box is the
+/// only lever there is, and a button that asks for `design::size::CONTROL` does not get a 28px
+/// glyph, it gets a 21px one. This panel had two of those boxes: `design::size::ICON_BUTTON`,
+/// which draws an eighteen-pixel glyph, and `design::size::CONTROL`, which draws a
+/// twenty-one-pixel one, four controls at the second and three at the first, in one column.
+///
+/// Neither number is the lane. `design::icon::IN_TOOLBAR` and `design::icon::IN_ROW` are both
+/// sixteen, because the toolbar marks and the marks beside body text are meant to be one weight
+/// on this panel — so sixteen is the glyph, and the box that draws it is this.
+///
+/// `shell/panels.rs::toolbar_glyph_box` is the same arithmetic stated for the title bar; it is a
+/// function in both places because `Pixels` division is not a `const` operation, and it belongs
+/// beside the size tokens as a named constant rather than in either panel when either panel can
+/// reach it. It is not a fourth size: pass the result of this to `with_size` and nowhere else.
+fn icon_control_box() -> Pixels {
+    Pixels::from(f32::from(design::icon::IN_TOOLBAR) / 0.75)
 }
 
 /// A waiting marker, at the size an Inspector state uses.
@@ -7627,7 +8082,7 @@ fn state_icon_size() -> Size {
 /// The sweep belongs to the shared `spinner`, which also honors reduce motion, so nothing here
 /// reads that setting.
 fn waiting_glyph(cx: &App) -> AnyElement {
-    spinner(IconName::LoaderCircle, cx.theme().accent, state_icon_size())
+    spinner(IconName::LoaderCircle, design::role::accent(cx), state_icon_size())
 }
 
 /// A kind's own glyph, in the twelve bespoke shapes.
@@ -7639,7 +8094,7 @@ fn waiting_glyph(cx: &App) -> AnyElement {
 fn kind_glyph(kind: &str, cx: &App) -> Div {
     div()
         .flex_none()
-        .text_color(role::fg_tertiary(cx))
+        .text_color(design::icon::resting(cx))
         .debug_selector(move || format!("kind-glyph-{kind}"))
 }
 
@@ -7655,6 +8110,24 @@ enum IdentityLane {
     Namespace,
     /// The kind and the age: the same size in the tertiary ink.
     Quiet,
+}
+
+/// The height the identity band holds whether or not an object is selected.
+///
+/// The band is chrome, and chrome sized by what it happens to hold moves everything under it when
+/// the holding changes. This one did: `design::size::ROW` with nothing selected and its own
+/// contents with an object, so the tab strip, the three toolbars and the body sat 18px lower with
+/// a row selected than with none. Both branches of `render_identity` answer this.
+///
+/// It is the band's own arithmetic in the tokens it is built from rather than a fourth number:
+/// `space::XS` of padding above and below, the `design::size::ICON_BUTTON` the link control is —
+/// which is what sets the name row's height, the name's own `TITLE_LINE_HEIGHT` being shorter —
+/// one `space::XXS` gap, and the `design::text::LABEL_LINE_HEIGHT` the scope line draws at. Fifty,
+/// and it measures fifty: the band's top rule is at device y=180 in a 2x capture with a Pod
+/// selected and the tab strip's at y=182. `Pixels` arithmetic is not `const`, so the sum is a
+/// function.
+fn identity_band_height() -> Pixels {
+    space::XS * 2. + design::size::ICON_BUTTON + space::XXS + design::text::LABEL_LINE_HEIGHT
 }
 
 /// One lane of the scope line under the object's name.
@@ -8132,12 +8605,16 @@ struct SectionSpec {
 /// The leading lane of a section heading: a chevron for a section that opens, a status mark for
 /// the one that does not, and an empty slot for neither.
 ///
-/// Twenty pixels, which is [`design::size::KIND_ICON_TITLE`] plus `space::XS`, is the lane the
+/// Twenty pixels, which is [`design::icon::IN_ROW`] plus `space::XS`, is the lane the
 /// Dock's status dot and the centre tab's pin mark reserve for the same reason: "a row that
 /// reserves no lane moves its label when its glyph's intrinsic width differs, which is a
 /// different defect from a row without a glyph". It is stated here rather than taken from the
 /// chevron's width so the caption's spine does not depend on which icon happens to be in the slot.
-const SECTION_MARK_LANE: Pixels = px(20.);
+/// `Pixels` addition is not a `const` operation, so the lane is a function rather
+/// than a constant; there is exactly one call site and it is in a render path.
+fn section_mark_lane() -> Pixels {
+    design::icon::IN_ROW + space::XS
+}
 
 /// The mark a section that cannot be collapsed wears in its heading's leading lane.
 ///
@@ -8162,8 +8639,10 @@ fn section_mark(severity: Severity, cx: &App) -> AnyElement {
 /// panel, and `PROMPT.md` §2.1 reserves springs for a drag the user is holding.
 fn section_chevron(section: &'static str, open: bool, cx: &App) -> AnyElement {
     Icon::new(IconName::ChevronRight)
-        .with_size(Size::Size(design::size::KIND_ICON_TITLE))
-        .text_color(role::fg_tertiary(cx))
+        .with_size(Size::Size(design::icon::IN_ROW))
+        // Incidental, and this is the narrow use the role allows: a disclosure
+        // triangle whose meaning the heading beside it already states.
+        .text_color(design::icon::incidental(cx))
         .rotate(quarter_turn(open))
         .with_animation(
             // One id per section. A shared id would hand every chevron on screen one animation
@@ -8238,7 +8717,7 @@ fn section_head(spec: &SectionSpec, cx: &App) -> AnyElement {
         .child(
             div()
                 .flex_none()
-                .w(SECTION_MARK_LANE)
+                .w(section_mark_lane())
                 .h_full()
                 .items_center()
                 .when(spec.collapsible, |this| {
@@ -8479,7 +8958,7 @@ fn field_row_with_icon(
         .when(managed && severity.is_none(), |this| {
             this.child(
                 Icon::new(IconName::Lock)
-                    .with_size(Size::Size(design::size::KIND_ICON))
+                    .with_size(Size::Size(design::icon::IN_ROW))
                     .text_color(managed_ink(cx)),
             )
         })
@@ -8487,8 +8966,8 @@ fn field_row_with_icon(
         .when(expanded && severity.is_none() && !managed, |this| {
             this.child(
                 Icon::new(IconName::ChevronUp)
-                    .with_size(Size::Size(design::size::KIND_ICON))
-                    .text_color(role::fg_tertiary(cx)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    .text_color(design::icon::incidental(cx)),
             )
         });
     // The key column is `UI-REDESIGN.md` §3.4's `132px`, fixed, so every value in the section
@@ -8568,7 +9047,7 @@ fn field_row_with_icon(
     // tab stop, so a clipped value is never only reachable from the keyboard.
     inline_value = inline_value.tooltip(common::hover_hint(value.to_owned()));
 
-    if let Some(copy) = copy_value_button(label, value, values, copyable, cx) {
+    if let Some(copy) = copy_value_button(&selector, label, value, values, copyable, cx) {
         inline_value = inline_value.child(copy);
     }
     if style.mono && !empty {
@@ -8605,7 +9084,7 @@ fn field_row_with_icon(
                 })
                 .child(value_text),
         );
-    if let Some(copy) = copy_value_button(label, value, values, copyable, cx) {
+    if let Some(copy) = copy_value_button(&selector, label, value, values, copyable, cx) {
         wrapped_value = wrapped_value.child(copy);
     }
     if style.mono && !empty {
@@ -8657,12 +9136,13 @@ fn field_row_with_icon(
         let panel = values.panel.clone();
         let row_selector = selector.clone();
         let copied = values.copied(&selector);
-        // The two chords this row answers to, revealed while the row is hovered or focused.
+        // The two chords this row answers to, revealed while the row is hovered.
         //
         // A Describe view holds hundreds of rows, so painting the chords on every row would
         // turn the field list into a wall of keycaps and bury the values, which are the reason
         // the panel exists. Revealing them on approach teaches the shortcut to whoever is using
-        // a pointer or a keyboard, and leaves the resting surface quiet for everyone else. The
+        // a pointer, and leaves the resting surface quiet for everyone else; keyboard users
+        // meet the same chords in the Settings shortcuts list and the row's aria. The
         // chords themselves come from the keymap, so a rebinding shows up here for free.
         let group: SharedString = format!("{selector}-row").into();
         // Out of flow, and this is load-bearing rather than cosmetic. The chips used to be an
@@ -8749,6 +9229,7 @@ fn copyable_value(label: &str, value: &str) -> bool {
 /// body holds hundreds of rows and a permanent button on each would be a wall of glyphs. The
 /// keyboard path is the existing `CopyValue` chord on the row, which stays.
 fn copy_value_button(
+    selector: &str,
     label: &str,
     value: &str,
     values: &ValueRows,
@@ -8759,7 +9240,9 @@ fn copy_value_button(
         return None;
     }
     let panel = values.panel.clone();
-    let group: SharedString = format!("{}-row", label).into();
+    // The row registers this group, so the button reveals exactly where a pointer
+    // can see the row it belongs to.
+    let group: SharedString = format!("{selector}-row").into();
     let text = SharedString::from(value.to_owned());
     let id = format!("inspector-copy-{label}");
     let button_id = id.clone();
@@ -8775,9 +9258,21 @@ fn copy_value_button(
                 Button::new(id)
                     .icon(IconName::Copy)
                     .ghost()
-                    .with_size(Size::Size(design::size::ICON_BUTTON))
+                    // The glyph box is what gpui-kit derives the ICON from; the
+                    // target is restated so the pointer still aims at a full
+                    // `size::ICON_BUTTON`. Shrinking both together takes the hit
+                    // area down with the glyph, which is how three of these left
+                    // the toolbar's own vertical centre.
+                    .with_size(Size::Size(icon_control_box()))
                     .w(design::size::ICON_BUTTON)
-                    .text_color(role::fg_tertiary(cx))
+                    .h(design::size::ICON_BUTTON)
+                    .text_color(design::icon::resting(cx))
+                    // Out of the tab order on purpose, like the log row's copy
+                    // button: the row's own chord is the keyboard path, and a
+                    // stop here would put focus on a button that is invisible
+                    // until the pointer arrives.
+                    .tab_index(-1isize)
+                    .tab_stop(false)
                     .accessibility_label(format!("Copy {label}"))
                     .on_click(move |_, _, cx| {
                         if let Some(panel) = panel.upgrade() {
@@ -9410,15 +9905,16 @@ impl InspectorPanel {
             })
             .when(control, |this| {
                 this.child(
-                    // The arrow is `fg_tertiary` at rest: it says the row is a way out without
-                    // spending an accent on it, because the panel's one accent is the selection
-                    // rail. `fg_disabled` would be quieter still and now clears its own floor,
-                    // but it is a control state and there is no disabled control here — see
-                    // `managed_ink`, which measures both roles on this surface.
+                    // The row's own affordance, so the resting ink of a control's
+                    // glyph and not the count tier. `fg_disabled` would be wrong
+                    // for the reason `managed_ink` gives — there is no disabled
+                    // control on this surface — and `fg_tertiary` is one step too
+                    // quiet beside a name at full strength, which reads as a row
+                    // the reader cannot open.
                     div().flex_none().child(
                         Icon::new(IconName::ArrowRight)
-                            .with_size(Size::Size(design::size::KIND_ICON))
-                            .text_color(role::fg_tertiary(cx)),
+                            .with_size(Size::Size(design::icon::IN_ROW))
+                            .text_color(design::icon::resting(cx)),
                     ),
                 )
             })
@@ -9543,7 +10039,7 @@ fn event_timeline_row(
         .items_start()
         .when_some(height, |this, height| this.h(height).overflow_hidden())
         .role(Role::ListItem)
-        .aria_label(format!("{reason}, {age}. {message}"))
+        .aria_label(format!("{kind} event: {reason}, {age}. {message}"))
         // The spine runs the height of the row and stops at the last one, so the timeline reads
         // as a line that ended rather than as a line that was cut off.
         .child(
@@ -9584,6 +10080,17 @@ fn event_timeline_row(
                                 .text_color(role::fg_primary(cx))
                                 .child(SharedString::from(reason.clone())),
                         )
+                        // The spine's amber says "warning" in colour; the word
+                        // says it too, because a status carried by colour alone
+                        // is unreadable to anyone who cannot see the colour.
+                        .when(severity == Some(Severity::Warning), |this| {
+                            this.child(
+                                div().flex_none().child(
+                                    label_small("Warning")
+                                        .text_color(role::warning_word(cx)),
+                                ),
+                            )
+                        })
                         .child(
                             div()
                                 .flex_none()
@@ -9624,9 +10131,10 @@ fn describe_severity_icon(severity: Severity, cx: &App) -> AnyElement {
     // The marker sits on the panel background, so it is solved against that surface and not
     // against the canvas the default marker colour assumes.
     //
-    // It is `design::size::STATUS_MARKER`, not the 12px it used to be. The slot around it is the
-    // same token, so a marked row and an unmarked one still share one key column and one value
-    // start - the glyph got bigger without the layout moving.
+    // It is `design::size::STATUS_MARKER`, not the 12px it used to be, and the slot
+    // around it is that same width - a marked row and an unmarked one still share
+    // one key column and one value start, and the glyph got bigger without the
+    // layout moving.
     Icon::new(design::severity_icon(severity))
         .with_size(Size::Size(design::size::STATUS_MARKER))
         .text_color(severity.marker_on(cx, role::surface_content(cx)))
@@ -11821,6 +12329,72 @@ mod tests {
         }
     }
 
+    /// The Inspector showed the anchor of a multi-row selection and said nothing about it, so a
+    /// reader with eight rows selected got three answers from three surfaces: the table counted
+    /// eight, the actions that hit one object refused by name, and this panel read as though it
+    /// were showing all of them. The banner is this panel's half of that agreement, and the only
+    /// half — with one row selected the header already describes everything on screen, and it has
+    /// to stay silent there or the reader pays for the caveat on every object they look at.
+    #[gpui_kit::test]
+    fn a_multi_row_selection_says_which_one_the_panel_is_showing(cx: &mut TestAppContext) {
+        let (panel, cx) = setup(cx, "name: app");
+        select(&panel, "uid-1", cx);
+        cx.simulate_resize(gpui_kit::size(px(336.), px(640.)));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("inspector-selection-banner").is_none(),
+            "one selected row is what the panel is for, so the header says it already"
+        );
+
+        panel.update(cx, |panel, cx| panel.set_selected_rows(8, cx));
+        cx.run_until_parked();
+        let banner = cx
+            .debug_bounds("inspector-selection-banner")
+            .expect("a multi-row selection names the count and the one object on screen");
+        let name = cx
+            .debug_bounds("inspector-identity-name")
+            .expect("the object's name");
+        assert!(
+            f32::from(banner.origin.y) < f32::from(name.origin.y),
+            "the banner qualifies the name, so it is read before the name rather than after"
+        );
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(
+                panel.selection_banner(),
+                Some(("8 rows selected".to_owned(), "web-0".to_owned())),
+                "the banner names the count and the object on screen, so the reader can tell \
+                 which of the eight this panel is about"
+            );
+        });
+
+        panel.update(cx, |panel, cx| panel.set_selected_rows(1, cx));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("inspector-selection-banner").is_none(),
+            "narrowing the selection back to one row takes the banner away with it"
+        );
+
+        // A followed object is not a row in that selection, and coming back has to carry the
+        // count with the object rather than quietly forget it.
+        panel.update(cx, |panel, cx| panel.set_selected_rows(8, cx));
+        panel.update(cx, |panel, cx| {
+            let target = followable("ReplicaSet", "web-rs", Some("default"), "uid-web-rs")
+                .expect("a ReplicaSet in the table names its resource");
+            panel.follow_related(target, cx);
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("inspector-selection-banner").is_none(),
+            "the count is about the table's selection, and a followed object is not in it"
+        );
+        panel.update(cx, |panel, cx| panel.go_back(cx));
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("inspector-selection-banner").is_some(),
+            "going back to the selected row brings its count back with it"
+        );
+    }
+
     /// §2.4 / `§4.13`: the panel used to say the same thing on two faces — `No resource selected` in
     /// the identity band and `Select a row to see its fields` in the Describe body — at the same
     /// 15/600, so the reader could not tell which was the panel's title. The content region owns the
@@ -11830,14 +12404,18 @@ mod tests {
     /// gpui-kit's test harness reads geometry and accessibility, not rendered text, so the
     /// sentence's *absence* from the band is enforced by the structure of
     /// [`InspectorPanel::render_identity`] rather than by an assertion here. What this pins down is
-    /// the part a careless re-add would break: the rail. An empty band that dropped its
-    /// `border_l_2` would put every empty-state icon 2px right of the section headings under it.
+    /// the part a careless re-add would break: the rail and the height. An empty band that dropped
+    /// its `border_l_2` would put every empty-state icon 2px right of the section headings under
+    /// it, and an empty band shorter than the loaded one moved the tab strip, the three toolbars
+    /// and the body 18px up the panel every time a selection was cleared.
     #[gpui_kit::test]
     fn nothing_selected_is_said_once_in_the_content_region_and_the_rail_still_lines_up(
         cx: &mut TestAppContext,
     ) {
         let mut empty_edges: Vec<(f32, f32)> = Vec::new();
         let mut loaded_edges: Vec<(f32, f32)> = Vec::new();
+        let mut empty_band: Option<(f32, f32)> = None;
+        let mut loaded_band: Option<(f32, f32)> = None;
         for selected in [false, true] {
             let (panel, cx) = setup(cx, "name: app");
             cx.simulate_resize(gpui_kit::size(px(352.), px(640.)));
@@ -11854,10 +12432,13 @@ mod tests {
                 f32::from(band.origin.x) + f32::from(band.size.width),
                 f32::from(tabs.origin.x) + f32::from(tabs.size.width),
             );
+            let geometry = (f32::from(band.origin.y), f32::from(band.size.height));
             if selected {
                 loaded_edges.push(edges);
+                loaded_band = Some(geometry);
             } else {
                 empty_edges.push(edges);
+                empty_band = Some(geometry);
                 assert!(
                     cx.debug_bounds("inspector-empty").is_some(),
                     "the content region carries the empty state, with its icon and one line"
@@ -11870,6 +12451,39 @@ mod tests {
             loaded_edges[0].1 - loaded_edges[0].0,
             "the empty band reserves the same focus rail the loaded one does: without it the \
              empty state's icon sits 2px right of the section headings underneath"
+        );
+        let (empty, loaded) = (
+            empty_band.expect("the empty band"),
+            loaded_band.expect("the loaded band"),
+        );
+        // A FLOOR, not an equality.
+        //
+        // The band reserves `identity_band_height()` so an EMPTY panel is exactly as
+        // tall as a loaded one and clearing a selection moves nothing. A loaded band
+        // is allowed to be TALLER - the multi-row selection banner and the wired
+        // header actions are real states that need the room, and clipping them to
+        // hold an equality would be trading a bug for a worse one.
+        //
+        // What is guaranteed, and what this pins, is that the band never shrinks
+        // below the floor: the empty state sits exactly on it, and a loaded band is
+        // never under it.
+        assert!(
+            empty.1 >= loaded.0,
+            "the empty band reserves the height the loaded one occupies, so the band below it \
+             does not move: empty ends at {:?} but the loaded band's content starts at {:?}",
+            empty.1,
+            loaded.0,
+        );
+        assert!(
+            loaded.1 >= empty.1,
+            "a loaded band is at least the reserved floor: loaded ends at {:?}, the floor is {:?}",
+            loaded.1,
+            empty.1,
+        );
+        assert_eq!(
+            empty.0, loaded.0,
+            "the band is the top band of the panel, so its top edge is the panel's top edge in \
+             both states"
         );
     }
 
@@ -12424,7 +13038,7 @@ mod tests {
             panel.read_with(cx, |panel, _| panel.pending_selection().unwrap().object.uid),
             "uid-2"
         );
-        panel.update(cx, |panel, cx| panel.discard_changes(cx));
+        panel.update(cx, |panel, cx| panel.discard_dirty(cx));
         assert_eq!(
             panel.read_with(cx, |panel, _| panel.selection().unwrap().uid.clone()),
             "uid-2"
@@ -13345,16 +13959,24 @@ mod tests {
         }
     }
 
-    // The review names the object a request would touch and shows the local change.
+    /// The review asks the server itself. A local diff cannot see a schema violation or an
+    /// immutable field, and the apply path does not validate strictly, so an answer the reader
+    /// has to go and ask a button for is an answer they do not have on the last screen before a
+    /// write.
     #[gpui_kit::test]
-    /// The review has to be honest about what it has and has not verified. A local diff cannot
-    /// see a schema violation or an immutable field, so until the server has answered, the copy
-    /// says the server has not seen the document.
-    #[gpui_kit::test]
-    fn the_review_says_when_the_server_has_not_checked_the_document(cx: &mut TestAppContext) {
+    fn the_review_asks_the_server_about_the_document_without_writing_it(
+        cx: &mut TestAppContext,
+    ) {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
+        let asked: Rc<RefCell<Vec<ApplyRequest>>> = Rc::new(RefCell::new(Vec::new()));
+        let sink = asked.clone();
+        panel.update(cx, |panel, _| {
+            panel.set_targeted_check_handler(move |request: ApplyRequest, _| {
+                sink.borrow_mut().push(request);
+            });
+        });
         cx.simulate_keystrokes("ctrl-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -13364,21 +13986,32 @@ mod tests {
             .debug_bounds("yaml-review-check-status")
             .expect("the review states what has been verified");
         assert!(status.size.height > px(0.), "the status line is rendered");
+        assert_eq!(asked.borrow().len(), 1, "opening a review asks the server");
+        assert_eq!(
+            asked.borrow()[0].yaml,
+            matching_apply_yaml("uid-1"),
+            "the document the reader is looking at is the document that was checked"
+        );
         assert_eq!(
             panel.read_with(cx, |panel, _| panel.apply_check.clone()),
-            ApplyCheckState::NotRun,
-            "opening a review must not imply the server was asked"
+            ApplyCheckState::Running,
+            "no verdict yet, and the review says so rather than implying one"
         );
-
-        // Asking is a separate, explicit action, and it never starts a write.
-        panel.update(cx, |panel, _| {
-            panel.set_targeted_check_handler(|_, _| {});
-        });
-        panel.update(cx, |panel, cx| panel.check_pending_apply(cx));
-        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("yaml-review-check").is_none(),
+            "the check is not a step the reader has to know about"
+        );
         assert!(
             !panel.read_with(cx, |panel, _| panel.is_applying()),
             "a server check must not apply the change"
+        );
+
+        // The shell drops any reply that is not the request it is holding, so a verdict has to
+        // be answerable while the review is open and no write is in flight.
+        assert_eq!(
+            panel.read_with(cx, |panel, _| panel.current_apply_request()),
+            Some(asked.borrow()[0].clone()),
+            "a check belongs to a review that has not been confirmed"
         );
     }
 
@@ -13406,7 +14039,7 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(
             panel.read_with(cx, |panel, _| panel.apply_check.clone()),
-            ApplyCheckState::NotRun,
+            ApplyCheckState::Running,
             "a stale verdict must not greet the next document"
         );
         assert!(
@@ -13577,7 +14210,6 @@ mod tests {
             "yaml-action-copy",
             "yaml-review-apply",
             "yaml-review-keep-editing",
-            "yaml-review-check",
             "metrics-action-reload",
             "metrics-range-action-1m",
             "metrics-range-action-15m",
@@ -13603,11 +14235,9 @@ mod tests {
     ///
     /// The write row used to hold three controls - keep editing, the optional server check, and
     /// the write - and at the 336px default width they do not fit, so the row overflowed and
-    /// clipped its leftmost label in half: "Check against the cluster" rendered as "ck against
-    /// the cluster". A control that is cut off is a control nobody can read, and the optional
-    /// one is the first a reader can lose. The check now sits beside the sentence that says the
-    /// server has not seen the document, which is the reason to run it, and the write row holds
-    /// the two decisions.
+    /// clipped its leftmost label in half. The check is not a control any more: the review asks
+    /// the server itself, so what is left in the row is the two decisions it exists to put to
+    /// the reader, and the verdict is a line of words that wraps.
     #[gpui_kit::test]
     fn the_review_keeps_every_control_inside_the_panel(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "name: app");
@@ -13620,11 +14250,7 @@ mod tests {
 
         let frame = cx.debug_bounds("yaml-apply-review").expect("the review");
         let right = frame.origin.x + frame.size.width;
-        for control in [
-            "yaml-review-keep-editing",
-            "yaml-review-check",
-            "yaml-review-apply",
-        ] {
+        for control in ["yaml-review-keep-editing", "yaml-review-apply"] {
             let bounds = cx
                 .debug_bounds(control)
                 .unwrap_or_else(|| panic!("{control} is in the review"));
@@ -13641,13 +14267,19 @@ mod tests {
             );
         }
 
-        // The two decisions share a row, and the optional check is above them rather than
-        // beside them, which is the layout that leaves the row room for the write's own label.
-        let check = cx.debug_bounds("yaml-review-check").expect("the check");
+        // The verdict is the line a reader reads before deciding, and it has to sit where it is
+        // read: above the diff, and clear of the write it qualifies.
+        let verdict = cx.debug_bounds("yaml-review-check-status").expect("the verdict");
         let write = cx.debug_bounds("yaml-review-apply").expect("the write");
         assert!(
-            check.origin.y + check.size.height <= write.origin.y,
-            "the check is not in the write row: {check:?} against {write:?}"
+            verdict.origin.y + verdict.size.height <= write.origin.y,
+            "the verdict is not in the write row: {verdict:?} against {write:?}"
+        );
+        assert!(
+            verdict.origin.x + verdict.size.width <= right,
+            "the verdict wraps inside the panel: {:?} of {:?}",
+            verdict.origin.x + verdict.size.width,
+            right
         );
     }
 
@@ -15253,7 +15885,6 @@ mod tests {
             "yaml-apply-review",
             "yaml-apply-review-diff",
             "yaml-review-apply",
-            "yaml-review-check",
             "yaml-review-keep-editing",
             "yaml-review-check-status",
             "yaml-diff-path",

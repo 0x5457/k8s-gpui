@@ -14,7 +14,7 @@
 //!   "`?` opens a shortcut reference", and its own note is that this is "far
 //!   more useful than a 6211-line settings view". It is a destination with its
 //!   own search box, not a page of settings.
-//! * Integrations became **read-only status rows on Cluster**, because a probe
+//! * Integrations became **readonly status rows on Cluster**, because a probe
 //!   result is a fact about the environment and not a preference.
 //! * About became the **version row on Updates**, because a build number and
 //!   the updater that replaces it are one fact.
@@ -139,10 +139,11 @@ fn settings_search_width() -> gpui_kit::Pixels {
 /// The page's own inset: the distance from the measure's edge to the first
 /// column of every band on the surface.
 ///
-/// One number for the title bar, the search field, the tab strip, the rows, the
-/// shortcut reference and the footer, because a heading, a toolbar, a row and a
-/// footer that describe the same level must not each invent a slightly different
-/// leading edge — one rendered pixel apart is a defect, not an approximation.
+/// One number for the title bar, the search field, the category navigation, the
+/// rows, the shortcut reference and the danger zone, because a heading, a
+/// toolbar, a row and a footer that describe the same level must not each invent
+/// a slightly different leading edge — one rendered pixel apart is a defect, not
+/// an approximation.
 ///
 /// It is the row grid's own horizontal padding rather than a wrapper's, on
 /// purpose: the control column is measured from the trailing edge of the content
@@ -174,23 +175,67 @@ const SETTINGS_FIELD_WIDTH: f32 = 128.;
 /// arithmetic rather than a third number: 200 + the 72px the column has spare is
 /// the room every other kind of control is measured against.
 const SETTINGS_VALUE_LANE: f32 = 200.;
-/// Narrowest window the shell allows. Below the row floor the two-column row
+/// The narrowest window the shell allows, and the floor every breakpoint on
+/// this surface sits at or above.
+///
+/// One number for the row grid and the window, because the row grid's own
+/// arithmetic lands on it: the 288px label column, the 272px control column,
+/// the 24px gutter and the 32px of page inset. Below it the two-column row
 /// stops fitting and the rows stack.
 const SETTINGS_MIN_WINDOW_WIDTH: f32 = 960.;
+
+/// The navigation rail's own width.
+///
+/// A fixed lane rather than a proportion of the window: the rail holds the six
+/// category names, and a name is what has to stay on one line. At 200 the
+/// longest of them — `Data & privacy` at the category navigation's own 13/500 —
+/// has room for its own row padding and a second locale's longer spelling beside
+/// it, while the content column still gets the 640px measure it was drawn for out
+/// of the window's own 960px minimum.
+const SETTINGS_NAV_WIDTH: f32 = 200.;
+
+/// The width at which the rail appears.
+///
+/// The arithmetic of the two columns and the gutter between them, which is the
+/// same arithmetic `compact_settings_layout` uses for the stacked row: the
+/// rail, one gutter, the measure — 856px. Below it the rail and the measure
+/// cannot both be whole, so the surface falls back to the horizontal category
+/// strip rather than drawing a rail that squeezes the form's own two columns.
+///
+/// It is a *viewport* threshold rather than a window one, because this surface
+/// is also a tab inside the main window: there the pane it draws into is the
+/// centre panel, which is narrower than the window behind it once the resource
+/// tree has its share. The Settings window never sees it — its own minimum is
+/// the shell's floor, which is above the number here — so on the window of its
+/// own the rail is always up, and the strip is the tab's fallback and not a
+/// second state of the same window.
+fn settings_nav_rail(viewport_width: f32) -> bool {
+    viewport_width >= SETTINGS_NAV_WIDTH + f32::from(space::LG) + SETTINGS_CONTENT_MAX_WIDTH
+}
 
 /// The size the Settings window opens at.
 ///
 /// `UI-SPEC` §15.2 asks for an independent window, and this is the size that
-/// window is built from: the width is the row floor above, and the height is the
-/// title bar, the search line and the category rail over a page that scrolls.
+/// window is built from: the width is the shell's floor above, which is above
+/// the width at which the navigation rail and the whole 640px measure sit side by
+/// side with the gutter between them — so the window opens on the layout it is
+/// designed for rather than on the tab fallback, and the only slack in it is the
+/// 120px past the measure rather than a second screen's worth of field. The
+/// height is the title bar, the search line and the category rail over a page
+/// that scrolls.
 pub const SETTINGS_WINDOW_SIZE: (f32, f32) = (SETTINGS_MIN_WINDOW_WIDTH, 760.);
 
 /// The narrowest and shortest the Settings window may be resized to.
 ///
-/// The width is the same row floor, and the height is the compact layout's own
-/// floor rather than a borrowed number: below it the title bar, the search line
-/// and the category rail no longer fit together, and a settings window that
-/// cannot show its own navigation is a window a person has to guess in.
+/// The width is the shell's own floor and not this surface's layout arithmetic,
+/// for the reason `design::size::WINDOW_MIN` gives: every breakpoint in this
+/// product is at or above it. The layout's own rail threshold is *below* it, so
+/// the rail is up across the window's whole resize range and the strip in
+/// `render_tabs` is reachable only from the shell tab, where the pane is
+/// narrower than the window. The height is the compact layout's own floor rather
+/// than a borrowed number: below it the title bar, the search line and the
+/// category navigation no longer fit together, and a settings window that cannot
+/// show its own navigation is a window a person has to guess in.
 pub const SETTINGS_WINDOW_MIN: (f32, f32) = (SETTINGS_MIN_WINDOW_WIDTH, 560.);
 
 /// How often the shortcut reference re-reads the keymap generation.
@@ -247,10 +292,10 @@ const REFERENCE_SUMMARY: &str =
 /// The caption is the sentence that makes the zone readable: a row of red
 /// buttons at the bottom of a window with nothing above it looks like a bug,
 /// and this is what says the two things there are the two things that cannot be
-/// undone.
+/// undone, and what each one deletes. It names the consequence before the press
+/// rather than after it, because the press that matters is the second one.
 const DANGER_ZONE_LABEL: &str = "Danger zone";
-const DANGER_ZONE_CAPTION: &str =
-    "These two cannot be undone. Everything else here takes effect as you change it.";
+const DANGER_ZONE_CAPTION: &str = "Neither can be undone. Clear cache deletes every cached snapshot and discovery result; Reset all settings restores every preference in this window. Everything else here takes effect as you change it.";
 const CLEAR_CACHE_LABEL: &str = "Clear cache";
 const CLEAR_CACHE_ARMED_LABEL: &str = "Delete the cache";
 const CLEAR_CACHE_CONFIRM: &str = "Clear cache deletes every cached snapshot and discovery result under the cache folder. The cluster is not affected.";
@@ -280,7 +325,7 @@ const RETRY_LABEL: &str = "Retry";
 const SAVING_LABEL: &str = "Saving…";
 
 const UPDATES_UNAVAILABLE_MESSAGE: &str =
-    "Application updates are unavailable in this build. Use a k8s-gpui build with update support.";
+    "Application updates are unavailable in this build. Use a K8s Studio build with update support.";
 
 /// The theme family that ships with the product. Everything else is a Zed theme.
 const K8S_STUDIO_THEME_PREFIX: &str = "K8s Studio";
@@ -373,19 +418,13 @@ fn unsupported_update_state() -> UpdateUiState {
     UpdateUiState::new(UpdatePhase::Unsupported).with_error(UPDATER_UNAVAILABLE_REASON)
 }
 
-/// The semantic colour a severity paints with, off the role layer.
+/// The semantic colour a severity paints with.
 ///
-/// `Severity` still classifies; the *colour* is named here so this file holds no
-/// copy of the legacy skin field.
+/// One mapping for the whole product, and this is it: `role::status_for`
+/// keeps `Success` quiet (healthy is the absence of a channel), which is why
+/// an up-to-date check is grey here and in the Shell's update strip alike.
 fn severity_color(severity: Severity, cx: &App) -> Hsla {
-    match severity {
-        Severity::Success => design::role::success(cx),
-        Severity::Warning => design::role::warning(cx),
-        Severity::Error => design::role::danger(cx),
-        Severity::Info => design::role::info(cx),
-        Severity::Neutral => design::role::fg_primary(cx),
-        Severity::Muted => design::role::fg_tertiary(cx),
-    }
+    design::role::status_for(severity, cx)
 }
 
 // ---------------------------------------------------------------------------
@@ -482,7 +521,7 @@ enum Control {
     /// derived from how many answers there are, in [`Control::for_choices`].
     Choices,
     /// A value nothing writes here: a build number, a probe result.
-    ReadOnly,
+    Readonly,
     /// A button that goes somewhere.
     Action,
 }
@@ -686,7 +725,7 @@ impl Setting {
                 step: 64.,
                 unit: "MB",
             },
-            Self::Helm | Self::ClusterMetrics | Self::Version => ReadOnly,
+            Self::Helm | Self::ClusterMetrics | Self::Version => Readonly,
             Self::CacheLocation => Path,
             Self::ShortcutReference | Self::CheckForUpdates => Action,
             Self::Theme
@@ -1018,7 +1057,7 @@ const SPECS: &[SettingSpec] = &[
         SettingsCategory::Cluster,
         "Helm",
         "Inspect and manage releases",
-        "Install the Helm CLI to inspect and manage releases. k8s-gpui does not include Helm.",
+        "Install the Helm CLI to inspect and manage releases. K8s Studio does not include Helm.",
         "releases cli tool integration",
         None,
     ),
@@ -1150,7 +1189,7 @@ const SPECS: &[SettingSpec] = &[
         SettingsCategory::Updates,
         "Version",
         "The installed build",
-        "The installed k8s-gpui build. Copy it into a bug report.",
+        "The installed K8s Studio build. Copy it into a bug report.",
         "about build number release",
         None,
     ),
@@ -1159,7 +1198,7 @@ const SPECS: &[SettingSpec] = &[
         SettingsCategory::Updates,
         "Check now",
         "Look for a newer build",
-        "Look for a newer k8s-gpui build for this installation.",
+        "Look for a newer K8s Studio build for this installation.",
         "update upgrade download now",
         None,
     ),
@@ -1645,15 +1684,40 @@ pub struct SettingsView {
     reference: bool,
     /// Whether the window is too narrow for the two-column row.
     compact: bool,
-    /// How far the content measure sits in from each side of the window.
+    /// Whether the categories are drawn as a rail beside the content rather than
+    /// as a strip above it.
+    ///
+    /// One boolean read from the window's own width, because the two layouts
+    /// differ in more than where the names are drawn: they differ in what the
+    /// chrome bands are inset by, and a band that asked the layout engine to
+    /// place itself would put the search field on a different spine from the
+    /// rows underneath it.
+    nav_rail: bool,
+    /// The rail's own scroll handle, kept apart from the content's because the
+    /// two panes scroll independently and one handle would tie them together.
+    nav_scroll: ScrollHandle,
+    /// Where the chrome bands start, measured from the window's leading edge.
     ///
     /// Read from the window once per frame rather than asked of the layout
-    /// engine, because "centre a capped column in whatever width the window is"
-    /// is a number and the surface needs the number on eight separate bands that
-    /// all have to agree to the pixel. `Spatial grammar`'s "repeated gaps are
-    /// quality invariants" is not satisfiable when eight boxes each ask a flex
-    /// container to do the arithmetic on its own.
+    /// engine, because "line the title bar, the search line and the rows up
+    /// with the content column" is a number and the surface needs the number on
+    /// eight separate bands that all have to agree to the pixel. `Spatial
+    /// grammar`'s "repeated gaps are quality invariants" is not satisfiable when
+    /// eight boxes each ask a flex container to do the arithmetic on its own.
+    ///
+    /// It is a leading edge, not a symmetric margin: with the rail up it is the
+    /// rail's width plus the gutter beside it, so every band in the chrome
+    /// plane starts on the same x the content column does; without it, the
+    /// narrow fallback centres the measure because a capped column pinned to
+    /// one edge of a wide window reads as content that failed to fill it.
     measure_inset: gpui_kit::Pixels,
+    /// Where the full-width chrome bands start.
+    ///
+    /// The same number as [`Self::measure_inset`] when the categories are a
+    /// strip, and the rail's own width plus the gutter beside it when they are
+    /// a rail: the title bar spans the window, so its contents have to start
+    /// where the content column does rather than at the window's edge.
+    chrome_inset: gpui_kit::Pixels,
     open_menu: Option<OpenMenu>,
     menu: Option<OpenMenuState>,
     category: SettingsCategory,
@@ -1742,7 +1806,10 @@ impl SettingsView {
             search_query: String::new(),
             reference: false,
             compact: false,
+            nav_rail: false,
+            nav_scroll: ScrollHandle::new(),
             measure_inset: px(0.),
+            chrome_inset: px(0.),
             open_menu: None,
             menu: None,
             category: layout.category.unwrap_or(SettingsCategory::Appearance),
@@ -2359,7 +2426,7 @@ impl SettingsView {
     /// The button a ready update needs, or nothing while the update is not ready.
     fn update_restart_label(&self) -> Option<&'static str> {
         (self.update_state.phase == UpdatePhase::Ready && self.update_actions.is_some())
-            .then_some("Restart to Update")
+            .then_some("Restart to update")
     }
 
     // -- danger zone -------------------------------------------------------
@@ -2448,7 +2515,8 @@ impl SettingsView {
         }
         self.text_synced.clear();
         self.clear_error();
-        self.notice("Settings reset to defaults.".to_owned(), Severity::Info, cx);
+        // No success toast: every control in the window visibly moves back to
+        // its default, which is the confirmation.
     }
 
     // -- shortcut recording ------------------------------------------------
@@ -2819,7 +2887,7 @@ fn new_search_field(cx: &mut Context<SettingsView>) -> Entity<TextInput> {
         .with_accessibility(
             "Search settings",
             "Enter a name, a description or a category to filter. Press Escape to clear the search.",
-            "Clear Settings Search",
+            "Clear settings search",
         )
         .with_width(settings_search_width() - space::LG * 2.)
     })
@@ -3033,22 +3101,22 @@ impl FieldState {
 // Render
 // ---------------------------------------------------------------------------
 
-/// One band of the page, held to the content measure and centred in whatever
-/// width the window happens to be.
+/// One band of the page, held to the content measure and placed at the content
+/// column's leading edge.
 ///
-/// Centred rather than left-aligned, and the choice is the whole of what a
-/// maximised window looks like. A 640px measure pinned to the leading edge of a
-/// 1920px window leaves 1280px of field on one side only, so the page reads as
-/// content that failed to fill its window rather than as a short document;
-/// centred, the same page has the same margin on both sides at every width and
-/// the spine a reader's eye runs down is the same spine in a tiled 960px window
-/// and in a maximised one.
+/// The inset the caller passes is that leading edge, read once per frame from
+/// the window's width, and the band's contents are capped at the measure on the
+/// *inside* of it. So with the rail up a band starts over the rail's own width
+/// and runs to the end of the measure; without it the window is narrow enough
+/// that the same number centres the measure, which is the right answer there
+/// because a capped column pinned to one edge of a window wider than itself
+/// reads as content that failed to fill the window.
 ///
 /// The bands that carry a background or a hairline keep it on *this* element's
 /// full width — chrome belongs to the window, the document belongs to the
-/// measure — and only their contents are capped. A hairline under a centred
-/// 640px tab strip floating in the middle of a wide window would be a line drawn
-/// around nothing.
+/// measure — and only their contents are capped. A hairline under a 640px tab
+/// strip floating in the middle of a wide window would be a line drawn around
+/// nothing.
 fn measure_band(inset: gpui_kit::Pixels) -> Div {
     div()
         .w_full()
@@ -3071,13 +3139,19 @@ fn measure_band(inset: gpui_kit::Pixels) -> Div {
 /// trigger — a field that answers with a choice — and left off a push button,
 /// which is the arrangement `Interface language` asks for: a `Button` is an
 /// application action and an outlined box is a control the reader fills in.
+///
+/// `radius::MD` because that is the product's radius for a button and a card,
+/// and it is what the segmented track beside it is drawn with: the two kinds of
+/// control share one column on every page, and a `radius::SM` button under a
+/// `radius::MD` track is two corners a reader can see differ without being able
+/// to say why.
 fn token_button(id: impl Into<gpui_kit::ElementId>, label: &str, framed: bool, cx: &App) -> Button {
     let plane = design::role::surface_raised(cx);
     let ink = design::role::fg_primary(cx);
     let button = Button::new(id)
         .label(label.to_owned())
         .with_size(Size::Size(design::size::CONTROL))
-        .rounded(design::radius::SM)
+        .rounded(design::radius::MD)
         .custom(
             ButtonCustomVariant::new(cx)
                 .color(plane)
@@ -3104,7 +3178,7 @@ fn destructive_button(id: impl Into<gpui_kit::ElementId>, label: &str, cx: &App)
     Button::new(id)
         .label(label.to_owned())
         .with_size(Size::Size(design::size::CONTROL))
-        .rounded(design::radius::SM)
+        .rounded(design::radius::MD)
         .custom(
             ButtonCustomVariant::new(cx)
                 .color(plane)
@@ -3222,15 +3296,20 @@ fn setting_control(compact: bool) -> Div {
 /// that says what the group is for.
 ///
 /// One treatment for every group on the surface, and the surface's own section
-/// scale rather than a heading size: `text::CAPTION`, tracked out, uppercased and
-/// semibold, which is the level §1.4 gives to a group head and the level
+/// scale rather than a heading size: `text::CAPTION`, uppercased and semibold in
+/// `fg.tertiary`, which is the level §1.4 gives to a group head and the level
 /// `Interface language` allows uppercase at. It used to be the title role's
 /// 15px semibold in `fg.primary` — a page-title step — so eleven group heads in
 /// the reference were the loudest thing on a screen whose real page name is in
-/// the title bar and the tab strip, and the type scale had nothing between a
-/// group head and a window title.
+/// the title bar and the navigation beside it, and the type scale had nothing
+/// between a group head and a window title.
 ///
-/// It carries no rule of its own. The tab strip above it already has one, and a
+/// The step down is carried by size, weight and ink rather than by tracking:
+/// gpui's text system has no letter-spacing, and a tracked-out eyebrow the
+/// engine cannot draw is a description of a treatment this surface does not have.
+///
+/// It carries no rule of its own. The chrome plane above it already ends in one
+/// — the category strip's hairline, or the search line's with the rail up — and a
 /// second hairline thirty pixels lower says nothing the row of names has not
 /// already said — it just puts two parallel lines on the screen where one would
 /// do.
@@ -3244,9 +3323,10 @@ fn setting_control(compact: bool) -> Div {
 /// read nothing.
 ///
 /// `lead` is the gap between whatever is above and this head, and it is the one
-/// number that differs by position rather than by group: the reference's groups
-/// are evenly spaced runs inside one long list, while a page's first group sits
-/// under a hairline the page has to clear rather than under another group.
+/// number that differs by position rather than by group: a page's first group
+/// sits under a hairline the page has to clear rather than under another group,
+/// and every group after it — on a settings page and in the reference alike — is
+/// a run inside one long list.
 fn section_header(
     title: &str,
     description: &str,
@@ -3255,10 +3335,12 @@ fn section_header(
 ) -> AnyElement {
     let heading = format!("settings-heading-{}", slug(title));
     let id = format!("settings-section-{}", slug(title));
-    // 24 above and 8 below, so a group's rows start 8px after its label and the
-    // next group's label starts 32px after this group's last row: the gap that
-    // says "a new group" is four times the gap that says "the next row of this
-    // one", which is the same ratio the row grid uses inside a row.
+    // 24 above and 8 below for a group's own gap, so a group's rows start 8px
+    // after its label and the next group's label starts 32px after this group's
+    // last row: the gap that says "a new group" is four times the gap that says
+    // "the next row of this one", which is the same ratio the row grid uses
+    // inside a row. The first head on a page takes `lead` instead, because it is
+    // clearing the chrome plane's rule rather than another group.
     h_flex()
         .id(id)
         .w_full()
@@ -3285,7 +3367,7 @@ fn section_header(
                         .text_size(design::text::CAPTION)
                         .line_height(design::text::CAPTION_LINE_HEIGHT)
                         .font_weight(design::text::SEMIBOLD)
-                        .text_color(design::role::fg_secondary(cx)),
+                        .text_color(design::role::fg_tertiary(cx)),
                 )
                 .when(!description.is_empty(), |heading| {
                     heading.child(
@@ -3302,7 +3384,7 @@ fn section_header(
 /// A category page's own group head.
 ///
 /// [`section_header`] with the one difference a page needs and the reference
-/// does not: the first group of a page clears the tab strip's hairline by the
+/// does not: the first group of a page clears the chrome plane's hairline by the
 /// page's own padding, and only a group that follows another group gets the full
 /// section gap. Drawing `space::XL` above the first head as well would put a
 /// second 24px band of nothing under a rule that already ended the chrome, and
@@ -3334,12 +3416,19 @@ fn page_section_head(title: &str, first: bool, cx: &Context<SettingsView>) -> An
 /// minimum and well past it. The arithmetic reads the *page's* inset rather than
 /// a copied `space::LG`, so a change to [`SETTINGS_PAGE_INSET`] moves the floor
 /// with it instead of leaving the two disagreeing.
-fn compact_settings_layout(viewport_width: f32) -> bool {
+///
+/// `nav_rail` is the rail's own width, subtracted because the row grid has to fit
+/// in what is left of the window rather than in the window: at the rail's own
+/// 856px threshold the pane beside it is the measure exactly, and a form that
+/// asked the window instead drew a two-column row wider than the column holding
+/// it.
+fn compact_settings_layout(viewport_width: f32, nav_rail: bool) -> bool {
+    let rail = if nav_rail { SETTINGS_NAV_WIDTH } else { 0. };
     let row_floor = SETTINGS_LABEL_WIDTH
         + SETTINGS_CONTROL_WIDTH
         + f32::from(SETTINGS_PAGE_INSET) * 2.
         + f32::from(space::XL);
-    viewport_width < row_floor
+    viewport_width - rail < row_floor
 }
 
 impl SettingsView {
@@ -3356,8 +3445,9 @@ impl SettingsView {
         // with it for the eye. `feedback.md` asks for an error as close to the
         // problem as it can be, and a `w_full` row with a spacer in the middle
         // put `Retry` 1888px from the promise on a wide window. The banner is
-        // capped on the *outer* box and centred like every other band, so the
-        // recovery lands on the same spine as the row it belongs to.
+        // capped on the *outer* box and starts on the measure's leading edge
+        // like every other band, so the recovery lands on the same spine as the
+        // row it belongs to.
         let mut line = h_flex()
             .w_full()
             .py(space::SM)
@@ -3374,7 +3464,7 @@ impl SettingsView {
             .flex_wrap()
             .child(
                 Icon::new(IconName::TriangleAlert)
-                    .xsmall()
+                    .with_size(Size::Size(design::icon::IN_ROW))
                     .text_color(design::role::danger(cx)),
             )
             .child(
@@ -3400,7 +3490,7 @@ impl SettingsView {
             alert = alert.aria_description(reason.clone());
             alert = alert.tooltip(move |window, cx| Tooltip::new(reason.clone()).build(window, cx));
         }
-        measure_band(self.measure_inset)
+        measure_band(self.chrome_inset)
             .child(alert)
             .into_any_element()
     }
@@ -3419,7 +3509,7 @@ impl SettingsView {
                 .child(
                     token_button("settings-save-retry", RETRY_LABEL, false, cx)
                         .h(design::size::CONTROL)
-                        .accessibility_label("Write the Settings File Again")
+                        .accessibility_label("Write the settings file again")
                         .tooltip("Save the settings file again.")
                         .on_click(cx.listener(|view, _, _, cx| view.retry_settings_save(cx))),
                 );
@@ -3438,7 +3528,7 @@ impl SettingsView {
             let open = div().flex_none().child(
                 token_button("settings-file-open", SETTINGS_FILE_OPEN_LABEL, false, cx)
                     .h(design::size::CONTROL)
-                    .accessibility_label("Open the Settings File")
+                    .accessibility_label("Open the settings file")
                     .tooltip("Open the settings file in the platform's file manager.")
                     .on_click(cx.listener(|_, _, _, _| {
                         if let Some(path) = settings::user_settings_path() {
@@ -3467,7 +3557,7 @@ impl SettingsView {
             return None;
         }
         Some(
-            measure_band(self.measure_inset)
+            measure_band(self.chrome_inset)
                 .child(
                     h_flex()
                         .id("settings-save-pending")
@@ -3483,7 +3573,7 @@ impl SettingsView {
                         .child(spinner(
                             IconName::LoaderCircle,
                             design::role::fg_tertiary(cx),
-                            Size::XSmall,
+                            Size::Size(design::icon::IN_ROW),
                         ))
                         .child(
                             Label::new(SAVING_LABEL)
@@ -3500,7 +3590,7 @@ impl SettingsView {
         self.recording.as_ref().map(|recording| {
             let label = format!("Recording shortcut for {}", recording.command.label);
             let hint = recording_hint();
-            measure_band(self.measure_inset)
+            measure_band(self.chrome_inset)
                 .child(
                     h_flex()
                         .id("settings-recording-status")
@@ -3517,8 +3607,8 @@ impl SettingsView {
                         .border_color(design::role::accent(cx))
                         .child(
                             Icon::new(IconName::Keyboard)
-                                .xsmall()
-                                .text_color(design::role::fg_secondary(cx)),
+                                .with_size(Size::Size(design::icon::IN_ROW))
+                                .text_color(design::icon::resting(cx)),
                         )
                         .child(
                             Label::new(label)
@@ -3549,7 +3639,7 @@ impl SettingsView {
             .w_full()
             .bg(design::role::surface_chrome(cx))
             .child(
-                measure_band(self.measure_inset).child(
+                measure_band(self.chrome_inset).child(
                     h_flex()
                         .h(design::size::TITLE_BAR)
                         .min_h(design::size::TITLE_BAR)
@@ -3558,8 +3648,11 @@ impl SettingsView {
                         .items_center()
                         .child(
                             Icon::new(IconName::Settings)
-                                .xsmall()
-                                .text_color(design::role::fg_tertiary(cx)),
+                                .with_size(Size::Size(design::icon::IN_ROW))
+                                // The window's own mark, beside a title at full
+                                // strength. In the count tier it read as a title the
+                                // window could not show.
+                                .text_color(design::icon::resting(cx)),
                         )
                         .child(
                             label_panel_title("Settings").text_color(design::role::fg_primary(cx)),
@@ -3635,29 +3728,189 @@ impl SettingsView {
         // strip are one window band, and the single hairline under the strip is
         // the only boundary that band needs. Three bands each drawing a rule put
         // two hairlines 40px apart saying the same thing twice, which is what
-        // "hairlines belong on the boundary owner" rules out.
-        div()
+        // "hairlines belong on the boundary owner" rules out. With the rail up
+        // there is no strip, so the search line is the last band of the plane and
+        // the rule moves here rather than being drawn twice.
+        let band = div()
             .flex_none()
             .w_full()
             .bg(design::role::surface_chrome(cx))
-            .child(measure_band(self.measure_inset).child(row.child(div().flex_1())))
+            .when(self.nav_rail, |band| {
+                band.border_b_1()
+                    .border_color(design::role::border_subtle(cx))
+            });
+        band.child(measure_band(self.chrome_inset).child(row.child(div().flex_1())))
+            .into_any_element()
+    }
+
+    /// The category rail: the six names in a column beside the page.
+    ///
+    /// A rail rather than a strip because the strip put the navigation in a
+    /// 40px band with a hairline under it, which read as a fourth chrome band
+    /// above the rows — and because a horizontal strip of names cannot grow: a
+    /// second locale's longer spelling put six words and a scrollbar into a
+    /// window whose content was already a narrow ribbon. A column has room for
+    /// the longest name at any height, and it gives the window the structure
+    /// every other surface in this app has — the resource sidebar beside the
+    /// table, the inspector beside both — instead of a form floating in the
+    /// middle of a field.
+    ///
+    /// The selected category is the one place on this surface that spends an
+    /// accent: a wash, a 2px leading rail and `fg.primary`. Structure first,
+    /// colour last: with the accent hidden, the selected row is still the only
+    /// row carrying a plate and a rule.
+    fn render_nav_rail(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
+        let matching = self.matching_categories(cx);
+        let searching = !self.search_query.trim().is_empty();
+        let mut items = v_flex()
+            .id("settings-nav-rail-items")
+            .flex_none()
+            .w_full()
+            .gap(space::XXS)
+            .items_stretch()
+            // The six names are a list of tabs, and saying so is the difference
+            // between a column of words a reader has to count and a set of
+            // controls a screen reader can announce as one. The strip below
+            // carries the same role for the same reason.
+            //
+            // The `id` above is not decoration: `role()` lives on
+            // `StatefulInteractiveElement`, so a builder that never took an
+            // identity cannot carry an accessible role at all.
+            .role(Role::TabList)
+            .aria_label("Settings categories");
+        for (index, category) in SettingsCategory::ALL.into_iter().enumerate() {
+            let selected = self.category == category && !searching;
+            let available = !searching || matching.contains(&category);
+            let selector = format!("settings-category-{}", category.label());
+            let focus = window
+                .use_keyed_state(selector.clone(), cx, |_, cx| cx.focus_handle())
+                .read(cx)
+                .clone()
+                .tab_index(tab_order::TABS_FIRST + index as isize)
+                .tab_stop(available);
+            let ring = design::focus::border(cx);
+            // Hover is mixed over the plate the item is actually drawn on. The
+            // selected item is an accent wash over chrome, so a wash mixed over
+            // bare chrome replaced the accent on the one row that carries it —
+            // pointing at the category you are already on turned its plate
+            // grey, which is the one place a hover must not take anything away.
+            let plate = if selected {
+                design::composite_surface(
+                    design::role::surface_chrome(cx),
+                    design::role::accent_wash(cx),
+                )
+            } else {
+                design::role::surface_chrome(cx)
+            };
+            let hover = design::state::hover_on(plate, design::role::fg_primary(cx));
+            let ink = match (selected, available) {
+                (true, _) => design::role::fg_primary(cx),
+                (false, true) => design::role::fg_secondary(cx),
+                (false, false) => design::role::fg_disabled(cx),
+            };
+            let tip = if self.reference && category == SettingsCategory::Keyboard {
+                "Close the shortcut reference".to_owned()
+            } else {
+                category.summary().to_owned()
+            };
+            let press = cx.weak_entity();
+            let key = press.clone();
+            // The rule is reserved on every row, never added to the selected
+            // one, so selecting a category does not move the name beside it —
+            // the same reason the segmented track reserves its focus ring.
+            items = items.child(
+                h_flex()
+                    .id(selector.clone())
+                    .debug_selector(move || selector)
+                    .flex_none()
+                    .w_full()
+                    // The name is the one thing in a fixed-width lane that a
+                    // locale decides the width of, so it is the one thing that
+                    // has to be allowed to run out of room: the rail is a fixed
+                    // 200px because a category name is what has to stay on one
+                    // line, and a name that wrapped inside a 32px row instead
+                    // took the row's height away from every row under it.
+                    .min_w(px(0.))
+                    .h(design::size::ROW)
+                    .items_center()
+                    .px(space::SM)
+                    .gap(space::XS)
+                    .rounded(design::radius::SM)
+                    .when(selected, |item| item.bg(design::role::accent_wash(cx)))
+                    // The selection is the wash, the weight and the ink — the
+                    // border stays a transparent reservation for the focus ring.
+                    // A leading-edge rail as the selection marker is the web
+                    // habit the guide forbids, and the rest of the app dropped.
+                    .border_l_2()
+                    .border_color(design::role::surface_chrome(cx).alpha(0.))
+                    .track_focus(&focus)
+                    .focus_visible(move |this| this.border_color(ring))
+                    .role(Role::Tab)
+                    .aria_label(category.label())
+                    .aria_selected(selected)
+                    .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
+                    .child(
+                        Label::new(category.label())
+                            .text_size(design::text::BODY)
+                            .line_height(design::text::BODY_LINE_HEIGHT)
+                            .font_weight(if selected {
+                                design::text::MEDIUM
+                            } else {
+                                design::text::REGULAR
+                            })
+                            .text_color(ink)
+                            .min_w(px(0.))
+                            .truncate(),
+                    )
+                    .when(available, |this| {
+                        this.hover(move |style| style.bg(hover))
+                            .on_click(move |_, _, cx| {
+                                if let Some(view) = press.upgrade() {
+                                    view.update(cx, |view, cx| view.select_category(category, cx));
+                                }
+                            })
+                            // Enter and Space, because a rail item is the focus
+                            // stop and a focus stop that only answers a pointer
+                            // is not one.
+                            .on_key_down(move |event: &KeyDownEvent, _, cx| {
+                                if !matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                                    return;
+                                }
+                                cx.stop_propagation();
+                                if let Some(view) = key.upgrade() {
+                                    view.update(cx, |view, cx| view.select_category(category, cx));
+                                }
+                            })
+                    }),
+            );
+        }
+        // Chrome, and the window's own vertical boundary: the rail is a strip of
+        // the chrome plane, so the hairline between it and the page is the rail's
+        // to draw rather than the page's. The rail scrolls on its own handle, so
+        // a category list longer than the window does not take the rows with it.
+        v_flex()
+            .id("settings-nav")
+            .debug_selector(|| "settings-nav".to_owned())
+            .flex_none()
+            .w(px(SETTINGS_NAV_WIDTH))
+            .min_h(px(0.))
+            .bg(design::role::surface_chrome(cx))
+            .border_r_1()
+            .border_color(design::role::border_subtle(cx))
+            .overflow_y_scroll()
+            .track_scroll(&self.nav_scroll)
+            .px(space::SM)
+            .py(space::SM)
+            .child(items)
             .into_any_element()
     }
 
     /// The six category tabs.
     ///
-    /// A strip of names rather than a column of them, which is what the spec's
-    /// structure shows and what a window with six short names wants: the names
-    /// are all one line long, so a rail would spend a third of the window's
-    /// width on six words and push the settings themselves into a narrower
-    /// measure than they need.
-    ///
-    /// Words, and no glyphs. Six icons in front of six words is a toolbar
-    /// wearing a disguise, and each one cost 22px of a strip that measured 682px —
-    /// enough that at a 621px window the first tab scrolled out of sight with no
-    /// scrollbar and no way to tell it was there. Without them the strip is
-    /// about 550px, so all six names fit at the window's own 960px minimum and
-    /// the horizontal scroll never engages.
+    /// The narrow fallback, drawn only when the window cannot hold the rail and
+    /// the measure side by side. A rail is the better layout everywhere there is
+    /// room for it; below that room a strip of names beats a rail of truncated
+    /// ones, and the band is the one this window's chrome already had.
     fn render_tabs(&self, window: &mut Window, cx: &mut Context<Self>) -> AnyElement {
         let matching = self.matching_categories(cx);
         let searching = !self.search_query.trim().is_empty();
@@ -3670,12 +3923,18 @@ impl SettingsView {
         // names have identical padding and a name that wraps or a longer locale
         // cannot shift one of them off the row's baseline.
         let mut tabs = h_flex()
+            .id("settings-tab-strip-items")
             .flex_none()
             .w_full()
             .h(design::size::ROW)
             .px(SETTINGS_PAGE_INSET)
             .gap(space::XXS)
-            .items_stretch();
+            .items_stretch()
+            // The same list the rail announces, drawn on one line: switching
+            // layouts must not change what the surface says it is. The `id` is
+            // what lets a builder carry a role at all — see `render_nav_rail`.
+            .role(Role::TabList)
+            .aria_label("Settings categories");
         for (index, category) in SettingsCategory::ALL.into_iter().enumerate() {
             let selected = self.category == category && !searching;
             // A search draws every page that has a hit, so the strip highlights
@@ -3691,8 +3950,8 @@ impl SettingsView {
             // the moment the pointer left. A tab is also not a push button, so it
             // has none of a button's states to get wrong: two ink weights, one
             // 2px rule, and a hover wash. The wrapper owns the focus stop, the
-            // role and the name, which is the arrangement `hotbar.rs` documents
-            // for the same reason.
+            // role and the name, which is the arrangement the resource sidebar
+            // documents for the same reason.
             let ring = design::focus::border(cx);
             // Hover is mixed onto the plane the tab actually sits on. The strip
             // carries `surface.chrome` itself now, so this is no longer a
@@ -3713,7 +3972,7 @@ impl SettingsView {
                 (false, false) => design::role::fg_disabled(cx),
             };
             // `subtitle` — 13/500, the token §2.3 gives a button's own text, and
-            // the size the mockup's tab strip is drawn at.
+            // the size the mockup's category navigation is drawn at.
             let label = Label::new(category.label())
                 .text_size(design::text::SUBTITLE)
                 .line_height(design::text::SUBTITLE_LINE_HEIGHT)
@@ -3734,19 +3993,17 @@ impl SettingsView {
                 .flex()
                 .items_center()
                 .px(space::SM)
-                // Reserved for the ring, for the reason the segmented track
-                // reserves its own: a border that arrives with the focus
-                // is a border that moves the label beside it.
+                .rounded(design::radius::SM)
+                // The selection is the tab's own surface, like a dock pill,
+                // not a one-sided underline: the bottom border stays a
+                // transparent reservation for the focus ring.
+                .when(selected, |this| this.bg(design::role::accent_wash(cx)))
                 .border_b_2()
-                .border_color(if selected {
-                    design::role::accent(cx)
-                } else {
-                    design::role::border_subtle(cx).alpha(0.)
-                })
+                .border_color(design::role::border_subtle(cx).alpha(0.))
                 .track_focus(&focus)
                 .focus_visible(move |this| this.border_color(ring))
                 .role(Role::Tab)
-                .aria_label(format!("Open {} Settings", category.label()))
+                .aria_label(category.label())
                 .aria_selected(selected)
                 .tooltip(move |window, cx| Tooltip::new(tip.clone()).build(window, cx))
                 .child(label)
@@ -3775,25 +4032,26 @@ impl SettingsView {
         }
         // The one hairline that says "the window ends here", on the band that owns
         // it. The title bar above and the search line between no longer draw one
-        // each, so a 112px chrome band has a single boundary instead of three
-        // parallel rules 40px apart.
+        // each, so the strip's 112px chrome band has a single boundary instead of
+        // three parallel rules 40px apart. With the rail up there is no strip and
+        // `render_search_row` owns this rule instead.
         div()
             .flex_none()
             .w_full()
             .bg(design::role::surface_chrome(cx))
             .border_b_1()
             .border_color(design::role::border_subtle(cx))
-            .child(measure_band(self.measure_inset).child(tabs))
+            .child(measure_band(self.chrome_inset).child(tabs))
             .into_any_element()
     }
 
     /// The count the field states while a query is filtering.
     ///
     /// §3.1 does not let a title restate the window title, the tab title and the
-    /// page heading at once, and the title bar and the tab strip already name
-    /// the page, so the field prints no name of its own. What is left for it to
-    /// say is how many rows the query kept: a filtered list and an empty one look
-    /// the same without a number.
+    /// page heading at once, and the title bar and the category navigation
+    /// already name the page, so the field prints no name of its own. What is
+    /// left for it to say is how many rows the query kept: a filtered list and an
+    /// empty one look the same without a number.
     fn search_result_label(&self, cx: &App) -> String {
         if self.reference {
             let count = self.matching_command_count(cx);
@@ -3835,10 +4093,15 @@ impl SettingsView {
             self.render_category_page(window, cx)
         };
         let selector = "settings-content";
-        // Centred by the wrapper's own inset rather than by the measure box
-        // itself, so the box the tests point at — and the box every row's trailing
-        // edge is measured from — is the capped column and nothing else. A
-        // definite height on both, so the empty state inside (which is
+        // The wrapper carries the measure's leading edge and the measure box
+        // carries the measure itself, so the box the tests point at — and the box
+        // every row's trailing edge is measured from — is the capped column and
+        // nothing else. The inset is the window's, resolved once per frame: with
+        // the rail up it is zero, because the content pane is already everything
+        // left of the measure and a second inset inside it would double the
+        // gutter beside the rail's rule; without the rail it centres the measure,
+        // which is the whole of the layout in a window too narrow for two
+        // columns. A definite height on both, so the empty state inside (which is
         // `size_full` and wants to centre itself in the space it has) resolves
         // against the scroll viewport instead of against a chain of auto-height
         // parents. The empty state used to claim the whole column and draw its
@@ -3861,12 +4124,13 @@ impl SettingsView {
 
     /// One page: its rows grouped by [`Setting::group`], and the danger zone.
     ///
-    /// No heading. §15.2's structure has none, the mockup has none, and the tab
-    /// strip thirty pixels above already carries the page's name in the strongest
-    /// ink on the screen — so a heading repeats it in a second size and a second
-    /// weight, and spends the top of every page on the one thing a reader already
-    /// knows. The category's one-line summary is not lost either: it is the tab's
-    /// own tooltip, which is where a reader asks what a page is for.
+    /// No heading. §15.2's structure has none, the mockup has none, and the
+    /// navigation beside the page already carries the page's name in the
+    /// strongest ink on the screen — so a heading repeats it in a second size and
+    /// a second weight, and spends the top of every page on the one thing a
+    /// reader already knows. The category's one-line summary is not lost either:
+    /// it is the name's own tooltip, which is where a reader asks what a page is
+    /// for.
     ///
     /// The groups are what replaces the empty half of the page instead. Round 1
     /// compressed eight rows to one line each and left a document 500px shorter
@@ -3964,22 +4228,16 @@ impl SettingsView {
             .id("settings-clear-search-action")
             .debug_selector(|| "settings-clear-search".to_owned())
             .child(
-                Button::new("settings-clear-search")
-                    .label("Clear search")
-                    // `primary()`, and it is the one place in this window that wears it.
-                    // §4.13's table gives the filtered-out state's action as **primary**,
-                    // and this is that state; the Port Forward list, the Helm panel, the
-                    // sidebar and the resource table all draw theirs as a plate. These two
-                    // drew `.secondary()`, which in this theme is bare text — so the same
-                    // "you filtered everything away, here is the way back" control is a
-                    // button in three panels and a *word* in two, and a reader cannot tell
-                    // from the word that it does anything. §8's "primary ≤ 1" holds: an
-                    // empty search leaves exactly one control on the page, and the danger
-                    // zone's two are `ghost()` until they are armed.
-                    .primary()
-                    .with_size(Size::Size(design::size::CONTROL))
+                // Not `primary()`. This is the recovery from a filter the reader
+                // set themselves one keystroke ago, and the one control this
+                // window wears `primary` on is the armed destructive commit at
+                // the bottom of the page: a filled accent plate here would put
+                // the loudest thing on the screen above a message saying nothing
+                // matched. The empty state's action is the reader's way back, not
+                // the screen's main event.
+                token_button("settings-clear-search", "Clear search", false, cx)
                     .h(design::size::CONTROL)
-                    .accessibility_label("Clear the Settings Search")
+                    .accessibility_label("Clear the settings search")
                     .tooltip("Clear the search and show every page.")
                     .on_click(cx.listener(move |view, _, _, cx| view.set_search_query("", cx))),
             );
@@ -4059,8 +4317,8 @@ impl SettingsView {
         let description = spec.description;
         row.w_full()
             .min_h(design::size::ROW)
-            // The page inset, so a row's label column and the search field, the
-            // tab strip and the footer above it start on one leading edge.
+            // The page inset, so a row's label column and the search field,
+            // the navigation and the bands above it start on one leading edge.
             .px(SETTINGS_PAGE_INSET)
             // 8 above and 8 below: a description sits 4px under its own title and
             // 16px above the next row's title, so the two gaps say two different
@@ -4106,7 +4364,7 @@ impl SettingsView {
                 .aria_label(SAVE_NOT_SAVED_NOTE)
                 .child(
                     Icon::new(design::health_icon(Severity::Error))
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(design::role::danger(cx)),
                 )
                 .child(
@@ -4150,7 +4408,7 @@ impl SettingsView {
             }
             Control::Path => self.render_path(setting, value, cx),
             Control::Choices => self.render_choices(setting, value, tab, window, enabled, cx),
-            Control::ReadOnly => self.render_read_only(setting, cx),
+            Control::Readonly => self.render_read_only(setting, cx),
             Control::Action => self.render_action(setting, tab, cx),
         };
         let selector = setting.control_selector();
@@ -4212,7 +4470,13 @@ impl SettingsView {
     /// it exposes no way to ask for a keyboard-only ring, so there was nothing to
     /// configure and no knob to turn: the behaviour had to be replaced, not set.
     /// `table_view::view`'s `filter_checkbox` is the same drawing for the same
-    /// reasons, and the two are kept in step deliberately.
+    /// reasons, and the two are kept in step deliberately — which is why the box
+    /// is 14px at `radius::XS` and not the 16px at `radius::SM` this file drew:
+    /// two checkboxes that mean the same thing, drawn at two sizes and two
+    /// corners, is the drift the claim above exists to prevent, and the radius
+    /// contract agrees (`XS` is a square set into another square; `SM` is a chip,
+    /// a badge or an input). The 28px wrapper beside it is the hit target, so the
+    /// smaller box costs nothing to press.
     #[expect(clippy::too_many_arguments)]
     fn render_switch(
         &mut self,
@@ -4239,7 +4503,7 @@ impl SettingsView {
         // A value the reader cannot change does not get to be the loudest thing
         // on the page. The Editor page is four rows of "already on, nothing reads
         // this", and four accent-filled boxes on it is an accent on every row of
-        // the screen — §2's rule 8 counts two, and the tab underline has one.
+        // the screen — §2's rule 8 counts two, and the selected category has one.
         //
         // So a checked box on a row nothing reads is a neutral box with a tick,
         // which still says "on" and says it in the ink of every other value on
@@ -4273,9 +4537,9 @@ impl SettingsView {
         };
         let mark = div()
             .flex_none()
-            .w(px(16.))
-            .h(px(16.))
-            .rounded(design::radius::SM)
+            .w(px(14.))
+            .h(px(14.))
+            .rounded(design::radius::XS)
             .border_1()
             .border_color(edge)
             .bg(fill)
@@ -4307,7 +4571,7 @@ impl SettingsView {
             .px(space::XXS)
             .gap(space::SM)
             .items_center()
-            .rounded(design::radius::SM)
+            .rounded(design::radius::MD)
             // The border is always there and carries no ink until the keyboard
             // asks, so appearing focus moves nothing.
             .border_1()
@@ -4501,8 +4765,8 @@ impl SettingsView {
         // arrangement the Dock's controls use, and the one that makes a keyboard
         // user's page hold still.
         let ring = design::focus::border(cx);
-        // One silhouette. `radius::MD` on the track and the same radius on the
-        // two end segments, with the middle ones left square, is the concentric
+        // One silhouette. `radius::MD` on the track, one step in from it on the
+        // two end segments, and square middles, which is the concentric
         // arrangement `Radius, spacing, and density` asks for: the selected fill
         // follows the track's inner corners instead of floating in it as a pill,
         // and the unselected surface behind it is not visible at all because it is
@@ -4577,19 +4841,23 @@ impl SettingsView {
                     .items_center()
                     .justify_center()
                     .px(space::SM)
-                    // The two end segments take the track's radius on the corners
-                    // they actually touch and the middle ones stay square, so the
-                    // selected fill and the surface behind it share one silhouette
-                    // instead of three pills sitting inside a rectangle.
+                    // The two end segments take the track's radius less the
+                    // track's own 2px inset, and the middle ones stay square, so
+                    // the selected fill and the surface behind it share one
+                    // silhouette instead of three pills inside a rounded
+                    // rectangle. The inner corner is `radius::MD` less the
+                    // track's 2px pad, which is `radius::SM`; drawing the full
+                    // `MD` there put the fill's corner outside the track's own
+                    // arc.
                     .when(first, |segment| {
                         segment
-                            .rounded_tl(design::radius::MD)
-                            .rounded_bl(design::radius::MD)
+                            .rounded_tl(design::radius::SM)
+                            .rounded_bl(design::radius::SM)
                     })
                     .when(last, |segment| {
                         segment
-                            .rounded_tr(design::radius::MD)
-                            .rounded_br(design::radius::MD)
+                            .rounded_tr(design::radius::SM)
+                            .rounded_br(design::radius::SM)
                     })
                     .bg(segment_bg)
                     .role(Role::RadioButton)
@@ -4718,7 +4986,7 @@ impl SettingsView {
                 .gap(space::SM)
                 .items_center()
                 .justify_between()
-                .rounded(design::radius::SM)
+                .rounded(design::radius::MD)
                 .bg(design::role::surface_raised(cx))
                 .border_1()
                 // `border.base`, the input's own hairline, and not the subtler
@@ -4825,13 +5093,10 @@ impl SettingsView {
                     ),
             )
             .child(
-                Button::new("settings-reveal-cache")
-                    .label("Open folder")
-                    .ghost()
-                    .with_size(Size::Size(design::size::CONTROL))
+                token_button("settings-reveal-cache", "Open folder", false, cx)
                     .h(design::size::CONTROL)
                     .tab_index(setting.tab())
-                    .accessibility_label("Open the Cache Folder")
+                    .accessibility_label("Open the cache folder")
                     .tooltip("Open the cache folder in the platform's file manager.")
                     .on_click(cx.listener(|_, _, _, _| {
                         if let Some(path) = k8s_core::paths::cache_dir() {
@@ -4863,8 +5128,21 @@ impl SettingsView {
         // A build number is not a health verdict, so it gets no status glyph:
         // a dash in front of the version would read as "this build is broken".
         let glyph = (severity != Severity::Muted).then(|| design::health_icon(severity));
+        // Only the version row has an action beside its value, and the value is
+        // what sized that action's position: the two sat shoulder to shoulder
+        // with the slack left over on the right, so `Copy` ended wherever this
+        // build's version string happened to stop — the one control on the page
+        // that was not on the control column's trailing edge. The value takes
+        // the lane instead, and the button lands on the line every drop-down and
+        // segmented control on this surface already lands on.
+        let value_text = label_body(value.as_text()).text_color(design::role::fg_secondary(cx));
+        let value_text = if setting == Setting::Version {
+            value_text.flex_1().min_w(px(0.)).truncate()
+        } else {
+            value_text
+        };
         let mut status_line = h_flex()
-            .id("settings-read-only")
+            .id("settings-readonly")
             .min_h(design::size::CONTROL)
             .flex_none()
             .w_full()
@@ -4873,16 +5151,19 @@ impl SettingsView {
             .role(Role::Status)
             .aria_label(format!("{}: {}", setting.title(), value.as_text()))
             .when_some(glyph, |line, glyph| {
+                // The same size either way round: a status mark that grew or
+                // shrank when the read went from checking to answered would be
+                // the state changing shape, which is what the shape is not for.
                 line.child(if checking {
-                    spinner(glyph, color, Size::XSmall)
+                    spinner(glyph, color, Size::Size(design::icon::IN_ROW))
                 } else {
                     Icon::new(glyph)
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(color)
                         .into_any_element()
                 })
             })
-            .child(label_body(value.as_text()).text_color(design::role::fg_secondary(cx)));
+            .child(value_text);
         if let Some(reason) = self.capability_reason(setting) {
             let reason = reason.to_owned();
             status_line = status_line.aria_description(reason.clone());
@@ -4896,13 +5177,10 @@ impl SettingsView {
                     .flex_none()
                     .debug_selector(|| "settings-copy-version".to_owned())
                     .child(
-                        Button::new("settings-copy-version")
-                            .label("Copy")
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
+                        token_button("settings-copy-version", "Copy", false, cx)
                             .h(design::size::CONTROL)
                             .tab_index(setting.tab())
-                            .accessibility_label("Copy the Version Number")
+                            .accessibility_label("Copy the version number")
                             .tooltip("Copy the version number.")
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(version.clone()));
@@ -4952,10 +5230,10 @@ impl SettingsView {
                 .role(Role::Status)
                 .aria_label(text.clone())
                 .child(if busy {
-                    spinner(IconName::LoaderCircle, color, Size::XSmall)
+                    spinner(IconName::LoaderCircle, color, Size::Size(design::icon::IN_ROW))
                 } else {
                     Icon::new(design::health_icon(severity))
-                        .xsmall()
+                        .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(color)
                         .into_any_element()
                 })
@@ -4990,11 +5268,11 @@ impl SettingsView {
             ),
             _ => (
                 if self.update_restart_label().is_some() {
-                    "Restart to Update"
+                    "Restart to update"
                 } else {
                     "Check now"
                 },
-                "Look for a newer k8s-gpui build for this installation.",
+                "Look for a newer K8s Studio build for this installation.",
             ),
         };
         // At most one primary button per screen, and this is the only candidate
@@ -5050,10 +5328,16 @@ impl SettingsView {
     /// reference a reader cannot change is half a reference — the point is to
     /// answer "what does this key do" and "that is not the key I expected".
     fn render_reference(&mut self, cx: &mut Context<Self>) -> AnyElement {
+        // `space::MD`, the page's own first gap and not a section gap: the
+        // reference is reached from the chrome plane — the search field's own
+        // hairline with the rail up, the strip's with it down — and neither of
+        // those is a group head above it. Every later head on this page is a
+        // group of commands and takes the full section gap, which is what makes
+        // the first one the page's own lead-in rather than another group.
         let mut content = v_flex().w_full().child(section_header(
             REFERENCE_TITLE,
             REFERENCE_SUMMARY,
-            space::XL,
+            space::MD,
             cx,
         ));
         let query = self.query();
@@ -5097,20 +5381,11 @@ impl SettingsView {
             .id("settings-clear-shortcut-search-action")
             .debug_selector(|| "settings-clear-shortcut-search".to_owned())
             .child(
-                Button::new("settings-clear-shortcut-search")
-                    .label("Clear search")
-                    // `primary()`, and it is the one place in this window that wears it.
-                    // §4.13's table gives the filtered-out state's action as **primary**,
-                    // and this is that state; the Port Forward list, the Helm panel, the
-                    // sidebar and the resource table all draw theirs as a plate. These two
-                    // drew `.secondary()`, which in this theme is bare text — so the same
-                    // "you filtered everything away, here is the way back" control is a
-                    // button in three panels and a *word* in two, and a reader cannot tell
-                    // from the word that it does anything. §8's "primary ≤ 1" holds: an
-                    // empty search leaves exactly one control on the page, and the danger
-                    // zone's two are `ghost()` until they are armed.
-                    .primary()
-                    .with_size(Size::Size(design::size::CONTROL))
+                // The same plate as the settings surface's own empty state and
+                // for the same reason: this is the way back from a filter the
+                // reader set one keystroke ago, not a commitment. The one control
+                // this window wears `primary` on is the armed destructive commit.
+                token_button("settings-clear-shortcut-search", "Clear search", false, cx)
                     .h(design::size::CONTROL)
                     .accessibility_label("Clear the Shortcut Search")
                     .tooltip("Clear the search and show every command.")
@@ -5175,14 +5450,11 @@ impl SettingsView {
                     .flex_none()
                     .debug_selector(|| "settings-keymap-copy-path".to_owned())
                     .child(
-                        Button::new("settings-keymap-copy-path")
-                            .label("Copy path")
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
+                        token_button("settings-keymap-copy-path", "Copy path", false, cx)
                             .h(design::size::CONTROL)
                             .tab_stop(path.is_some())
                             .disabled(path.is_none())
-                            .accessibility_label("Copy the Keymap File Path")
+                            .accessibility_label("Copy the keymap file path")
                             .tooltip("Copy the keymap file path.")
                             .on_click(cx.listener(|view, _, _, cx| view.copy_keymap_path(cx))),
                     ),
@@ -5193,10 +5465,7 @@ impl SettingsView {
             .gap(space::SM)
             .items_center()
             .child(
-                Button::new("settings-keymap-create-show")
-                    .label("Open keymap file")
-                    .secondary()
-                    .with_size(Size::Size(design::size::CONTROL))
+                token_button("settings-keymap-create-show", "Open keymap file", false, cx)
                     .h(design::size::CONTROL)
                     .accessibility_label("Open the User Keymap File")
                     .tooltip("Create or show the user keymap file.")
@@ -5207,10 +5476,7 @@ impl SettingsView {
                     })),
             )
             .child(
-                Button::new("settings-keymap-reload")
-                    .label("Reload keymap")
-                    .ghost()
-                    .with_size(Size::Size(design::size::CONTROL))
+                token_button("settings-keymap-reload", "Reload keymap", false, cx)
                     .h(design::size::CONTROL)
                     .accessibility_label("Reload the User Keymap")
                     .tooltip(keymap_reload_description())
@@ -5275,23 +5541,26 @@ impl SettingsView {
         if command.editable {
             let edit_command = command.clone();
             controls = controls.child(
-                // `secondary`, never `outline`, and this is the row that made
-                // the rule worth stating: sixty-odd commands each with a
-                // bordered Edit is a screen drawn entirely in 1px boxes, which
-                // is the thing §2's rule 5 exists to stop.
-                Button::new(format!("settings-key-edit-{tab_index}"))
-                    .label(if is_recording { "Recording…" } else { "Edit" })
-                    .secondary()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .h(design::size::CONTROL)
-                    .tab_index(tab_index)
-                    .tab_stop(!is_recording)
-                    .disabled(is_recording)
-                    .accessibility_label(format!("Edit Shortcut for {}", command.label))
-                    .tooltip("Record a new shortcut for this command.")
-                    .on_click(cx.listener(move |view, _, window, cx| {
-                        view.start_recording(edit_command.clone(), window, cx);
-                    })),
+                // The product's own plate, not `outline`: sixty-odd commands each
+                // with a bordered Edit is a screen drawn entirely in 1px boxes,
+                // which is the thing §2's rule 5 exists to stop. `secondary` was
+                // the intent and it drew bare text, because this theme does not
+                // map the component tokens it resolves from.
+                token_button(
+                    format!("settings-key-edit-{tab_index}"),
+                    if is_recording { "Recording…" } else { "Edit" },
+                    false,
+                    cx,
+                )
+                .h(design::size::CONTROL)
+                .tab_index(tab_index)
+                .tab_stop(!is_recording)
+                .disabled(is_recording)
+                .accessibility_label(format!("Edit shortcut for {}", command.label))
+                .tooltip("Record a new shortcut for this command.")
+                .on_click(cx.listener(move |view, _, window, cx| {
+                    view.start_recording(edit_command.clone(), window, cx);
+                })),
             );
         } else {
             controls = controls.child(
@@ -5301,19 +5570,21 @@ impl SettingsView {
         if command.editable && chord.is_some() {
             let clear_command = command.clone();
             controls = controls.child(
-                Button::new(format!("settings-key-clear-{tab_index}"))
-                    .label("Clear")
-                    .ghost()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .h(design::size::CONTROL)
-                    .tab_index(tab_index + 1)
-                    .tab_stop(!is_recording)
-                    .disabled(is_recording)
-                    .accessibility_label(format!("Clear Shortcut for {}", command.label))
-                    .tooltip("Remove this shortcut from the user keymap.")
-                    .on_click(cx.listener(move |view, _, _, cx| {
-                        view.clear_binding(&clear_command, cx);
-                    })),
+                token_button(
+                    format!("settings-key-clear-{tab_index}"),
+                    "Clear",
+                    false,
+                    cx,
+                )
+                .h(design::size::CONTROL)
+                .tab_index(tab_index + 1)
+                .tab_stop(!is_recording)
+                .disabled(is_recording)
+                .accessibility_label(format!("Clear shortcut for {}", command.label))
+                .tooltip("Remove this shortcut from the user keymap.")
+                .on_click(cx.listener(move |view, _, _, cx| {
+                    view.clear_binding(&clear_command, cx);
+                })),
             );
         }
         // A shortcut reference row keeps its whole sentence, because a row
@@ -5351,10 +5622,10 @@ impl SettingsView {
                     .aria_label(conflict.label())
                     .child(
                         Icon::new(IconName::TriangleAlert)
-                            .xsmall()
+                            .with_size(Size::Size(design::icon::IN_ROW))
                             .text_color(design::role::danger(cx)),
                     )
-                    .child(label_small(conflict.label()).text_color(design::role::danger(cx)))
+                    .child(label_small(conflict.label()).text_color(design::role::danger_word(cx)))
                     .into_any_element(),
             );
         }
@@ -5402,6 +5673,13 @@ impl SettingsView {
     /// container, and `Treat emphasis as a limited budget` says the danger hue
     /// belongs on the one thing that means it: the destructive button.
     ///
+    /// What replaced the red rectangle is a region: a `border.subtle` hairline
+    /// above it, the same eyebrow every group head on the surface wears, and
+    /// both actions in `danger_word`. The hairline is the boundary the zone owns
+    /// — the page above it does not draw one, so no two adjacent regions say the
+    /// same thing twice — and it is the one stroke on this surface that is doing
+    /// work rather than describing a control.
+    ///
     /// **Why it is no longer pinned to the window floor.** Round 1 pinned it,
     /// because pinning is what keeps a destructive pair on screen while the rows
     /// above it scroll, and because a test reads its bottom. But pinning turned a
@@ -5412,13 +5690,16 @@ impl SettingsView {
     /// page is what every other settings page in the world is: a document that
     /// ends, and window below it.
     ///
-    /// The cost is real and was measured rather than assumed. The 112px chrome
-    /// band ends at y=113; the longest page — Appearance, seven rows in three
-    /// groups — ends at y=729, so the destructive pair is on screen with 31px to
-    /// spare at the window's own 760px default height and the whole document
-    /// clears the 900px window a test measures at with 171px in hand. Below 729px
-    /// of window height the pair scrolls with the rows, and its own caption scrolls
-    /// with it. §15.2 asks for it at the bottom of the page, which is where it is.
+    /// The cost is real and was measured rather than assumed. With the category
+    /// strip the chrome plane is three bands — 40, 40 and 32 — and ends at y=113;
+    /// with the rail it is two, because the strip's row is gone, and ends at
+    /// y=81. The longest page — Appearance, seven rows in three groups — ends at
+    /// y=729 on the first and y=697 on the second, so the destructive pair is on
+    /// screen with 31px to spare at the window's own 760px default height either
+    /// way and the whole document clears the 900px window a test measures at
+    /// with 171px in hand. Below that the pair scrolls with the rows, and its own
+    /// caption scrolls with it. §15.2 asks for it at the bottom of the page,
+    /// which is where it is.
     ///
     /// It belongs to the settings pages and not to the reference: sixty-eight
     /// commands with two destructive buttons under them is a target nobody aims
@@ -5426,16 +5707,12 @@ impl SettingsView {
     fn render_danger_zone(&self, cx: &mut Context<Self>) -> AnyElement {
         let armed_clear = self.danger_step == DangerStep::ClearCache;
         let armed_reset = self.danger_step == DangerStep::ResetAll;
-        // At rest the clear is an ordinary action — a real button, with a frame,
-        // a hit target and a name — and the reset is the destructive one, drawn in
-        // `danger_word` so the reader can tell which of the two is irreversible
-        // before pressing either. Both used to be the same kind of unstyled word,
-        // which read as two links of equal weight under a caption that said they
-        // were the two things that cannot be undone. The hue is the word, not a
-        // red frame around the region and not a filled plate: `danger_word` is
-        // held to the body-text floor on this surface, so it stays a word, and it
-        // is one of the two or three places on a screen where the danger hue is
-        // allowed to appear at all.
+        // Both actions are irreversible, so both are drawn as destructive and
+        // neither is a primary: the zone is the one region of this window where
+        // `danger_word` belongs, and two buttons wearing it is the reader being
+        // told what this region is before either is pressed. `danger_word` is
+        // held to the body-text floor on this surface, so it stays a word — this
+        // is not a red frame around the region, and not a filled plate.
         //
         // An armed button is *not* `disabled`. It is the commit, and gpui-kit's
         // base button treats `disabled` as "ignores pointer and keyboard
@@ -5449,7 +5726,7 @@ impl SettingsView {
         } else {
             CLEAR_CACHE_LABEL
         };
-        let mut clear_button = token_button("settings-danger-clear-cache", clear_label, false, cx)
+        let mut clear_button = destructive_button("settings-danger-clear-cache", clear_label, cx)
             .h(design::size::CONTROL)
             .tab_index(tab_order::DANGER_FIRST)
             .tab_stop(!armed_clear)
@@ -5492,7 +5769,7 @@ impl SettingsView {
                     token_button("settings-danger-cancel", CANCEL_LABEL, false, cx)
                         .h(design::size::CONTROL)
                         .tab_index(tab_order::DANGER_FIRST + 1)
-                        .accessibility_label("Cancel Clear Cache")
+                        .accessibility_label("Cancel clear cache")
                         .tooltip("Keep the cache.")
                         .on_click(cx.listener(move |view, _, _, cx| view.cancel_danger(cx))),
                 )
@@ -5517,6 +5794,14 @@ impl SettingsView {
         let row = h_flex()
             .w_full()
             .px(SETTINGS_PAGE_INSET)
+            // The hairline is the zone's own boundary and the only one it draws.
+            // The zone used to be a caption and two buttons with nothing around
+            // them, which read as the bottom of the page rather than as a region
+            // whose contents are the two things that cannot be undone — the one
+            // place on this surface where a rule is doing safety work instead of
+            // decoration.
+            .border_t_1()
+            .border_color(design::role::border_subtle(cx))
             .pt(space::XL)
             // Top-aligned, because the actions can be two lines tall: a centred
             // head would float between the two buttons instead of naming the
@@ -5540,7 +5825,7 @@ impl SettingsView {
                             .text_size(design::text::CAPTION)
                             .line_height(design::text::CAPTION_LINE_HEIGHT)
                             .font_weight(design::text::SEMIBOLD)
-                            .text_color(design::role::fg_secondary(cx)),
+                            .text_color(design::role::fg_tertiary(cx)),
                     ),
             )
             // The same spacer floor a row carries, so the two lanes cannot be
@@ -5636,22 +5921,33 @@ impl Render for SettingsView {
             cx.notify();
         }
         let viewport = window.viewport_size().width;
-        let compact = compact_settings_layout(f32::from(viewport));
+        let rail = settings_nav_rail(f32::from(viewport));
+        let compact = compact_settings_layout(f32::from(viewport), rail);
         if compact != self.compact {
             self.compact = compact;
             cx.notify();
         }
-        // The measure's inset, resolved once per frame from the window's own
-        // width. Every band below reads this one number, so the title bar, the
-        // search field, the tab strip, the rows, the shortcut reference and the
-        // footer start on the same leading edge at every window size — and a
-        // maximised window gets the same document centred in it that a tiled
-        // 960px window does, instead of a 640px form pinned to one edge beside
-        // 1280px of empty field.
-        let slack = f32::from(viewport) - SETTINGS_CONTENT_MAX_WIDTH;
-        let measure_inset = px(slack.max(0.) / 2.);
-        if measure_inset != self.measure_inset {
+        // Where the page and the chrome start, resolved once per frame from the
+        // window's own width. With the rail up the page is left-aligned inside
+        // its own pane at the measure and carries no further inset — the rows
+        // bring their own page padding, and a second one here would double the
+        // gutter between the rail's rule and the first label — while the chrome
+        // bands start over the rail's own width so the title and the search
+        // field share the rows' leading edge. Without the rail the window is
+        // narrow enough that the centred measure is the whole of the layout.
+        let (measure_inset, chrome_inset) = if rail {
+            (px(0.), px(SETTINGS_NAV_WIDTH))
+        } else {
+            let centred = px((f32::from(viewport) - SETTINGS_CONTENT_MAX_WIDTH).max(0.) / 2.);
+            (centred, centred)
+        };
+        if measure_inset != self.measure_inset || chrome_inset != self.chrome_inset {
             self.measure_inset = measure_inset;
+            self.chrome_inset = chrome_inset;
+            cx.notify();
+        }
+        if rail != self.nav_rail {
+            self.nav_rail = rail;
             cx.notify();
         }
         // A window of its own names the pane it is showing, so the desktop's
@@ -5668,18 +5964,28 @@ impl Render for SettingsView {
         let recording = self.render_recording_status(cx);
         let title = self.render_title_bar(cx);
         let search = self.render_search_row(cx);
-        let tabs = self.render_tabs(window, cx);
         let content = self.render_content(window, cx);
-        // Title bar, search line and tab strip are one chrome band with one
-        // hairline under it, and the whole document scrolls below it: the
-        // category's rows in their groups, and the danger zone as the last group
-        // of the page. The zone is no longer a band pinned to the window floor —
-        // see `render_danger_zone` for the measurement that made the void under a
-        // pinned footer cost more than the zone's own reachability — and a page
-        // with less content than the window is a short document, not a broken
-        // layout: the measure, the inset and the two columns are the same at 960px
-        // and at 1920px, so what is left below the last group is the window's and
-        // not the form's.
+        let scroll = div()
+            .id("settings-scroll")
+            .flex_1()
+            .min_h(px(0.))
+            .overflow_y_scroll()
+            .track_scroll(&self.scroll)
+            .child(content);
+        // The window is a chrome band, and below it the navigation and the page
+        // side by side — the same shape the main window has, and the shape that
+        // stops a 640px form from floating in the middle of a 4K field with the
+        // only navigation in a 40px strip above it. Below the width where the
+        // rail and the measure both fit whole, the categories fall back to that
+        // strip and the page keeps the centred measure it had.
+        let page = v_flex()
+            .flex_1()
+            .min_h(px(0.))
+            .min_w(px(0.))
+            .when(!self.nav_rail, |this| {
+                this.child(self.render_tabs(window, cx))
+            })
+            .child(scroll);
         v_flex()
             .size_full()
             .min_w(px(0.))
@@ -5694,15 +6000,22 @@ impl Render for SettingsView {
             .when_some(recording, |this, status| this.child(status))
             .when_some(strip, |this, strip| this.child(strip))
             .child(search)
-            .child(tabs)
             .child(
-                div()
-                    .id("settings-scroll")
+                h_flex()
                     .flex_1()
                     .min_h(px(0.))
-                    .overflow_y_scroll()
-                    .track_scroll(&self.scroll)
-                    .child(content),
+                    .min_w(px(0.))
+                    // `h_flex` centres its children on the cross axis, so
+                    // without this the rail and the page take their content's
+                    // height and float in the middle of the window: the page
+                    // stops filling the window, `settings-scroll` stops
+                    // scrolling, and a page taller than the window is centred
+                    // out of both edges instead of scrolling.
+                    .items_stretch()
+                    .when(self.nav_rail, |this| {
+                        this.child(self.render_nav_rail(window, cx))
+                    })
+                    .child(page),
             )
     }
 }
@@ -5718,8 +6031,6 @@ impl Render for SettingsView {
 /// without a context is global, and a global Inspector shortcut would also fire
 /// outside the panel.
 const INSPECTOR_CONTEXT: &str = "Inspector && !CommandPalette";
-/// Section title for the Inspector rows in the reference.
-const INSPECTOR_GROUP: &str = "Inspector";
 /// The recording rule, in the words the error message uses, so the hint and the
 /// failure agree.
 const RECORDING_REJECTED_KEYS: &str = "a letter or number without a modifier, a bare F1, a bare key above F24, or an unmodified Home, End, Page Up, Page Down, arrow, Enter, Space, Tab, Insert, Backspace, or Delete key";
@@ -5812,14 +6123,6 @@ const BOUND_ON_KEYS_THE_RECORDER_REFUSES: &[(&str, &str)] = &[
         "k8s_table::SelectNextColumn",
         "tab moves between the columns",
     ),
-    (
-        "k8s_table::OpenDetails",
-        "enter and space open the row, and the recorder refuses both",
-    ),
-    (
-        "k8s_ops::DeleteSelection",
-        "delete is a text key, so a shortcut on it is unreachable",
-    ),
 ];
 
 /// The bound actions that have no row and a key the recorder accepts.
@@ -5840,6 +6143,27 @@ const BOUND_WITHOUT_A_ROW: &[(&str, &str)] = &[
         "the window close chord belongs to the window controls too",
     ),
 ];
+
+/// The macOS application-menu chords, which no other platform binds.
+///
+/// They are bound only where the macOS menu bar exists, and the menu bar prints
+/// each of them beside the name the person is clicking, so a reference row would
+/// answer "No shortcut assigned." on every platform but the one that has the
+/// chord. The list is empty off macOS so the check below is about this build's
+/// keymap rather than about the keymap of another platform.
+#[cfg(test)]
+#[cfg(target_os = "macos")]
+const APPLE_MENU_CHORDS: &[&str] = &[
+    "k8s_app::Quit",
+    "k8s_app::Hide",
+    "k8s_app::HideOthers",
+    "k8s_app::ShowAll",
+    "k8s_app::MinimizeWindow",
+    "k8s_app::ToggleFullScreen",
+];
+#[cfg(test)]
+#[cfg(not(target_os = "macos"))]
+const APPLE_MENU_CHORDS: &[&str] = &[];
 
 /// The chord a reference row shows, or `None` when the action has no binding in
 /// its context.
@@ -6049,8 +6373,7 @@ fn canonical_context(action_name: &str) -> Option<&'static str> {
         // built-in binding does not use.
         | "k8s_shell::DescribeSelection"
         | "k8s_shell::PauseUpdates"
-        | "k8s_shell::ResumeUpdates"
-        | "k8s_hotbar::ToggleHotbar" => Some("Shell && !CommandPalette"),
+        | "k8s_shell::ResumeUpdates" => Some("Shell && !CommandPalette"),
         // Copy is the one command on the selected row that is *not* keyed in the
         // shell block: every platform keymap binds it in the table, so a table
         // keeps the characters it owes the Editor and the Terminal. Reading it
@@ -6059,13 +6382,17 @@ fn canonical_context(action_name: &str) -> Option<&'static str> {
         // press, and would have written a user override into a section the
         // built-in binding does not use.
         "k8s_shell::CopySelectedPodName" => Some("Table && !CommandPalette"),
-        // These two have no built-in key, so the table is where the commands
-        // that replaced them fire and where a user override belongs: the F5
-        // refresh and the service account shortcut act on the row a table has
-        // focused.
-        "k8s_shell::RefreshView" | "k8s_shell::OpenServiceAccount" => {
-            Some("Table && !CommandPalette")
-        }
+        // The table's own keys. These three name no palette row, so nothing else
+        // puts them in a section, and a row that looked them up globally would
+        // advertise no key and would write an override that fires everywhere.
+        "k8s_table::OpenDetails"
+        | "k8s_table::OpenRowActions"
+        | "k8s_ops::DeleteSelection"
+        | "k8s_ops::Refresh" => Some("Table && !CommandPalette"),
+        // `k8s_shell::RefreshView` and `k8s_shell::OpenServiceAccount` are
+        // deliberately absent here. Both are in `keymap::UNBOUND_ACTIONS`, so no
+        // preset binds them anywhere, and a row naming the table for them would
+        // advertise a chord that cannot fire in any of them.
         // Every Inspector key belongs to the panel: it is the only surface that
         // can act on it.
         "k8s_inspector::ReloadActiveTab"
@@ -6083,7 +6410,7 @@ fn canonical_context(action_name: &str) -> Option<&'static str> {
         | "k8s_inspector::ToggleValueExpansion"
         | "k8s_inspector::CopyValue"
         | "k8s_inspector::NextProblem" => Some(INSPECTOR_CONTEXT),
-        "k8s_hotbar::SwitchCluster" | "k8s_hotbar::SwitchBank" => Some("Hotbar"),
+        "k8s_shell::SwitchCluster" => Some("Shell && !CommandPalette"),
         _ => None,
     }
 }
@@ -6130,7 +6457,7 @@ fn action_for_command(command: &KeyboardCommand, cx: &App) -> Result<Box<dyn Act
     cx.build_action(&command.action_name, action_input)
         .map_err(|_| {
             format!(
-                "The {} action is unavailable. Update k8s-gpui or use another command.",
+                "The {} action is unavailable. Update K8s Studio or use another command.",
                 command.label
             )
         })
@@ -6138,7 +6465,7 @@ fn action_for_command(command: &KeyboardCommand, cx: &App) -> Result<Box<dyn Act
 
 fn keyboard_command_label(action_name: &str, label: &str) -> String {
     match action_name {
-        "k8s_shell::PortForwardSelection" => "Start Port Forward".to_owned(),
+        "k8s_shell::PortForwardSelection" => "Start port forward".to_owned(),
         _ => label.to_owned(),
     }
 }
@@ -6151,7 +6478,6 @@ fn keyboard_context_description(context: &str) -> &str {
         }
         "Table && !CommandPalette" => "a resource table outside the Command Palette",
         INSPECTOR_CONTEXT => "the resource Inspector outside the Command Palette",
-        "Hotbar" => "the Hotbar",
         "!CommandPalette" => "outside the Command Palette",
         _ => context,
     }
@@ -6209,6 +6535,8 @@ fn keyboard_description(action_name: &str, label: &str) -> String {
         }
         // The table.
         "k8s_table::OpenRowActions" => "Open the actions for the selected row.".to_owned(),
+        "k8s_table::OpenDetails" => "Open the selected resource in the Inspector.".to_owned(),
+        "k8s_ops::DeleteSelection" => "Delete the selected resource from the cluster.".to_owned(),
         "k8s_table::SortSelectedColumn" => "Sort the selected column.".to_owned(),
         "k8s_table::ToggleProblemsOnly" => {
             "Show only the rows that need attention in the current table.".to_owned()
@@ -6240,7 +6568,6 @@ fn keyboard_description(action_name: &str, label: &str) -> String {
         "k8s_shell::ToggleRightPanel" => "Show or hide the resource inspector.".to_owned(),
         "k8s_shell::ToggleDock" => "Show or hide the bottom dock.".to_owned(),
         "k8s_shell::ToggleNotifications" => "Show or hide recent notifications.".to_owned(),
-        "k8s_hotbar::ToggleHotbar" => "Show or hide the Hotbar rail.".to_owned(),
         "k8s_shell::ReloadKubeconfigs" => "Reload the configured kubeconfig files.".to_owned(),
         "k8s_shell::ReloadKeymap" => {
             "Reload the user keymap and apply the saved shortcuts.".to_owned()
@@ -6254,12 +6581,12 @@ fn keyboard_description(action_name: &str, label: &str) -> String {
         "k8s_shell::UseDarkTheme" => "Switch the workbench to the dark theme.".to_owned(),
         "k8s_shell::UseSystemTheme" => "Follow the desktop's light or dark setting.".to_owned(),
         // Application.
-        "k8s_app::OpenSettings" => "Open k8s-gpui Settings.".to_owned(),
+        "k8s_app::OpenSettings" => "Open K8s Studio Settings.".to_owned(),
         "k8s_shell::OpenShortcutReference" => {
             "Open the list of every command and the key it answers to.".to_owned()
         }
-        "k8s_app::CheckForUpdates" => "Check for a newer k8s-gpui release.".to_owned(),
-        "k8s_app::RestartToUpdate" => "Restart k8s-gpui after an update is ready.".to_owned(),
+        "k8s_app::CheckForUpdates" => "Check for a newer K8s Studio release.".to_owned(),
+        "k8s_app::RestartToUpdate" => "Restart K8s Studio after an update is ready.".to_owned(),
         "k8s_inspector::ReloadActiveTab" => {
             "Reload the data of the active tab in the Inspector.".to_owned()
         }
@@ -6361,18 +6688,16 @@ fn append_parameterized_keyboard_commands(sections: &mut Vec<KeyboardSection>, c
             value_offset: 1,
         },
         ParameterizedKeyboardAction {
-            action_name: "k8s_hotbar::SwitchCluster",
+            action_name: "k8s_shell::SwitchCluster",
             label: "Switch to Context",
-            group: "Hotbar",
-            description: "Switch to a saved context in the active bank.",
-            value_field: "slot",
-            value_offset: 1,
-        },
-        ParameterizedKeyboardAction {
-            action_name: "k8s_hotbar::SwitchBank",
-            label: "Switch to Bank",
-            group: "Hotbar",
-            description: "Switch to a saved hotbar bank.",
+            // The palette's own block name, so the reference and the palette stay
+            // one arrangement. It was "Contexts", which is a plural nothing in
+            // this product is grouped under - and the test that pins the reference
+            // to the palette's blocks is exactly the thing that catches a block
+            // invented on one side only. These chords switch CONTEXT, so Cluster
+            // is where a reader looks for them.
+            group: "Cluster",
+            description: "Switch to a context by its place in the context switcher.",
             value_field: "index",
             value_offset: 1,
         },
@@ -6419,6 +6744,116 @@ fn append_parameterized_keyboard_commands(sections: &mut Vec<KeyboardSection>, c
     }
 }
 
+/// A bound command the command palette does not carry.
+///
+/// The reference is built from the palette, so a binding the palette does not
+/// mention has no row unless it is named here.
+struct BoundOutsidePalette {
+    action_name: &'static str,
+    label: &'static str,
+    /// The palette block a person looks in, never the module the command lives
+    /// in: somebody who wants to delete the Pod they have selected is looking
+    /// under Resources, not under `k8s_ops`.
+    group: &'static str,
+    /// False where the recorder refuses the command's own key, so the row names
+    /// the shortcut and points at the keymap file instead of offering an Edit
+    /// that cannot record what the built-in keymap bound.
+    editable: bool,
+}
+
+/// The bound commands the palette does not carry.
+///
+/// The palette is a list of *targets* — the cluster, the resource, the tab, the
+/// panels — and this list shares those block names, so the reference and the
+/// palette are two windows onto one arrangement. Naming these rows after the
+/// module that owns them instead is what produced the reference's own `Inspector`
+/// block: a heading no reader could ask for, holding one command.
+const BOUND_OUTSIDE_THE_PALETTE: &[BoundOutsidePalette] = &[
+    BoundOutsidePalette {
+        action_name: "k8s_shell::ToggleCommandPalette",
+        label: "Toggle command palette",
+        group: "Application",
+        editable: true,
+    },
+    // The reference has to name the command that opens it, or `?` is a key a
+    // person can press and cannot find, which is the one thing a shortcut
+    // reference exists to prevent.
+    BoundOutsidePalette {
+        action_name: "k8s_shell::OpenShortcutReference",
+        label: "Open shortcut reference",
+        group: "Application",
+        editable: true,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_app::OpenSettings",
+        label: "Open settings",
+        group: "Application",
+        editable: true,
+    },
+    // The tab strip's own menu says all three of these in the words the reader
+    // is choosing between, which is why the palette has no row for them; the
+    // keymap binds all three, so the reference does.
+    BoundOutsidePalette {
+        action_name: "k8s_shell::CloseOtherTabs",
+        label: "Close other tabs",
+        group: "Tabs",
+        editable: true,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_shell::CloseAllTabs",
+        label: "Close all tabs",
+        group: "Tabs",
+        editable: true,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_shell::TogglePinTab",
+        label: "Pin or unpin tab",
+        group: "Tabs",
+        editable: true,
+    },
+    // Everything below is what you do to the thing you have selected, which is
+    // the question the `Resources` block already answers for logs, exec and
+    // restart.
+    BoundOutsidePalette {
+        action_name: "k8s_ops::Refresh",
+        label: "Refresh table",
+        group: "Resources",
+        editable: true,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_table::OpenDetails",
+        label: "Open selected resource",
+        group: "Resources",
+        // Enter and Space are the table's own keys and the recorder refuses both,
+        // so this row names the shortcut and sends the reader to the keymap file.
+        editable: false,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_table::OpenRowActions",
+        label: "Open row actions menu",
+        group: "Resources",
+        editable: true,
+    },
+    BoundOutsidePalette {
+        action_name: "k8s_ops::DeleteSelection",
+        label: "Delete selected resource",
+        group: "Resources",
+        // Delete is a text key, so a shortcut on it is unreachable from a text
+        // surface and the recorder will not take it.
+        editable: false,
+    },
+    // The review keeps Escape to itself and the strip's own button reads "Keep
+    // editing", so neither the palette nor any menu names this one; Escape is
+    // still a binding, and a reference that omits it hides the only way out of
+    // a review.
+    BoundOutsidePalette {
+        action_name: "k8s_inspector::CancelApplyReview",
+        label: "Cancel the Apply Review",
+        group: "Resources",
+        editable: true,
+    },
+];
+
 fn keyboard_sections(cx: &App, updater_available: bool) -> Vec<KeyboardSection> {
     let mut sections: Vec<KeyboardSection> = Vec::new();
     for command in demo_commands_with_updater(true, updater_available) {
@@ -6458,106 +6893,35 @@ fn keyboard_sections(cx: &App, updater_available: bool) -> Vec<KeyboardSection> 
         };
         append_keyboard_command(&mut sections, command.group.to_string(), keyboard_command);
     }
-    for (action_name, label, group) in [
-        (
-            "k8s_shell::SearchResources",
-            "Search Cluster Resources",
-            "View",
-        ),
-        (
-            "k8s_shell::ToggleCommandPalette",
-            "Toggle Command Palette",
-            "Application",
-        ),
-        // The reference has to name the command that opens it, or `?` is a key a
-        // person can press and cannot find, which is the one thing a shortcut
-        // reference exists to prevent.
-        (
-            "k8s_shell::OpenShortcutReference",
-            "Open Shortcut Reference",
-            "Application",
-        ),
-        ("k8s_app::OpenSettings", "Open Settings", "Application"),
-        // The Inspector toolbar owns these, and its keys are bound in the
-        // Inspector context, so the list names them here: a bound action that no
-        // row mentions is a shortcut a person cannot find or change.
-        (
-            "k8s_inspector::ReloadActiveTab",
-            "Reload Active Tab",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::RetryMetrics",
-            "Retry Metrics",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::MetricsRange1m",
-            "Metrics: Last Minute",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::MetricsRange15m",
-            "Metrics: Last 15 Minutes",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::MetricsRange1h",
-            "Metrics: Last Hour",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::ConfirmApply",
-            "Confirm and Apply Changes",
-            INSPECTOR_GROUP,
-        ),
-        (
-            "k8s_inspector::CancelApplyReview",
-            "Cancel the Apply Review",
-            INSPECTOR_GROUP,
-        ),
-        ("k8s_inspector::RevertYaml", "Revert YAML", INSPECTOR_GROUP),
-        ("k8s_inspector::CopyYaml", "Copy YAML", INSPECTOR_GROUP),
-        (
-            "k8s_inspector::ToggleValueExpansion",
-            "Expand or Collapse Value",
-            INSPECTOR_GROUP,
-        ),
-        ("k8s_inspector::CopyValue", "Copy Value", INSPECTOR_GROUP),
-        (
-            "k8s_inspector::NextProblem",
-            "Next YAML Problem",
-            INSPECTOR_GROUP,
-        ),
-    ] {
+    for entry in BOUND_OUTSIDE_THE_PALETTE {
         if sections
             .iter()
             .flat_map(|section| section.commands.iter())
-            .any(|command| command.action_name == action_name)
-            || !cx.all_action_names().contains(&action_name)
+            .any(|command| command.action_name == entry.action_name)
+            || !cx.all_action_names().contains(&entry.action_name)
         {
             continue;
         }
-        let Ok(action) = cx.build_action(action_name, None) else {
+        let Ok(action) = cx.build_action(entry.action_name, None) else {
             continue;
         };
-        let canonical = canonical_context(action_name);
+        let canonical = canonical_context(entry.action_name);
         let current = current_binding_for_action(action.as_ref(), canonical, cx);
         let action_input = current
             .as_ref()
             .and_then(|binding| binding.action_input())
             .map(|input| input.to_string());
-        let context = command_context(action_name, current.as_ref());
+        let context = command_context(entry.action_name, current.as_ref());
         let keyboard_command = KeyboardCommand {
             action_name: action.name().to_owned(),
-            label: label.to_owned(),
-            description: keyboard_description(action.name(), label),
-            editable: action_input.is_none(),
+            label: entry.label.to_owned(),
+            description: keyboard_description(action.name(), entry.label),
+            editable: entry.editable && action_input.is_none(),
             action_input,
             context,
             when: canonical.map(str::to_owned),
         };
-        append_keyboard_command(&mut sections, group, keyboard_command);
+        append_keyboard_command(&mut sections, entry.group, keyboard_command);
     }
     append_parameterized_keyboard_commands(&mut sections, cx);
     sections
@@ -7384,12 +7748,15 @@ mod tests {
         assert!(cx.read(crate::settings::increase_contrast_enabled));
     }
 
-    /// The two destructive actions are at the bottom, isolated, and they
-    /// confirm before they do anything.
+    /// The two destructive actions are at the bottom of the page, isolated in a
+    /// region of their own, and they confirm before they do anything.
     ///
-    /// §15.2 puts the danger zone at the bottom of the page with a red outline
-    /// and says only these two confirm. The zone is pinned rather than scrolled,
-    /// because the point of isolating it is that it is hard to reach by accident.
+    /// §15.2 puts the danger zone at the bottom of the page and says only these
+    /// two confirm. The zone is the last thing in the document rather than a
+    /// band pinned to the window floor — `render_danger_zone` has the
+    /// measurement that traded for that — and it is isolated by a hairline, a
+    /// group head and `danger_word` on both buttons rather than by a red frame
+    /// around the region.
     #[gpui_kit::test]
     fn the_danger_zone_is_pinned_isolated_and_confirms(cx: &mut TestAppContext) {
         let (view, cx) = open(cx, 960.);
@@ -7411,7 +7778,8 @@ mod tests {
         assert!(f32::from(clear.top()) >= f32::from(zone.top()));
         assert!(f32::from(reset.top()) >= f32::from(zone.top()));
         // It is never mixed into a normal row: it is a region of its own, at the
-        // very bottom, and it is the only thing with a red outline in the file.
+        // very bottom of the page, and its boundary is a hairline rather than a
+        // stroke around a decorative box.
         assert!(
             cx.debug_bounds("settings-row-clearcache").is_none(),
             "a destructive action is never a settings row"
@@ -7765,13 +8133,16 @@ mod tests {
         assert_eq!(checked, SPECS.len(), "every row's control was measured");
     }
 
-    /// The open page is marked by an accent underline and the selected fill, and
-    /// by nothing else.
+    /// Every category has a navigation stop on the window, and the window has
+    /// no navigation of its own beyond that list.
     ///
     /// The search field owns a focus ring, and an accent slab beside it made the
     /// selection the loudest thing in the window while the ring around the field
     /// that filters it stayed quiet. An accent is the scarcest thing on a
-    /// screen: six tabs, one underline.
+    /// screen: six categories, one of them marked. Which of the two navigation
+    /// layouts the reader gets is the window's own width, and at this window's
+    /// minimum it is the rail — so the assertion is on the name a test can find
+    /// in either of them, not on the one shape that happens to be drawn here.
     #[gpui_kit::test]
     fn the_open_page_is_an_underline_and_a_selection(cx: &mut TestAppContext) {
         let (view, cx) = open(cx, 960.);
@@ -7783,8 +8154,9 @@ mod tests {
                 .unwrap_or_else(|| panic!("the {selector} tab is on the window"));
             assert!(f32::from(tab.size.height) > 0.0);
         }
-        // The rail is gone: the six names are one line, and a column of them
-        // would spend a third of the window's width on six words.
+        // The categories are a list and nothing else: a rail that could be
+        // collapsed to icons is a second, hidden navigation, and a window the
+        // reader has to guess in is the failure this surface is fixing.
         assert!(cx.debug_bounds("settings-sidebar-toggle").is_none());
     }
 
@@ -8243,6 +8615,7 @@ mod tests {
                     || BOUND_WITHOUT_A_ROW
                         .iter()
                         .any(|(action, _)| *action == name)
+                    || APPLE_MENU_CHORDS.contains(&name)
             };
             for name in &bound {
                 let command = KeyboardCommand {
@@ -8267,6 +8640,157 @@ mod tests {
                 .chain(BOUND_WITHOUT_A_ROW)
             {
                 assert!(bound.contains(&name.to_string()), "{name}: {reason}");
+            }
+            for name in APPLE_MENU_CHORDS {
+                assert!(bound.contains(&name.to_string()), "{name} is bound");
+            }
+        });
+    }
+
+    /// The reference and the keymap agree, in every preset, in both directions.
+    ///
+    /// This is the one place being wrong is worst, because a reader trusts it
+    /// absolutely: a keycap that does not fire is a small lie, and a bound key
+    /// with no row is the worse one, because the person cannot find the feature
+    /// it does. Both directions failed in a way nothing on screen showed — the
+    /// reference kept a block named `Inspector` after the palette dropped it,
+    /// and `OpenDetails`, `DeleteSelection`, `OpenRowActions`, `k8s_ops::Refresh`
+    /// and the three tab-strip commands had been bound all along with no row
+    /// anywhere.
+    ///
+    /// Every preset is checked because a preset is an overlay: the rows are built
+    /// from the live keymap, so an overlay that moves a chord to a context the row
+    /// does not name blanks its keycap without any other test noticing.
+    #[gpui_kit::test]
+    fn the_reference_agrees_with_every_preset(cx: &mut TestAppContext) {
+        for preset in [keymap::KeymapPreset::Lens, keymap::KeymapPreset::Vscode] {
+            cx.update(|cx| {
+                crate::keymap::install_sources_with_preset(
+                    cx,
+                    crate::keymap::default_keymap_source(),
+                    None,
+                    preset,
+                )
+                .expect("the keymap loads");
+                let mut bound = cx
+                    .key_bindings()
+                    .borrow()
+                    .bindings()
+                    .map(|binding| binding.action().name().to_owned())
+                    .filter(|name| name.starts_with("k8s_"))
+                    .collect::<Vec<_>>();
+                bound.sort();
+                bound.dedup();
+                let sections = keyboard_sections(cx, true);
+                let commands = sections
+                    .iter()
+                    .flat_map(|section| section.commands.iter())
+                    .collect::<Vec<_>>();
+                let listed = names(&commands);
+                assert!(
+                    listed.len() > 40,
+                    "{}: the list under test is the whole command set, not a fixture: {}",
+                    preset.label(),
+                    listed.len()
+                );
+                for name in &bound {
+                    let accounted_for = listed.contains(&name.as_str())
+                        || BOUND_ON_KEYS_THE_RECORDER_REFUSES
+                            .iter()
+                            .any(|(action, _)| action == name)
+                        || BOUND_WITHOUT_A_ROW.iter().any(|(action, _)| action == name)
+                        || APPLE_MENU_CHORDS.contains(&name.as_str());
+                    assert!(
+                        accounted_for,
+                        "{}: {name} is bound but the reference has no row for it",
+                        preset.label()
+                    );
+                }
+                for command in &commands {
+                    // A row that says where its shortcut is live has to have one
+                    // there. A global row may show nothing, because that is how a
+                    // command with no key yet is offered for one.
+                    if command.when.is_some() {
+                        assert!(
+                            command_chord(command, cx).is_some(),
+                            "{}: {} names a context and shows no key",
+                            preset.label(),
+                            command.action_name
+                        );
+                    }
+                }
+            });
+        }
+    }
+
+    /// The reference's blocks are the palette's blocks, in the palette's order.
+    ///
+    /// The palette is the app's only labelled surface, so where a command sits
+    /// there is most of how a person learns the command exists; a second list
+    /// organised any other way is a list that has to be learned twice. The
+    /// `Inspector` block was organised by the module that owned the command, and
+    /// it held exactly one row.
+    #[gpui_kit::test]
+    fn the_reference_blocks_are_the_palette_blocks_in_the_palette_order(cx: &mut TestAppContext) {
+        cx.update(|cx| {
+            crate::keymap::install_target_default(cx).expect("default keymap loads");
+            let sections = keyboard_sections(cx, true);
+            let titles = sections
+                .iter()
+                .map(|section| section.title.clone())
+                .collect::<Vec<_>>();
+            let palette = demo_commands_with_updater(true, true)
+                .iter()
+                .map(|command| command.group.to_string())
+                .fold(Vec::<String>::new(), |mut order, group| {
+                    if !order.contains(&group) {
+                        order.push(group);
+                    }
+                    order
+                });
+            assert!(
+                palette.len() >= 8,
+                "the palette is the arrangement the reference shares: {palette:?}"
+            );
+            let mut cursor = 0usize;
+            for title in &titles {
+                let found = palette[cursor..]
+                    .iter()
+                    .position(|group| group == title)
+                    .unwrap_or_else(|| panic!("{title} is not a palette block"));
+                cursor += found + 1;
+            }
+            for action in [
+                "k8s_ops::DeleteSelection",
+                "k8s_table::OpenDetails",
+                "k8s_table::OpenRowActions",
+                "k8s_ops::Refresh",
+            ] {
+                let command = sections
+                    .iter()
+                    .flat_map(|section| section.commands.iter())
+                    .find(|command| command.action_name == action)
+                    .unwrap_or_else(|| panic!("{action} has a row"));
+                assert_eq!(
+                    command.when.as_deref(),
+                    Some("Table && !CommandPalette"),
+                    "{action} is the table's own key"
+                );
+                assert!(!command.description.trim().is_empty());
+            }
+            // Enter, Space and Delete are keys the recorder refuses, so a row for
+            // them names the shortcut and points at the keymap file rather than
+            // offering an Edit that cannot record what the keymap bound.
+            for action in ["k8s_ops::DeleteSelection", "k8s_table::OpenDetails"] {
+                let command = sections
+                    .iter()
+                    .flat_map(|section| section.commands.iter())
+                    .find(|command| command.action_name == action)
+                    .unwrap_or_else(|| panic!("{action} has a row"));
+                assert!(
+                    !command.editable,
+                    "{action} is bound on a key the recorder refuses"
+                );
             }
         });
     }
@@ -8388,11 +8912,10 @@ mod tests {
                 Some("Shell && !CommandPalette")
             );
             assert!(commands.iter().any(|command| {
-                command.action_name == "k8s_hotbar::SwitchCluster"
+                command.action_name == "k8s_shell::SwitchCluster"
                     && !command.editable
                     && command.action_input.is_some()
-                    && command.context.as_deref() == Some("Hotbar")
-                    && command.when.as_deref() == Some("Hotbar")
+                    && command.context.as_deref() == Some("Shell && !CommandPalette")
             }));
         });
     }

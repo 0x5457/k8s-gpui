@@ -1978,7 +1978,8 @@ pub mod text {
     pub const CAPTION: Pixels = px(11.);
     pub const CAPTION_LINE_HEIGHT: Pixels = px(14.);
 
-    /// The status bar, a badge, a count.
+    /// The quietest rung: a key hint, a keycap, a count beside a louder word.
+    /// Not the status bar, whose items wear CAPTION.
     pub const MICRO: Pixels = px(10.);
     pub const MICRO_LINE_HEIGHT: Pixels = px(12.);
 
@@ -2236,6 +2237,278 @@ pub mod motion {
     pub const LOADING: Duration = Duration::from_millis(1_200);
 }
 
+/// Icons: one optical size per lane, and one ink per state.
+///
+/// This module exists because the alternative was demonstrated across the app:
+/// every glyph picked its own size and its own ink at its own call site, so a
+/// title bar held four controls of identical height whose glyphs weighed
+/// visibly different amounts of black and sat at visibly different sizes. Two
+/// neighbouring controls at different weights do not read as two controls in a
+/// group; they read as one enabled thing and one broken thing.
+///
+/// **A size is a lane, not a preference.** A lane is "what sits beside this", and
+/// everything in a lane is drawn at the same optical size — so a row of icons is
+/// a row, not a staircase. Sizes are [`size`] constants; nothing here invents a
+/// number.
+///
+/// **An ink is a state, not a mood.** [`resting`] is the ink of a glyph sitting in
+/// a control beside a `fg_secondary` label. The rule that was violated: a glyph
+/// in `fg_tertiary` beside `fg_secondary` text reads as DISABLED, whatever the
+/// author intended by it. `fg_tertiary` is the placeholder and count tier; it is
+/// never the resting ink of a control. Severity belongs on the status mark and
+/// the status word, never on the glyph that identifies the kind of thing.
+///
+/// This module owns the *how* of a glyph — the lane it sits in and the ink it
+/// wears. [`glyph`] below owns its *what*, because a shape that means two
+/// things is a defect no ink and no size can repair.
+pub mod icon {
+    use super::{role, size};
+    use gpui_kit::{App, Hsla};
+
+    /// The resting ink of a glyph in a control.
+    ///
+    /// One step below `fg_primary` and one above `fg_tertiary`, which is exactly
+    /// where a glyph belongs: present enough to be read, quiet enough that it is
+    /// not the thing being read.
+    pub fn resting(cx: &App) -> Hsla {
+        role::fg_secondary(cx)
+    }
+
+    /// The ink of a glyph in a control that is selected, open or pressed.
+    pub fn active(cx: &App) -> Hsla {
+        role::fg_primary(cx)
+    }
+
+    /// The ink of a glyph that carries a status rather than an identity.
+    ///
+    /// The MARK channel, never the word channel: a 14px dot and a 13px word do
+    /// not read at the same contrast, and there is a separate role for each.
+    pub fn status(cx: &App, severity: super::Severity) -> Hsla {
+        role::status_for(severity, cx)
+    }
+
+    /// The ink of a glyph in a control that cannot be used.
+    pub fn disabled(cx: &App) -> Hsla {
+        role::fg_disabled(cx)
+    }
+
+    /// The ink of a glyph that is decoration rather than information.
+    ///
+    /// The narrowest legitimate use: a chevron, a disclosure triangle, a dot that
+    /// repeats a word beside it. Nothing a reader has to identify goes here.
+    pub fn incidental(cx: &App) -> Hsla {
+        role::fg_tertiary(cx)
+    }
+
+    /// The size a glyph takes beside body text in a row, a menu item or a field.
+    pub const IN_ROW: gpui_kit::Pixels = size::ICON;
+
+    /// The size a glyph takes in a navigation column: the sidebar kind column,
+    /// a navigation column, a mark that leads a destination.
+    ///
+    /// Fourteen because that is the size the shared family was drawn and judged
+    /// at, so a mark that moves from the sidebar onto the rail keeps its weight
+    /// instead of being redrawn per lane.
+    pub const NAV: gpui_kit::Pixels = size::NAV_MARK;
+
+    /// The size a glyph takes in a toolbar of icon controls.
+    ///
+    /// Its own number rather than the target's, because gpui-kit's `Button`
+    /// derives its glyph from the BOX (`size * 0.75`), which is why a 24px icon
+    /// button drew a 21px glyph while the sidebar drew a 14px mark and the two
+    /// were then compared and called a mismatch. The box and the glyph are
+    /// stated separately here so a toolbar can be square and still have a glyph
+    /// that matches the navigation marks around it.
+    pub const IN_TOOLBAR: gpui_kit::Pixels = size::ICON;
+
+    /// The size a glyph takes as an empty or loading state's lead mark.
+    pub const LEAD: gpui_kit::Pixels = size::ICON_LARGE;
+
+    /// The ink a glyph takes while its row is hovered, solved against the plane
+    /// that row is painted on.
+    ///
+    /// Hover is a wash on the CONTROL, never a new ink on the glyph: a glyph that
+    /// changes colour on hover reads as a different glyph.
+    pub fn hovered_on(surface: Hsla, ink: Hsla) -> Hsla {
+        super::state::hover_on(surface, ink)
+    }
+}
+
+/// One meaning per glyph.
+///
+/// Three vocabularies, kept apart because a glyph that crosses between them
+/// teaches the reader two things at once and they remember neither:
+///
+/// - **object** — what a thing IS. A cluster, a namespace, a field the
+///   controller owns. An object glyph is a noun, and it does not change when the
+///   state of the thing changes: the state has a status ink and a status word of
+///   its own and needs no help from the shape.
+/// - **state** — what happened, or what is missing. Said by a mark that names no
+///   machine and no document, so it can never be mistaken for the thing it is
+///   reporting on.
+/// - **action** — what a control will *do*. The three circular arrows are the
+///   sharpest case: they differ by a quarter turn and a direction, and nothing
+///   about the shapes themselves says which is a re-read and which is a restart.
+///
+/// The rule underneath all three: **a glyph names a thing, a state is said by
+/// ink and by the mark beside it, and a command and a status do not borrow each
+/// other's shapes.** An object and a state may never share a glyph — the moment
+/// they do, the shape stops answering *what* and starts answering *how*, and a
+/// reader who has learned it in one place has learned nothing in the other.
+///
+/// The severity shapes are the fourth family and they live in
+/// [`super::health_icon`], which [`super::severity_icon`] answers from; see the
+/// alias there for why that is one family under two names.
+pub mod glyph {
+    use super::IconName;
+
+    /// What a thing IS. Never a state, never a command.
+    pub mod object {
+        use super::IconName;
+
+        /// The cluster, or the kube context bound to it: the thing everything
+        /// else in the app is a thing *of*.
+        ///
+        /// `Server` because a context is a machine you are pointed at, and
+        /// because every place that names one — the title-bar selector, the
+        /// context picker's rows, the palette's context rows, the sidebar's
+        /// Cluster row — already agreed on it. What it is not allowed to mean as
+        /// well is "the connection is up", "the cluster had nothing to say" or
+        /// "there is no cluster": those three are [`super::state`].
+        pub fn cluster() -> IconName {
+            IconName::Server
+        }
+
+        /// One machine in the cluster.
+        ///
+        /// Not [`cluster`]. A node is a machine and a cluster is a fleet of them,
+        /// and the title bar names the fleet while the sidebar names one machine
+        /// several times a screen — one shape cannot be both, and the machine is
+        /// the narrower of the two claims. `Cpu` is what the sidebar's own
+        /// per-kind table already spends on a node.
+        pub fn node() -> IconName {
+            IconName::Cpu
+        }
+
+        /// A partition of the cluster's names.
+        ///
+        /// A partitioned square and not a box: `Box`, `Boxes` and `Container`
+        /// all read as a cube at fourteen pixels, and the column that exists to
+        /// be scanned already spends `Box` on a Pod and `Boxes` on a ReplicaSet.
+        pub fn namespace() -> IconName {
+            IconName::PanelsTopLeft
+        }
+
+        /// A group of API kinds.
+        ///
+        /// A folder, and a folder that never opens. The row's open/closed state
+        /// belongs to [`super::state::disclosure`]; a folder that swapped to
+        /// `FolderOpen` on expand was saying "expanded" twice, in two shapes.
+        pub fn group() -> IconName {
+            IconName::Folder
+        }
+
+        /// A field the controller writes back, so it is not yours to change.
+        ///
+        /// This is the one lock in the product and it is this meaning, because a
+        /// lock is what says "closed to you" without spending a status colour on
+        /// something that is not an error. Permission is not the same idea and
+        /// does not get a lock — see [`super::state::access_denied`].
+        pub fn managed_field() -> IconName {
+            IconName::Lock
+        }
+    }
+
+    /// What HAPPENED, or what is missing.
+    ///
+    /// No shape here is an object's own glyph, because a state mark sitting on
+    /// an object glyph is a reader being asked to un-learn the shape they just
+    /// learned. Where the thing itself is what is missing — see
+    /// [`no_cluster`] — the object is still drawn and the state is written across
+    /// it, which is a different shape and so still one answer per mark.
+    pub mod state {
+        use super::IconName;
+
+        /// The chevron that says a row opens, and which way it opens.
+        ///
+        /// Expanded points down, at the content. This is the only mark allowed to
+        /// answer "is this open", which is why an object glyph beside it must not
+        /// change shape when the row expands.
+        pub fn disclosure(expanded: bool) -> IconName {
+            if expanded {
+                IconName::ChevronDown
+            } else {
+                IconName::ChevronRight
+            }
+        }
+
+        /// There is no context to read.
+        ///
+        /// The object with the answer written across it, because the object is
+        /// still what the reader is looking for and only its power changed. This
+        /// is what separates "no cluster" from "the cluster is live": the first
+        /// is a machine with a slash through it, the second is a bare machine
+        /// beside a connection dot, and neither of them is asked to carry the
+        /// other's shape.
+        pub fn no_cluster() -> IconName {
+            IconName::ServerOff
+        }
+
+        /// The cluster answered, and it had nothing in it.
+        ///
+        /// An empty tray, not an empty machine: nothing is wrong with the cluster
+        /// here, and a reader who saw [`no_cluster`] two panes away must not see
+        /// the same mark twice for two opposite facts.
+        pub fn empty_cluster() -> IconName {
+            IconName::Inbox
+        }
+
+        /// RBAC refused you this.
+        ///
+        /// A refused request is not a locked field. It is a permission the server
+        /// declined to grant, which is a shield, and the ban says the refusal was
+        /// final rather than the field being busy — while [`super::object::managed_field`]
+        /// keeps the lock, where the reader is being told not to type.
+        pub fn access_denied() -> IconName {
+            IconName::ShieldBan
+        }
+    }
+
+    /// What a control WILL DO.
+    ///
+    /// A command is not a status: `reload` leaves the cluster exactly as it was,
+    /// `restart` makes the target do its work again, and `rollback` takes back a
+    /// change that was already made. The three circular arrows look alike enough
+    /// that only the assignment keeps them apart, so it is written down here once
+    /// rather than guessed at in twenty call sites.
+    pub mod action {
+        use super::IconName;
+
+        /// Ask the source again. Changes nothing on the cluster.
+        ///
+        /// Two arrow heads on a broken circle, so it is not one of the rotations:
+        /// a refresh comes back with the same world and a new answer.
+        pub fn reload() -> IconName {
+            IconName::RefreshCw
+        }
+
+        /// Make the target do its work again. A side effect on the object.
+        ///
+        /// Clockwise, one turn forward.
+        pub fn restart() -> IconName {
+            IconName::RotateCw
+        }
+
+        /// Take back a change already made.
+        ///
+        /// Counter-clockwise, and the only meaning it is ever allowed: a rollback
+        /// that is not of a change is a reload wearing the wrong arrow.
+        pub fn rollback() -> IconName {
+            IconName::RotateCcw
+        }
+    }
+}
+
 pub mod border {
     use gpui_kit::{Pixels, px};
 
@@ -2427,7 +2700,26 @@ pub mod size {
     pub const RESOURCE_HEADER: Pixels = px(40.);
     /// The open-view strip. Only present when more than one view is open, so it
     /// costs nothing in the common case of a single list.
-    pub const OPEN_VIEWS: Pixels = px(28.);
+    ///
+    /// **It is 40, the same as [`RESOURCE_HEADER`], and it was 28.**
+    ///
+    /// 28 made it the only header band in the window below 32 — sitting between a
+    /// 40px resource header and a 32px summary strip, carrying a 22px pill — so the
+    /// one band whose job is to say WHICH OBJECT YOU ARE LOOKING AT was the
+    /// thinnest thing above the rows, and the tabs read as a hairline rather than
+    /// as somewhere to click back to a previous view.
+    ///
+    /// 32 was tried and measured: it did move it (the band went from 56 to 64
+    /// device pixels), and 4px on a 40px window is invisible, which is the reader
+    /// calling it unchanged. So it takes the number the band above it already uses.
+    /// Two header bands of one height read as one header; a thinner one in the
+    /// middle reads as a divider somebody forgot to remove.
+    ///
+    /// The cost is stated: the strip is only present with more than one view open,
+    /// so opening a second view costs the table 40px rather than 28. That is the
+    /// price of the second view existing, and it is cheaper than a tab strip nobody
+    /// believes is clickable.
+    pub const OPEN_VIEWS: Pixels = px(40.);
     /// A table's own header row.
     pub const TABLE_HEADER: Pixels = px(32.);
     /// The strip above a table that says what the rows add up to.
@@ -2437,9 +2729,20 @@ pub mod size {
     /// A palette or menu row.
     pub const PALETTE_ROW: Pixels = px(32.);
     /// The dock's always-present tab strip.
-    pub const DOCK_TABS: Pixels = px(28.);
+    ///
+    /// The same 40 as [`OPEN_VIEWS`], written out rather than aliased, because
+    /// the scale test asserts that no two tokens carry one number and this one
+    /// earns it: the three tab strips in this window are one control drawn three
+    /// times, and a strip a different height from its siblings reads as a
+    /// different control rather than as the same one elsewhere.
+    pub const DOCK_TABS: Pixels = px(40.);
     /// The dock's per-panel toolbar.
     pub const DOCK_TOOLBAR: Pixels = px(28.);
+    /// The tab pill drawn inside a 40px tab strip ([`OPEN_VIEWS`], [`DOCK_TABS`],
+    /// the inspector's strip): six pixels of strip above and below it, so the
+    /// selected tint has a silhouette to follow instead of filling the whole
+    /// navigation band. One control drawn three times keeps one token.
+    pub const TAB_PILL: Pixels = px(28.);
 
     /// The names these bands used to have.
     pub const TOOLBAR: Pixels = TITLE_BAR;
@@ -2458,10 +2761,6 @@ pub mod size {
     pub const SIDEBAR_DEFAULT: Pixels = px(236.);
     /// The collapsed sidebar: an icon rail wide enough to hit.
     pub const SIDEBAR_RAIL: Pixels = px(48.);
-    /// Narrow rail for the Hotbar.
-    pub const HOTBAR_RAIL: Pixels = px(40.);
-    /// Hotbar slot hit area.
-    pub const HOTBAR_SLOT: Pixels = px(28.);
     pub const INSPECTOR_MIN: Pixels = px(260.);
     pub const INSPECTOR_MAX: Pixels = px(480.);
     /// The inspector's resting width.
@@ -2474,14 +2773,23 @@ pub mod size {
     pub const INSPECTOR_FLOAT_BELOW: f32 = 1000.;
     pub const CENTER_MIN: Pixels = px(480.);
     pub const MAIN_CONTENT_MIN: Pixels = px(280.);
-    /// The dock's shortest body: its 28px tab strip, its 28px toolbar, the 28px
+    /// The reading measure of an empty state's text: `UI-SPEC` §2.3's 40ch of
+    /// the body size.
+    ///
+    /// `ch` is the advance of `0`, which on the UI face is 0.6em at every size,
+    /// so the measure is stated from `text::BODY` and follows it: 13px × 0.6 × 40
+    /// = 312px. It was written twice before — 312px computed in the shared empty
+    /// state and `270.` hard-coded in the table and the dock — so two panels
+    /// wrapped the same sentence at two different widths.
+    pub const EMPTY_MEASURE: Pixels = px(13. * 0.6 * 40.);
+    /// The dock's shortest body: its 40px tab strip, its 40px toolbar, the 40px
     /// row the chrome is measured against, and three product-default log lines.
     ///
     /// The design states 156px and, in the same section, records that 156 does
     /// not hold once the height breakpoints are applied — the body's minimum
     /// cannot be a number the height collapse ignores. This is that minimum
     /// re-derived from the chrome the dock actually has.
-    pub const DOCK_MIN: Pixels = px(142.);
+    pub const DOCK_MIN: Pixels = px(154.);
     pub const DOCK_MAX: Pixels = px(400.);
     /// Below this window height the dock's body collapses to nothing and only
     /// its tab strip survives, because a table is worth more than a log.
@@ -2494,16 +2802,17 @@ pub mod size {
     pub const KIND_ICON: Pixels = px(14.);
     /// The kind icon beside a resource title, where there is room for it.
     pub const KIND_ICON_TITLE: Pixels = px(16.);
-    /// The mark in a *navigation* lane: the left rail's controls, the sidebar's
-    /// kind column, and the Hotbar's slots.
+    /// The mark in a *navigation* lane: the left rail's controls and the
+    /// sidebar's kind column.
     ///
     /// It is [`KIND_ICON`] and not a fourth number, because the rail was mixing
     /// three optometries on one vertical spine. `Button::with_size(28)` derives
     /// its glyph from the *box* — `size * 0.75`, so twenty-one pixels — so an
-    /// icon button on a `HOTBAR_SLOT` lane drew at 21 while the lane's own mark
-    /// drew at [`ICON`]'s 16 and the sidebar's kind column drew at 14. A reader
-    /// aiming at a 28px row could not tell from the mark how big the control
-    /// was, and the rail read as three different tools stacked.
+    /// icon button on a 28px lane drew at 21 while the lane's own mark drew at
+    /// [`ICON`]'s 16 and the sidebar's kind column drew at 14. A reader aiming at
+    /// a 28px row could not tell from the mark how big the control was, and the
+    /// rail read as three different tools stacked. The Hotbar was the third of
+    /// those lanes and is gone; what is left is why this token exists.
     ///
     /// Fourteen is also the right answer rather than the convenient one: it is
     /// the size the shared icon family was drawn and judged at, so a mark that
@@ -3721,16 +4030,21 @@ pub const KIND_ICON_COUNT: usize = 12;
 /// [`kind_icon_path`], and a caller that means "which kind is this" must use
 /// that one: this one answers "which category", and a Deployment and a
 /// ReplicaSet are the same category and must look the same here.
+///
+/// A node is a machine and a cluster is a fleet of them, so the two do not share
+/// a shape: the title bar names the fleet on every screen and the sidebar names
+/// one machine several times. [`glyph::object`] is where that assignment is
+/// written down.
 pub fn kind_icon(kind: &str) -> IconName {
     match kind {
         "Pod" | "Pods" => IconName::Box,
         "Deployment" | "Deployments" | "ReplicaSet" | "ReplicaSets" | "StatefulSet"
         | "StatefulSets" | "DaemonSet" | "DaemonSets" => IconName::Blocks,
-        "Node" | "Nodes" => IconName::Server,
-        // A namespace is not an API group, so it does not get the group's folder,
-        // and a cluster is not a node, so it does not get the node's rack. The
-        // sidebar's `Cluster` row and the `Overview` tab both used to land on
-        // `Server` and read as the same object as `Nodes`.
+        "Node" | "Nodes" => IconName::Cpu,
+        // A namespace is not an API group, so it does not get the group's folder:
+        // one is a partition of the cluster's names and the other a partition of
+        // its kinds, and the mark column has to tell them apart.
+        "Namespace" | "Namespaces" => IconName::PanelsTopLeft,
         "Group" => IconName::Folder,
         "Job" | "Jobs" | "CronJob" | "CronJobs" => IconName::Clock,
         "Event" | "Events" | "Info" => IconName::Info,
@@ -3880,7 +4194,8 @@ pub mod confidence {
             // the caption beside it, and that caption is secondary text. It is
             // not a second health channel: `confidence::icon` and `health_icon`
             // are disjoint shape families, which is what keeps the two apart on a
-            // row that carries both.
+            // row that carries both, and `glyph_vocabulary` is what holds them
+            // disjoint.
             Confidence::Known => colors.text_muted,
             Confidence::Stale => colors.confidence_stale,
             Confidence::Unknown => colors.confidence_unknown,
@@ -3899,7 +4214,14 @@ pub mod confidence {
         match state {
             // Known needs no mark. Drawing one would put a second glyph on
             // every healthy row and imply a second thing to read.
-            Confidence::Known => IconName::Circle,
+            //
+            // This arm is still a shape and has to be one: it used to be `Circle`,
+            // which is `health_icon`'s Info, so the channel the doc above claims
+            // is disjoint from health shared a glyph with it and the next caller
+            // to stop filtering this value out would have drawn an "info" mark on
+            // a healthy row. A dashed circle is the shape for "nothing to
+            // report", and it cannot be read as any of the five severity shapes.
+            Confidence::Known => IconName::CircleDashed,
             Confidence::Stale => IconName::Clock,
             Confidence::Unknown => IconName::CircleQuestionMark,
         }
@@ -4079,11 +4401,14 @@ pub(crate) fn increased_contrast_colors(colors: &ThemeColors, surface: Hsla) -> 
     }
 }
 
-/// Shape cue for a severity. Callers also show text.
-/// The severity icon used where only one status channel is present.
+/// One name for the health channel's shapes, under two names.
 ///
-/// Callers that also show an observation confidence should use
-/// [`health_icon`] so the health axis keeps its own shape family.
+/// `severity_icon` is the older name and `health_icon` the one that says which
+/// axis it belongs to. They used to answer from two different shape sets, which
+/// is the worst of both: a reader who learned the status bar's warning could not
+/// read the inspector's, and nothing on screen said the two were the same
+/// channel. One family, two names, so a caller that has not been migrated still
+/// lands on the shared vocabulary — `glyph_vocabulary` is what holds it there.
 pub fn severity_icon(severity: Severity) -> IconName {
     health_icon(severity)
 }
@@ -4831,7 +5156,11 @@ mod theme_contract {
         assert_eq!(super::size::ROW_COMFORT, px(32.));
         assert_eq!(super::size::TITLE_BAR, px(40.));
         assert_eq!(super::size::RESOURCE_HEADER, px(40.));
-        assert_eq!(super::size::OPEN_VIEWS, px(28.));
+        // 40, raised from 28: the open-view strip was the only header band in the
+        // window below 32, so the band that says which object you are looking at
+        // was the thinnest thing above the rows. It now matches the resource
+        // header it sits under; two header bands of one height read as one header.
+        assert_eq!(super::size::OPEN_VIEWS, px(40.));
         assert_eq!(super::size::STATUS_BAR, px(24.));
         assert_eq!(super::size::TABLE_HEADER, px(32.));
         assert_eq!(super::size::SUMMARY_STRIP, px(32.));
@@ -4844,7 +5173,8 @@ mod theme_contract {
         assert_eq!(super::size::STATUS_DOT, px(6.));
         assert_eq!(super::size::SELECTION_RAIL, px(2.));
         assert_eq!(super::size::ICON_BUTTON, px(24.));
-        assert_eq!(super::size::DOCK_TABS, px(28.));
+        // Same 40 as OPEN_VIEWS: three tab strips in one window are one control.
+        assert_eq!(super::size::DOCK_TABS, px(40.));
         assert_eq!(super::size::DOCK_TOOLBAR, px(28.));
         assert_eq!(super::size::DOCK_COLLAPSE_BELOW, 760.);
         assert_eq!(super::size::INSPECTOR_FLOAT_BELOW, 1000.);
@@ -5883,5 +6213,107 @@ mod contrast_tests {
                 );
             }
         });
+    }
+}
+
+/// The shape vocabulary's invariants.
+///
+/// Every assertion here is about a *mapping*, and every one of them breaks
+/// silently: nothing stops the compiler when a second family appears beside the
+/// first or when a fourth circular arrow joins the three, and the result is not a
+/// build error but a reader who has learned the wrong shape.
+#[cfg(test)]
+mod glyph_vocabulary {
+    use super::{Confidence, IconName, Severity, confidence, glyph, health_icon, severity_icon};
+
+    /// The two names are one family.
+    ///
+    /// They were two shape sets, and `helm.rs` and `inspector.rs` drew from both
+    /// in the same file, so the status bar's warning and the inspector's warning
+    /// were two different pictures of the same word.
+    #[test]
+    fn severity_is_one_shape_family_under_two_names() {
+        for severity in [
+            Severity::Success,
+            Severity::Warning,
+            Severity::Error,
+            Severity::Info,
+            Severity::Neutral,
+            Severity::Muted,
+        ] {
+            assert_eq!(
+                severity_icon(severity),
+                health_icon(severity),
+                "{severity:?}"
+            );
+        }
+    }
+
+    /// Nothing crosses between the vocabularies.
+    ///
+    /// An object and a state that share a glyph is the defect this whole module
+    /// exists for: the shape stops answering *what* and starts answering *how*.
+    /// `Known` is in the confidence set even though it is never drawn, because the
+    /// value is a shape a future caller could draw and it used to be the health
+    /// family's `Info`.
+    #[test]
+    fn the_four_vocabularies_are_pairwise_disjoint() {
+        // One entry per DISTINCT ANSWER, not per severity arm. `Neutral` and
+        // `Muted` are both "nothing to report" and deliberately share a shape: a
+        // reader should not have to learn two outlines for the absence of a
+        // verdict. Listing both arms here asserted that they must differ, which
+        // is the opposite of what the product wants — and it failed on code that
+        // predates this module, which is how a test stops being evidence.
+        let health_shapes = [
+            Severity::Success,
+            Severity::Warning,
+            Severity::Error,
+            Severity::Info,
+            Severity::Neutral,
+        ]
+        .map(health_icon);
+        let confidence_shapes =
+            [Confidence::Known, Confidence::Stale, Confidence::Unknown].map(confidence::icon);
+        let object_shapes = [
+            glyph::object::cluster(),
+            glyph::object::node(),
+            glyph::object::namespace(),
+            glyph::object::group(),
+            glyph::object::managed_field(),
+        ];
+        let state_shapes = [
+            glyph::state::no_cluster(),
+            glyph::state::empty_cluster(),
+            glyph::state::access_denied(),
+            glyph::state::disclosure(true),
+            glyph::state::disclosure(false),
+        ];
+        let action_shapes = [
+            glyph::action::reload(),
+            glyph::action::restart(),
+            glyph::action::rollback(),
+        ];
+
+        let families: [(&str, &[IconName]); 5] = [
+            ("health", &health_shapes),
+            ("confidence", &confidence_shapes),
+            ("object", &object_shapes),
+            ("state", &state_shapes),
+            ("action", &action_shapes),
+        ];
+        for (index, (name, shapes)) in families.iter().enumerate() {
+            for (position, shape) in shapes.iter().enumerate() {
+                assert!(
+                    !shapes[..position].contains(shape),
+                    "{name} answers two meanings with {shape:?}"
+                );
+                for (other_name, other) in &families[index + 1..] {
+                    assert!(
+                        !other.contains(shape),
+                        "{name} and {other_name} both answer with {shape:?}"
+                    );
+                }
+            }
+        }
     }
 }

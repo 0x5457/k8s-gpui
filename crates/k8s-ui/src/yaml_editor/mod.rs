@@ -66,12 +66,32 @@ const EDITOR_PAD_Y: Pixels = space::SM;
 /// as the line-number gutter's. The component owns the line-number gutter and paints it inside
 /// its own element, so both marks go in the one slot the design puts at the far right: they read
 /// as a column, they scroll with the rows, and neither of them sits on top of the text.
-const MARK_RAIL_WIDTH: Pixels = design::size::ICON_LARGE;
+///
+/// `design::icon::IN_ROW`, which is the sixteen the slot is specified at, rather than the 24 this
+/// reserved: the widest thing in the slot is a 12px padlock, and a document that pays eight
+/// pixels per row for a mark that leaves four to spare is spending a panel that runs to 260px on
+/// the gutter. The width is a lane, and a mark in a row takes the row's mark lane.
+const MARK_RAIL_WIDTH: Pixels = design::icon::IN_ROW;
+
+/// Strength of the shortcut sheet's scrim, as a share of the product's own.
+///
+/// `design::role::surface_backdrop` is the app's one scrim and it is right for a surface that
+/// owns the window. This sheet is a panel-local dialog over a document the reader is about to go
+/// straight back to, so it takes the same reduced strength `panels::search` does for the same
+/// reason. The number is written here rather than shared because
+/// `design::role::surface_backdrop_at` takes the strength as an argument and no shared constant
+/// carries this value yet; promote it beside that function when a third dismissible overlay asks
+/// for it.
+const CHEAT_SHEET_SCRIM_INK: f32 = 0.38;
 
 /// Rows the completion list shows at once. Eight is more than fits at 28px in a 280px panel and
 /// less than the ten a tall panel could take, so the list is a scroll-free window onto the keys
 /// whose names start with what has been typed — the ones a reader can recognise without reading.
 const COMPLETION_VISIBLE_ROWS: usize = 8;
+
+/// Width of the completion popover and, necessarily, of every row inside it: the row is the
+/// full content width of the popover, so one number owns both.
+const COMPLETION_WIDTH: Pixels = px(200.);
 
 /// Typing pauses before the document is parsed, so validation never runs per keystroke.
 ///
@@ -2276,11 +2296,12 @@ impl YamlView {
     /// `⌘⇧A` is the global Apply, and both chords are in the shortcut sheet this row's `⌨` opens.
     /// The count is the half that is discoverable nowhere else. See the delivery notes.
     fn document_row(&self, editable: bool, cx: &mut Context<Self>) -> AnyElement {
-        let colors = design::colors(cx);
-        let editor_background = colors.editor_background.alpha(1.0);
-        // The glyph is a graphic a pointer has to find, so it is solved against the surface it is
-        // actually painted on rather than read from the chrome role.
-        let chip_foreground = design::graphic_on(editor_background, colors.text_muted);
+        // The glyph is a graphic a pointer has to find, so it is solved against the surface it
+        // is actually painted on. That surface is the chip's own fill, not the document's: the
+        // lock used to be solved against the editor plane and then painted inside a chip, so
+        // the ink and the plate under it were two different answers to the same question.
+        let chip_fill = role::surface_raised(cx);
+        let chip_foreground = design::graphic_on(chip_fill, role::fg_secondary(cx));
         h_flex()
             .id("yaml-status-corner")
             .debug_selector(|| "yaml-status-corner".to_owned())
@@ -2295,7 +2316,7 @@ impl YamlView {
             // between two panels, the toolbar and the document below it. The band it replaced
             // needed a vertical edge for the same reason and did not have this one.
             .border_b_1()
-            .border_color(colors.border)
+            .border_color(role::border_subtle(cx))
             .when(!editable, |this| {
                 this.child(
                     h_flex()
@@ -2308,11 +2329,11 @@ impl YamlView {
                         // from the panel above it, so a border would be a second, illegal
                         // separator doing a job the fill was already doing.
                         .rounded(radius::SM)
-                        .bg(colors.elevated_surface_background)
+                        .bg(chip_fill)
                         .px(space::SM)
                         .py(space::XXS)
                         .text_size(design::text::CAPTION)
-                        .text_color(colors.text_muted)
+                        .text_color(role::fg_secondary(cx))
                         .child(
                             Icon::new(IconName::Lock)
                                 .xsmall()
@@ -2331,13 +2352,22 @@ impl YamlView {
                         .gap(space::XS)
                         .items_center()
                         .text_size(design::text::CAPTION)
-                        .text_color(role::fg_tertiary(cx))
                         .child(
                             Icon::new(IconName::Lock)
                                 .xsmall()
                                 .text_color(role::fg_disabled(cx)),
                         )
-                        .child(Label::new(managed_note(self.managed_extent)))
+                        // The count states its own ink rather than leaving it to the wrapper's:
+                        // a bare `Label` re-applies the component's foreground *after* inheriting,
+                        // so the tertiary this row asks for never reached the glyph and the note
+                        // rendered as the heaviest thing on a toolbar that is otherwise a count
+                        // and a keyboard button.
+                        .child(
+                            Label::new(managed_note(self.managed_extent))
+                                .text_size(design::text::CAPTION)
+                                .line_height(design::text::CAPTION_LINE_HEIGHT)
+                                .text_color(role::fg_tertiary(cx)),
+                        )
                         .aria_label(format!(
                             "{} of this document {} written by a controller",
                             self.managed_extent,
@@ -2353,9 +2383,24 @@ impl YamlView {
                 h_flex().flex_none().gap(space::SM).items_center().child(
                     Button::new("yaml-shortcuts")
                         .icon(IconName::Keyboard)
-                        .xsmall()
                         .ghost()
-                        .accessibility_label("Editor Shortcuts")
+                        // The box is the only lever on the mark: gpui-kit takes the glyph at
+                        // 0.75 of a label-free button's own box and overwrites whatever the mark
+                        // asked for, so `Size::XSmall` answers a twelve-pixel glyph on a toolbar
+                        // whose lane is sixteen. `crates/k8s-ui/src/panels/inspector.rs` states
+                        // the same arithmetic for the Inspector's own icon controls; it is written
+                        // out here rather than shared because this file already keeps its own copy
+                        // of the editor's row height, padding and rail.
+                        .with_size(Size::Size(Pixels::from(
+                            f32::from(design::icon::IN_TOOLBAR) / 0.75,
+                        )))
+                        // The ink of the mark is stated on the mark's own button because
+                        // `Icon` resolves an unset colour against the window foreground, not
+                        // against anything a caller set on the button. Left unstated this glyph
+                        // was the brightest control on the toolbar band — brighter than the
+                        // editor text it opens a sheet for.
+                        .text_color(design::icon::resting(cx))
+                        .accessibility_label("Editor shortcuts")
                         .tooltip(if self.cheat_sheet_visible {
                             "Hide editor shortcuts (Alt+/)"
                         } else {
@@ -2375,11 +2420,16 @@ impl YamlView {
     /// It is sized against the window, not against the document: a fixed 520px height filled the
     /// editor on the smallest supported window, which is the opposite of what a reference sheet
     /// should do. The key column stays a fixed measure because it holds text, not layout.
+    ///
+    /// It is also the app's one dialog treatment rather than a fourth one: the product's scrim
+    /// token, the overlay surface, the overlay shadow and a dialog radius. The sheet used to
+    /// carry a private scrim at a fixed 0.4 over the panel's own overlay colour and no shadow at
+    /// all, so it dimmed its context differently from the search card and the command palette and
+    /// sat on the document with nothing lifting it.
     fn cheat_sheet(&self, window: &Window, cx: &mut Context<Self>) -> AnyElement {
         let viewport = window.viewport_size();
         let max_height = cheat_sheet_height(viewport.height);
         let max_width = cheat_sheet_width(viewport.width);
-        let colors = design::colors(cx);
         let rows = Self::CHEAT_SHEET.iter().map(|(keys, what)| {
             h_flex()
                 .gap(space::SM)
@@ -2404,7 +2454,7 @@ impl YamlView {
             .size_full()
             .items_center()
             .justify_center()
-            .bg(colors.panel_overlay_background.opacity(0.4))
+            .bg(role::surface_backdrop_at(cx, CHEAT_SHEET_SCRIM_INK))
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(|this, _, _, cx| {
@@ -2423,15 +2473,26 @@ impl YamlView {
                     // up gets a larger radius: `r-xl`, not the component's own `rounded_md`.
                     .rounded(radius::XL)
                     .border_1()
-                    .border_color(colors.border)
-                    .bg(colors.elevated_surface_background)
+                    .border_color(role::border_base(cx))
+                    .bg(role::surface_overlay(cx))
+                    // A dialog over the document is one of the five surfaces the design lets
+                    // carry a shadow, and the reason the other four do not is that this one
+                    // does: it floats over a document the reader is trying to keep their place
+                    // in, and without the lift it read as a panel welded to the top of it.
+                    .shadow(design::shadow::overlay(cx))
                     .p(space::LG)
                     .gap(space::SM)
                     .text_size(design::text::CAPTION)
                     // The scrim closes the sheet, so the panel keeps its own clicks.
                     .on_mouse_down(MouseButton::Left, |_, _, cx| cx.stop_propagation())
-                    .child(Label::new("Editor Shortcuts").text_size(design::text::BODY))
-                    .child(div().text_color(colors.text_muted).child(
+                    .child(
+                        Label::new("Editor shortcuts")
+                            .text_size(design::text::TITLE)
+                            .line_height(design::text::TITLE_LINE_HEIGHT)
+                            .font_weight(gpui_kit::FontWeight::SEMIBOLD)
+                            .text_color(role::fg_primary(cx)),
+                    )
+                    .child(div().text_color(role::fg_secondary(cx)).child(
                         "Esc closes this list and the find panel, and Ctrl+Tab leaves the editor.",
                     ))
                     .children(rows),
@@ -2564,7 +2625,7 @@ impl YamlView {
             .map(|(offset, key)| {
                 let selected = start + offset == completion.cursor;
                 h_flex()
-                    .w(px(200.))
+                    .w(COMPLETION_WIDTH)
                     .h(EDITOR_ROW_HEIGHT)
                     .px(space::SM)
                     .items_center()
@@ -2591,85 +2652,25 @@ impl YamlView {
                 .absolute()
                 .left(bounds.left() - origin.x)
                 .top(bounds.bottom() - origin.y)
-                .w(px(200.))
-                .max_h(px(COMPLETION_VISIBLE_ROWS as f32 * 28.))
+                .w(COMPLETION_WIDTH)
+                .max_h(px(
+                    COMPLETION_VISIBLE_ROWS as f32 * f32::from(EDITOR_ROW_HEIGHT)
+                ))
                 .overflow_y_scroll()
-                .rounded(radius::MD)
+                .rounded(radius::LG)
                 .border_1()
                 .border_color(role::border_base(cx))
                 .bg(role::surface_overlay(cx))
                 .p(space::XXS)
                 .gap(space::XXS)
                 .shadow(design::shadow::popover(cx))
+                .text_color(role::fg_secondary(cx))
                 .role(Role::ListBox)
                 .aria_label(format!(
                     "Keys under {}. Enter or Tab to accept, Esc to dismiss.",
                     completion.parent
                 ))
                 .children(window)
-                .into_any_element(),
-        )
-    }
-
-    /// What the parser found, under the document, or nothing when it found nothing.
-    ///
-    /// `UI-SPEC.md` §13.3.1 puts the diagnostic *in* the document — a red underline under the
-    /// offending text and a dot in the row's slot, not a dialog — and that is what the editor
-    /// does. What the editor cannot do is say *which* row, on a 400-line document in a 352px
-    /// panel, once the reader has scrolled away from the squiggle. The message itself lived
-    /// nowhere on this surface: it went to the Inspector, which put it in a three-line block at
-    /// the top of the tab, above the document and far from the row it described.
-    ///
-    /// This is the strip the mockup draws, and it is the same shape `UI-SPEC.md` §4.15 gives an
-    /// in-place error: a `danger` rule down the leading edge, a `danger` wash, the sentence, and
-    /// the line number on the far side. It is 32px and it only exists when there is something to
-    /// say, so a clean document pays nothing for it. Clicking it puts the caret on the line,
-    /// because an error a reader cannot jump from is an error they have to go and find.
-    ///
-    /// When there is more than one, it counts them rather than listing them: `2 problems` with
-    /// the first one named, because the second is one keystroke from the first and a list of
-    /// three in a 32px strip is a list of three truncated.
-    fn diagnostic_strip(&self, cx: &mut Context<Self>) -> Option<AnyElement> {
-        let first = self.diagnostics.first()?;
-        let (line, column) = (first.line, first.column);
-        let more = self.diagnostics.len().saturating_sub(1);
-        let head = match more {
-            0 => SharedString::from(first.short_message()),
-            1 => SharedString::from(format!("{} · and 1 more", first.short_message())),
-            more => SharedString::from(format!("{} · and {more} more", first.short_message())),
-        };
-        Some(
-            h_flex()
-                .id("yaml-diagnostic-strip")
-                .debug_selector(|| "yaml-diagnostic-strip".to_owned())
-                .flex_none()
-                .h(design::size::SUMMARY_STRIP)
-                .gap(space::SM)
-                .items_center()
-                .px(space::MD)
-                .border_t_1()
-                .border_color(role::border_subtle(cx))
-                .bg(role::danger_wash(cx))
-                .on_mouse_down(MouseButton::Left, {
-                    let (line, column) = (line, column);
-                    cx.listener(move |this, _, _, cx| {
-                        this.focus_line(line, column, cx);
-                    })
-                })
-                .child(
-                    Label::new(head)
-                        .text_size(design::text::LABEL)
-                        .line_height(design::text::LABEL_LINE_HEIGHT)
-                        .text_color(role::danger_word(cx)),
-                )
-                .child(div().flex_1())
-                .child(
-                    Label::new(format!("line {}", line + 1))
-                        .text_size(design::text::LABEL)
-                        .line_height(design::text::LABEL_LINE_HEIGHT)
-                        .text_color(role::fg_tertiary(cx)),
-                )
-                .role(Role::Status)
                 .into_any_element(),
         )
     }
@@ -2718,11 +2719,9 @@ impl Render for YamlView {
         // under the caret.
         let rail_reserve = MARK_RAIL_WIDTH;
         let completion = self.completion_list(&editor, cx);
-        // Both take a listener, so both are built before the theme is read: `design::colors`
-        // holds an immutable borrow of the context, and a listener needs the mutable one.
+        // Both take a listener, so both are built before the theme is read: the theme accessors
+        // hold an immutable borrow of the context, and a listener needs the mutable one.
         let row = self.document_row(editable, cx);
-        let strip = self.diagnostic_strip(cx);
-        let colors = design::colors(cx);
         let layer_box = self.layer_box.clone();
         let mut root = v_flex()
             .id("yaml-editor")
@@ -2730,15 +2729,22 @@ impl Render for YamlView {
             .size_full()
             .min_w(px(0.))
             .min_h(px(0.))
-            .bg(colors.editor_background.alpha(1.0))
-            .text_color(colors.editor_foreground)
+            .bg(role::surface_content(cx))
+            .text_color(role::fg_primary(cx))
             .track_focus(&self.focus)
             .key_context("Editor")
-            // The ring is always reserved and only recoloured, so taking and leaving
-            // focus cannot slide the document sideways.
+            // The ring is always reserved and only recoloured, so taking and leaving focus
+            // cannot slide the document sideways.
+            //
+            // It is the app's focus accent — `design::focus::border` — and not a second
+            // focus colour read straight out of the skin, so the editor's ring is the same
+            // blue as every other control's. `common::focus_ring` is deliberately not used
+            // here: it strokes all four edges, and this layer reserves two pixels on one
+            // side only, so the shared ring would add six pixels of border the frame it is
+            // drawn on does not have room for and the document would jump on focus.
             .border_l_2()
-            .border_color(colors.border.alpha(0.))
-            .focus_visible(|style| style.border_color(colors.border_focused))
+            .border_color(role::border_subtle(cx).alpha(0.))
+            .focus_visible(|style| style.border_color(design::focus::border(cx)))
             .aria_description(description)
             .on_action(cx.listener(Self::apply_action))
             .on_action(cx.listener(Self::undo_action))
@@ -2782,9 +2788,6 @@ impl Render for YamlView {
             .child(mark_rail)
             .when_some(completion, |this, list| this.child(list));
         root = root.child(body);
-        if let Some(strip) = strip {
-            root = root.child(strip);
-        }
         if self.cheat_sheet_visible {
             root = root.child(self.cheat_sheet(window, cx));
         }

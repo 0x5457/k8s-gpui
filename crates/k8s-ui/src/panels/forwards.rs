@@ -229,16 +229,11 @@ fn label_quiet(text: impl Into<SharedString>) -> Label {
 
 /// The status channel a severity names, taken from the role layer.
 ///
-/// `Severity::marker` reads the legacy skin field. The list's colours come from
-/// `design::role::*` so a theme can restate them without touching this file.
+/// One mapping for the whole product: `role::status_for` keeps `Success`
+/// quiet, so a routine copy confirmation is secondary ink, not the green the
+/// product reserves for something that needs the reader.
 fn severity_role(severity: Severity, cx: &App) -> Hsla {
-    match severity {
-        Severity::Success => role::success(cx),
-        Severity::Warning => role::warning(cx),
-        Severity::Error => role::danger(cx),
-        Severity::Info => role::info(cx),
-        Severity::Neutral | Severity::Muted => role::fg_tertiary(cx),
-    }
+    role::status_for(severity, cx)
 }
 
 fn summary_text(summary: ForwardSummary) -> String {
@@ -336,6 +331,12 @@ const ADDRESS_WIDTH: f32 = 104.;
 /// column: the words are what the row is read for and the lane is only the room they share.
 const STATUS_LANE_WIDTH: f32 = 76.;
 
+/// The width of the name lane, in the same spirit as [`ADDRESS_WIDTH`]: a fixed
+/// lane is what puts every row's address, arrow and remote port on one spine,
+/// so the port columns do not drift with the length of the name in front of
+/// them. Long names truncate inside the lane.
+const NAME_LANE_WIDTH: f32 = 160.;
+
 /// The gap between a status mark and the word beside it.
 ///
 /// `design::space::SM`, not `design::size::STATUS_DOT`. The mark and the word are two readings of
@@ -352,16 +353,6 @@ const STATUS_MARK_GAP: Pixels = space::SM;
 /// Fixed because the lane is right-aligned: an auto-width lane puts its right edge wherever the
 /// widest row happens to end, and a column of numbers whose right edge moves is not a column.
 const REMOTE_LANE_WIDTH: f32 = 68.;
-
-/// The local port the user asked for, when it is not the one in use. A taken port is reported
-/// here rather than silently replaced, because the user may have pointed something at it.
-fn port_substitution(snapshot: &ForwardSnapshot) -> Option<String> {
-    let requested = snapshot.request.local_port?;
-    let live = live_local_port(snapshot)?;
-    (requested != live).then(|| {
-        format!("Local port {requested} was already in use, so this forward listens on {live}.")
-    })
-}
 
 /// Namespace a forward targets. `default` is the namespace Kubernetes uses when a request leaves
 /// it empty, so a target cell never reads as a blank cell.
@@ -425,6 +416,11 @@ fn failure_step(snapshot: &ForwardSnapshot) -> Option<&'static str> {
             "The API server did not answer"
         } else if reason.contains("forbidden") || reason.contains("unauthorized") {
             "The connection is not allowed"
+        } else if reason.contains("already in use") || reason.contains("not available") {
+            // A local port the reader asked for and did not get, which is the one collision
+            // that happens on this machine rather than in the cluster. The forward refuses it
+            // rather than moving, so the row has to name the step that stopped it.
+            "The local port was already taken"
         } else if reason.contains("connect") || reason.contains("stream") {
             "The stream to the Pod broke"
         } else {
@@ -433,9 +429,10 @@ fn failure_step(snapshot: &ForwardSnapshot) -> Option<&'static str> {
     )
 }
 
-/// Spoken text for one row. It carries the address, the substituted port, and the failure reason,
-/// which a tooltip alone does not reach.
-fn row_aria_label(snapshot: &ForwardSnapshot) -> String {
+/// Spoken text for one row. It carries the address and the failure reason, which a tooltip
+/// alone does not reach, and `retry_stopped` so a reader who cannot see the row's second line
+/// hears that no further attempt is coming either.
+fn row_aria_label(snapshot: &ForwardSnapshot, retry_stopped: bool) -> String {
     let mut label = format!(
         "Port forward for {}. {}.",
         target_text(snapshot),
@@ -444,9 +441,8 @@ fn row_aria_label(snapshot: &ForwardSnapshot) -> String {
     if let Some(url) = forward_url(snapshot) {
         label.push_str(&format!(" {url}."));
     }
-    if let Some(substitution) = port_substitution(snapshot) {
-        label.push(' ');
-        label.push_str(&substitution);
+    if retry_stopped {
+        label.push_str(" Automatic retry has stopped; select Retry to try again.");
     }
     if let Some(error) = failure_reason(snapshot) {
         label.push(' ');
@@ -855,9 +851,9 @@ impl ForwardsView {
                     });
                 })
                 .with_accessibility(
-                    "Filter Port Forwards",
+                    "Filter port forwards",
                     "Type text to match a target, namespace, address, or state. Press Escape to clear the filter.",
-                    "Clear Port Forward Filter",
+                    "Clear port forward filter",
                 )
                 .with_width(px(FILTER_WIDTH))
             })
@@ -1233,6 +1229,17 @@ impl ForwardsView {
             .iter()
             .filter(|snapshot| snapshot.phase == ForwardPhase::Failed)
         {
+            // One attempt at a time. The budget is spent by attempts, and this pass runs on
+            // every repaint, so a panel that redraws to count a forward down to its next
+            // attempt would otherwise queue — and spend — the whole budget before the first
+            // one had run.
+            if self
+                .reconnects
+                .iter()
+                .any(|reconnect| reconnect.id == snapshot.id)
+            {
+                continue;
+            }
             let reason = failure_reason(snapshot).unwrap_or_default();
             let spent = match self.attempts.get(&snapshot.id) {
                 Some((spent_reason, spent)) if *spent_reason == reason => *spent,
@@ -1403,7 +1410,12 @@ impl ForwardsView {
             .child(
                 Icon::new(IconName::Network)
                     .flex_none()
-                    .text_color(role::fg_tertiary(cx)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    // The panel's own mark at the resting ink of a control's glyph,
+                    // which is also what the Helm mark beside it wears: in the
+                    // count tier the two toolbars a reader compares no longer agreed
+                    // on how loud their mark is, and the quieter one read as off.
+                    .text_color(design::icon::resting(cx)),
             )
             // A panel title is a title, so `fg_primary` — which is what
             // `label_panel_title` already carries. Named at the call site because this
@@ -1453,7 +1465,7 @@ impl ForwardsView {
                             .child(
                                 Icon::new(design::health_icon(feedback.severity))
                                     .flex_none()
-                                    .xsmall()
+                                    .with_size(Size::Size(design::icon::IN_ROW))
                                     .text_color(severity_role(feedback.severity, cx)),
                             )
                             .child(
@@ -1572,8 +1584,14 @@ impl ForwardsView {
             .debug_selector(move || format!("forwards-group-{heading}"))
             .flex_none()
             .w_full()
-            .h(design::size::ROW_NORMAL)
-            .px(space::MD)
+            // A group heading, not a table row: the search panel's headings wear
+            // the same token.
+            .h(design::size::GROUP_HEAD)
+            // The toolbar above this list and the Helm table beside it both start their
+            // content at `space::LG`. The rows were four pixels inside that edge, so the list
+            // had two left spines: one for the panel title and one for every name in it, and
+            // a heading that stepped back out again above the rows it introduces.
+            .px(space::LG)
             .gap(space::SM)
             .items_center()
             .role(Role::Group)
@@ -1633,7 +1651,10 @@ impl ForwardsView {
                 .debug_selector(move || name.to_string())
                 .w(px(ADDRESS_WIDTH))
                 .flex_none()
-                .child(common::label_body("—").text_color(role::fg_disabled(cx)))
+                // `fg_tertiary`, the role for a value the context has taken away, rather than
+                // `fg_disabled`: nothing here is unavailable, the session simply holds no
+                // listener to print.
+                .child(common::label_body("—").text_color(role::fg_tertiary(cx)))
                 .into_any_element();
         };
         // The two chords that belong to this panel's whole purpose, named where the
@@ -1680,11 +1701,19 @@ impl ForwardsView {
             // to be annoyed. Selecting the row you clicked is what a row is for.
             .on_mouse_down(MouseButton::Left, move |_, _, cx| cx.open_url(&target))
             .child(address_label);
-        // One step up on hover, in the app's own ink: the same 4% the row uses, over the
-        // accent, so the address acknowledges the pointer without changing hue.
-        let rest = role::surface_content(cx);
-        let hover = design::state::hover_on(accent, role::fg_primary(cx));
-        link = link.hover(move |this| this.bg(hover)).bg(rest);
+        // The link paints no plate of its own, at rest or on hover, and that is the whole
+        // reason it stayed legible.
+        //
+        // It used to set a resting background of `surface_content` and a hover of the accent
+        // with 4% of the local ink over it. Both were artefacts of the link treating itself as
+        // a surface: the resting fill painted an *unselected* plate inside whichever row it
+        // was in, so selecting a row put a content-coloured rectangle around its own address,
+        // and the hover put the accent — the address's own ink — on an accent plate, which made
+        // the link invisible at the one moment the reader was looking for it.
+        //
+        // The row already owns both states and paints the wash across its whole width, so the
+        // plate was never what told the reader anything. What tells them is the accent, the
+        // underline, and the row's own hover underneath.
         link.interactivity()
             .tooltip(move |window, cx| Tooltip::new(tooltip.clone()).build(window, cx));
         link.into_any_element()
@@ -1711,7 +1740,6 @@ impl ForwardsView {
         let selected = self.selected == Some(id);
         let target = row_target(snapshot);
         let reason = failure_reason(snapshot);
-        let substitution = port_substitution(snapshot);
         let (severity, phase_word) = phase_status(snapshot.phase, age);
         // What the time column says. A running session counts up, a failure counts
         // from when it broke, and a session this panel is reviving counts down to the
@@ -1732,7 +1760,10 @@ impl ForwardsView {
             },
         };
         let time_role = match reconnecting {
-            Some(_) => role::warning(cx),
+            // The time is a word, so it takes the word ink: the status word
+            // beside it reads `warning_word` and two neighbours in one channel
+            // must not read at two brightnesses.
+            Some(_) => role::warning_word(cx),
             None => match snapshot.phase {
                 ForwardPhase::Stopped => role::fg_disabled(cx),
                 _ => role::fg_tertiary(cx),
@@ -1794,7 +1825,7 @@ impl ForwardsView {
                 common::label_body(row_name(snapshot))
                     .text_color(role::fg_primary(cx))
                     .flex_none()
-                    .max_w(px(160.))
+                    .w(px(NAME_LANE_WIDTH))
                     .truncate(),
             )
             .child(self.render_address(snapshot, cx))
@@ -1846,7 +1877,18 @@ impl ForwardsView {
             );
         let reason_id = SharedString::from(format!("forwards-reason-{}", id_key(id)));
         let step = failure_step(snapshot);
-        let explained = reason.is_some() || substitution.is_some();
+        // Three attempts, then the panel stops. A row that reads the same as one that has not
+        // tried yet would leave the reader waiting for a fourth attempt that is never coming,
+        // so the row says the automatic retry has stopped and leaves the retry to the reader.
+        let retry_stopped = snapshot.phase == ForwardPhase::Failed
+            && reconnecting.is_none()
+            && self
+                .attempts
+                .get(&id)
+                .is_some_and(|(_, spent)| *spent >= RECONNECT_DELAYS.len());
+        // A row has a second line when the runtime said something or the retries ran out, and
+        // not otherwise.
+        let explained = reason.is_some() || retry_stopped;
         let body = v_flex()
             .flex_1()
             .min_w(px(0.))
@@ -1854,7 +1896,7 @@ impl ForwardsView {
             .child(main)
             // A failure has to say which step failed, in the row and not in a tooltip:
             // the second line is the whole point of `UI-SPEC.md` §14.3.
-            .when(reason.is_some() || substitution.is_some(), |this| {
+            .when(explained, |this| {
                 this.child(
                     h_flex()
                         .id(reason_id.clone())
@@ -1864,11 +1906,11 @@ impl ForwardsView {
                         .child(
                             common::label_small(step.unwrap_or("The forward ended"))
                                 .flex_none()
-                                .text_color(role::danger(cx)),
+                                .text_color(role::danger_word(cx)),
                         )
+                        // The runtime's sentence is longer than a 32px row, so the
+                        // row truncates it and the tooltip carries all of it.
                         .when_some(reason, |this, reason| {
-                            // The runtime's sentence is longer than a 32px row, so the
-                            // row truncates it and the tooltip carries all of it.
                             let sentence = reason.to_string();
                             this.child(common::with_tooltip(
                                 h_flex()
@@ -1886,17 +1928,12 @@ impl ForwardsView {
                                 sentence,
                             ))
                         })
-                        .when_some(substitution, |this, substitution| {
-                            // A substituted port is the abnormal case, not a footnote: the
-                            // user asked for 8080 and the browser is on 34567, so anything
-                            // already pointed at 8080 is pointed at the wrong thing. §0 keeps
-                            // the semantic colours for exactly this — a list where every row is
-                            // healthy is silent, and this row is the one that is not.
+                        .when(retry_stopped, |this| {
                             this.child(
-                                common::label_small(substitution)
+                                common::label_small("Automatic retry has stopped.")
                                     .min_w(px(0.))
                                     .truncate()
-                                    .text_color(role::warning(cx)),
+                                    .text_color(role::warning_word(cx)),
                             )
                         }),
                 )
@@ -1934,12 +1971,16 @@ impl ForwardsView {
         let row = h_flex()
             .id(SharedString::from(format!("forwards-item-{}", id_key(id))))
             .debug_selector(move || format!("forwards-row-{index}"))
-            .aria_label(row_aria_label(snapshot))
+            .aria_label(row_aria_label(snapshot, retry_stopped))
             .aria_row_index(index + 1)
             .aria_keyshortcuts("Enter Control+C Control+O")
             .w_full()
             .min_w(px(0.))
-            .px(space::MD)
+            // The panel's left edge, the same `space::LG` the toolbar and the summary strip
+            // start at and the same one the Helm table's own cells start at beside it. At
+            // `space::MD` every name in this list sat four pixels inside the title above it,
+            // which is one alignment spine for the chrome and another for the data.
+            .px(space::LG)
             .gap(space::SM)
             .items_start()
             .relative()
@@ -2082,7 +2123,7 @@ impl ForwardsView {
                 .child(
                     Button::new("forwards-clear-filter")
                         .label("Clear filter")
-                        .primary()
+                        .secondary()
                         .with_size(Size::Size(design::size::CONTROL))
                         .tab_index(2isize)
                         .tooltip("Show every port forward again")
@@ -2151,6 +2192,7 @@ fn render_action(
             Button::new(name.clone())
                 .label(word)
                 .secondary()
+                .with_size(Size::Size(design::size::CONTROL))
                 .tab_index(2isize)
                 .tooltip(format!("{word} this forward"))
                 .accessibility_label(format!("{word} port forward for {target}"))
@@ -2750,38 +2792,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_taken_local_port_is_reported_rather_than_hidden() {
-        let mut running = snapshot(ForwardPhase::Running, Some(34_567), None);
-        assert_eq!(
-            port_substitution(&running),
-            None,
-            "a forward on the port the user asked for has nothing to report"
-        );
-        running.request.local_port = Some(8080);
-        assert_eq!(
-            port_substitution(&running),
-            Some(
-                "Local port 8080 was already in use, so this forward listens on 34567.".to_owned()
-            ),
-            "the user may have pointed something at 8080, so the swap must be named"
-        );
-        running.phase = ForwardPhase::Failed;
-        assert_eq!(
-            port_substitution(&running),
-            None,
-            "a failed forward holds no port at all, so there is nothing to substitute"
-        );
-        // A failed forward holds no port, so it has no substitution to speak. The forward that
-        // still listens is the one that must say it out loud.
-        running.phase = ForwardPhase::Running;
-        let label = row_aria_label(&running);
-        assert!(
-            label.contains("already in use"),
-            "the substitution is spoken, not only hovered: {label}"
-        );
-    }
-
     /// `UI-SPEC.md` §14.3: "failed" is not a diagnosis, so a row names the step that
     /// broke as well as the reason the runtime gave.
     #[test]
@@ -2798,6 +2808,13 @@ mod tests {
             ),
             ("i/o timeout", Some("The API server did not answer")),
             ("forbidden", Some("The connection is not allowed")),
+            (
+                // A local port the reader asked for and did not get. The forward refuses
+                // rather than moving, so the step that stopped it is named rather than the
+                // row blaming the cluster.
+                "Local port 8080 could not be opened: Address already in use (os error 98). Choose another local port and try again.",
+                Some("The local port was already taken"),
+            ),
             (
                 "something else entirely",
                 Some("The forward could not be established"),
@@ -3073,17 +3090,20 @@ mod tests {
 
     #[test]
     fn row_aria_reports_the_address_and_the_failure_reason() {
-        let running = row_aria_label(&snapshot(ForwardPhase::Running, Some(8081), None));
+        let running = row_aria_label(&snapshot(ForwardPhase::Running, Some(8081), None), false);
         assert_eq!(
             running,
             "Port forward for pod-a:8080:8080. Running. http://localhost:8081."
         );
 
-        let failed = row_aria_label(&snapshot(
-            ForwardPhase::Failed,
-            Some(8081),
-            Some("Port forward ended unexpectedly."),
-        ));
+        let failed = row_aria_label(
+            &snapshot(
+                ForwardPhase::Failed,
+                Some(8081),
+                Some("Port forward ended unexpectedly."),
+            ),
+            false,
+        );
         assert_eq!(
             failed,
             "Port forward for pod-a:8080:8080. Failed. \
@@ -3094,9 +3114,23 @@ mod tests {
             "a failed forward must not announce an address: {failed}"
         );
         assert_eq!(
-            row_aria_label(&snapshot(ForwardPhase::Failed, None, Some("   "))),
+            row_aria_label(&snapshot(ForwardPhase::Failed, None, Some("   ")), false),
             "Port forward for pod-a:8080:8080. Failed.",
             "a blank error adds no spoken text"
+        );
+        // Three attempts, then the panel stops on its own. A row that spoke exactly like one
+        // that had not tried yet would leave the reader waiting for a fourth attempt.
+        assert_eq!(
+            row_aria_label(
+                &snapshot(
+                    ForwardPhase::Failed,
+                    None,
+                    Some("connection refused by the pod"),
+                ),
+                true,
+            ),
+            "Port forward for pod-a:8080:8080. Failed. Automatic retry has stopped; select Retry \
+             to try again. connection refused by the pod"
         );
     }
 
@@ -3405,8 +3439,15 @@ mod tests {
         assert!(cx.debug_bounds("forwards-empty").is_some());
     }
 
+    /// A forward answers on the port it was asked for, and a retry asks for that port again.
+    ///
+    /// A session that moved address would break whatever was pointed at the address the reader
+    /// typed, so a taken port is refused instead. The row therefore never has two ports to
+    /// reconcile, and this covers the one it can report.
     #[gpui_kit::test]
-    fn a_requested_local_port_is_reported_and_asked_for_again_on_retry(cx: &mut TestAppContext) {
+    fn a_forward_answers_on_the_asked_for_port_and_a_retry_asks_for_it_again(
+        cx: &mut TestAppContext,
+    ) {
         crate::init_ui(cx);
         cx.update(crate::settings::init);
         cx.dispatcher.allow_parking();
@@ -3421,21 +3462,25 @@ mod tests {
             Some(8081),
             "the port the user asked for reaches the forward"
         );
-        // The requested port was taken, so the forward landed on a free one.
+        // The forward bound the port the request named.
         state
             .borrow_mut()
             .bindings
             .pop()
             .expect("binding channel")
-            .send(Ok(34_567))
+            .send(Ok(8081))
             .expect("send the bound port");
         cx.run_until_parked();
         let snapshot = dock.read_with(cx, |dock, _| dock.forward_snapshots()[0].clone());
-        assert_eq!(snapshot.local_port, Some(34_567));
-        let label = row_aria_label(&snapshot);
+        assert_eq!(snapshot.local_port, Some(8081));
+        let label = row_aria_label(&snapshot, false);
         assert!(
-            label.contains("Local port 8081 was already in use"),
-            "the substitution is spoken: {label}"
+            label.contains("http://localhost:8081"),
+            "the address is the one that was asked for: {label}"
+        );
+        assert!(
+            !label.contains("already in use"),
+            "a forward on the port the reader typed has nothing to reconcile: {label}"
         );
 
         state
@@ -3536,7 +3581,7 @@ mod tests {
         let snapshot = dock.read_with(cx, |dock, _| dock.forward_snapshots()[0].clone());
         assert_eq!(snapshot.phase, ForwardPhase::Failed);
         assert_eq!(snapshot.local_port, None, "the listener is gone");
-        let label = row_aria_label(&snapshot);
+        let label = row_aria_label(&snapshot, false);
         assert!(
             !label.contains("Local port"),
             "no port is announced: {label}"

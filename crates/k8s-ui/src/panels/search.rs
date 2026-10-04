@@ -4,7 +4,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use gpui_kit::assets::IconName;
-use gpui_kit::component::alert::Alert;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::empty::{
     Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
@@ -33,7 +32,9 @@ use tokio::runtime::Handle;
 use tokio::sync::mpsc::{UnboundedReceiver, unbounded_channel};
 use tokio::sync::oneshot;
 
-use crate::design::{self, Confidence};
+use crate::design::{self, Severity};
+#[cfg(test)]
+use crate::design::Confidence;
 use crate::panels::common;
 use crate::session::{ClusterSession, ResourceSpec, TextInput};
 
@@ -88,7 +89,7 @@ impl SearchResultAction {
         match self {
             Self::Open => "Open",
             Self::Exec => "Exec",
-            Self::PortForward => "Port Forward",
+            Self::PortForward => "Port forward",
         }
     }
 
@@ -176,12 +177,14 @@ fn scrim(cx: &App) -> Hsla {
 
 /// A keycap: the one shape a shortcut has in this card.
 ///
-/// `text::MICRO` on the card's own plane, described by a `border_subtle` hairline
-/// instead of a fill. A filled cap is a second surface inside a list of rows, which
-/// is what made the footer's hints read as data and the palette's chips read as the
-/// loudest thing on a quiet row; a hairline says the same thing for one pixel of
-/// ink. Its height comes from its own type and padding rather than from a number,
-/// so every cap in the card is the same box without anyone measuring one.
+/// `text::MICRO` on a plane one step *behind* the card's own, described by a
+/// `border_subtle` hairline. The fill used to be `surface_raised` — which on a
+/// card that is itself `surface_raised` is the same colour, so the cap was a
+/// hairline around nothing and the footer's six chords read as run-on text. A
+/// keycap is the one thing on this card that is pressed into the surface rather
+/// than printed on it, so it takes the ladder's quiet step, `surface_inset`, and
+/// stays a hairline rather than a chip: a raised pill here is a second surface
+/// inside a list of rows, which is what made these hints read as data.
 fn keycap(key: impl Into<SharedString>, cx: &App) -> impl IntoElement {
     div()
         .flex_none()
@@ -190,7 +193,7 @@ fn keycap(key: impl Into<SharedString>, cx: &App) -> impl IntoElement {
         .px(design::space::XS)
         .py(design::space::XXS)
         .rounded(design::radius::SM)
-        .bg(design::role::surface_raised(cx))
+        .bg(design::role::surface_inset(cx))
         .border_1()
         .border_color(design::role::border_subtle(cx))
         .child(
@@ -236,6 +239,9 @@ fn search_hint(hint: &SearchHint, cx: &App) -> AnyElement {
 ///
 /// `size::KIND_ICON` rather than `size::ICON`: this is the kind set, drawn and
 /// judged at fourteen pixels, and the same glyph in the sidebar is fourteen pixels.
+/// Fourteen is `design::icon::NAV`, and the context and namespace switcher reserve
+/// the same lane for the same glyphs, because a mark that moves between the two
+/// cards and the sidebar has to keep its weight rather than be redrawn per surface.
 const ICON_SLOT: Pixels = design::size::KIND_ICON;
 
 /// Share of a row the namespace lane takes, shared by the column header and by
@@ -275,12 +281,6 @@ fn result_lanes(icon: AnyElement, namespace: AnyElement, name: AnyElement) -> An
         .into_any_element()
 }
 
-/// The measure `UI-SPEC` §2.3 gives a state's description: 40ch.
-///
-/// The width of the state's text column, in logical pixels.
-fn empty_measure() -> f32 {
-    f32::from(design::text::BODY) * 0.6 * common::EMPTY_MEASURE_CH
-}
 
 /// The heading above one group of rows.
 ///
@@ -470,7 +470,7 @@ impl SearchView {
                      Close. Press Escape to close the search.",
                     command = command_modifier()
                 ),
-                "Clear Resource Search",
+                "Clear resource search",
             )
             .with_width(px(SEARCH_WIDTH - 2.0 * f32::from(design::space::MD)))
         });
@@ -1602,8 +1602,14 @@ fn search_state(phase: SearchPhase, context: SearchStateContext<'_>, cx: &App) -
                     // is the one state whose title can add a fact: there is
                     // nothing to search *yet*.
                     SEARCH_IDLE_STATE_TITLE,
-                    "Enter a resource name.".to_owned(),
-                    Some("Results cover every listable kind.".to_owned()),
+                    // What to do, and nothing else. The scope line above the field
+                    // already says what the search covers, so the state has no fact
+                    // left to add — it was printing "Results cover every listable
+                    // kind" on the line reserved for the step the reader acts on,
+                    // which is a restatement of the line above it wearing an
+                    // instruction's type role.
+                    "Type a name.".to_owned(),
+                    None,
                     Role::Region,
                 ),
             }
@@ -1615,17 +1621,23 @@ fn search_state(phase: SearchPhase, context: SearchStateContext<'_>, cx: &App) -
     let waiting = icon == IconName::LoaderCircle;
     let secondary = design::role::fg_secondary(cx);
     let primary = design::role::fg_primary(cx);
-    let icon_size = Size::Size(design::size::ICON_LARGE);
+    let icon_size = Size::Size(design::icon::LEAD);
+    // The lead lane's own size, and the resting ink beside it. The mark was on the
+    // placeholder and count rung, which is two steps under the title it leads —
+    // so quiet that a reader scanning for the state read the title and never saw
+    // what kind of state it was. One step under the title is the relationship
+    // every other mark/word pair in the product has.
+    let lead_ink = design::icon::resting(cx);
     let icon: AnyElement = if waiting {
         // The one place a glyph here has to turn: two states that look alike
         // while the panel is still reading the cluster and is still waiting on
         // the API. `common::spinner` owns the sweep and stops it when the reader
         // asked for less motion.
-        common::spinner(icon, design::role::fg_tertiary(cx), icon_size)
+        common::spinner(icon, lead_ink, icon_size)
     } else {
         Icon::new(icon)
             .with_size(icon_size)
-            .text_color(design::role::fg_tertiary(cx))
+            .text_color(lead_ink)
             .into_any_element()
     };
     // gpui-kit's `Empty` owns the media/title/description shape. The two lines
@@ -1660,7 +1672,7 @@ fn search_state(phase: SearchPhase, context: SearchStateContext<'_>, cx: &App) -
         .header(
             EmptyHeader::new()
                 .gap(design::space::SM)
-                .max_w(px(empty_measure()))
+                .max_w(design::size::EMPTY_MEASURE)
                 .media(
                     // The unframed slot, always, and `mb_0` with it — the same two
                     // choices `common::empty_state_with_action` makes, for the same two
@@ -1762,10 +1774,17 @@ impl Render for SearchView {
             }
         });
         let action: Option<AnyElement> = if phase == SearchPhase::Error {
-            // `Retry` is the one commit this state offers and the Enter the dialog
-            // answers is the shell's, so the filled button is the right weight here
-            // — but it is the *only* filled button in the card, and its wrapper is
-            // what carries the focus handle and the card's one ring.
+            // Secondary, not the filled accent, and the reason is the card's own
+            // hierarchy: nothing here is the screen's one commitment. The field above
+            // is, the result list below is, and a search that failed is a state the
+            // reader leaves with one keystroke — re-running it is a recovery, not a
+            // decision. The card spends no accent at rest, and a filled `Retry`
+            // floating under grey words is the loudest thing on a card that has
+            // nothing else on it.
+            //
+            // The wrapper is what carries the focus handle and the card's one ring,
+            // so the control is one thing in the accessibility tree and the ring is
+            // drawn once.
             Some(
                 div()
                     .id("resource-search-retry")
@@ -1773,14 +1792,14 @@ impl Render for SearchView {
                     .flex_none()
                     .rounded(design::radius::MD)
                     .role(Role::Button)
-                    .aria_label("Retry Resource Search")
+                    .aria_label("Retry resource search")
                     .tab_index(4isize)
                     .track_focus(&self.retry_focus)
                     .focus_visible(common::focus_ring(cx))
                     .child(
                         Button::new("resource-search-retry-button")
                             .label("Retry")
-                            .primary()
+                            .secondary()
                             .with_size(Size::Medium)
                             // One ring, drawn by the wrapper that owns the focus
                             // handle. Left on, the component's own ring would answer
@@ -1803,7 +1822,7 @@ impl Render for SearchView {
                     .flex_none()
                     .rounded(design::radius::MD)
                     .role(Role::Button)
-                    .aria_label("Clear Resource Search")
+                    .aria_label("Clear resource search")
                     .tab_index(3isize)
                     .track_focus(&focus)
                     .focus_visible(common::focus_ring(cx))
@@ -2105,13 +2124,18 @@ impl Render for SearchView {
                             .gap(design::space::SM)
                             .items_center()
                             // The card's own mark, in the mark ink: the same
-                            // `fg.tertiary` every glyph in this card is drawn in, so
+                            // tier every glyph in this card is drawn in, so
                             // one icon treatment rather than a louder one where the
                             // row happens to meet it.
+                            //
+                            // `ICON_SLOT`, and not `.xsmall()`: `xsmall` resolves against
+                            // the theme's rem rather than a lane size, which put the
+                            // header's mark below every glyph in the card's own rows and
+                            // left it speck-like beside a 15px title in a 32px band.
                             .child(
                                 Icon::new(IconName::Search)
-                                    .xsmall()
-                                    .text_color(design::role::fg_tertiary(cx)),
+                                    .with_size(Size::Size(ICON_SLOT))
+                                    .text_color(design::icon::incidental(cx)),
                             )
                             .child(
                                 h_flex()
@@ -2194,7 +2218,7 @@ impl Render for SearchView {
                                         .flex_none()
                                         .rounded(design::radius::MD)
                                         .role(Role::Button)
-                                        .aria_label("Close Resource Search")
+                                        .aria_label("Close resource search")
                                         .tab_index(2isize)
                                         .track_focus(&self.close_focus)
                                         .focus_visible(common::focus_ring(cx))
@@ -2202,12 +2226,12 @@ impl Render for SearchView {
                                             common::reusable_icon_button(
                                                 "resource-search-close-button",
                                                 IconName::X,
-                                                "Close Resource Search",
+                                                "Close resource search",
                                             )
                                             .focus_ring(false)
                                             .role(RoleOverride::Presentational)
                                             .tab_stop(false)
-                                            .tooltip("Close Resource Search")
+                                            .tooltip("Close resource search")
                                             .on_click(
                                                 cx.listener(move |_, _, window, cx| {
                                                     handler(window, cx)
@@ -2298,29 +2322,28 @@ impl Render for SearchView {
                             })
                             .when(has_rows, |this| this.children(list_rows))
                             .when(truncated && has_rows, |this| {
-                                this.child(
-                                    Alert::warning(
-                                        "resource-search-limit-notice",
-                                        search_limit_detail(scanned),
-                                    )
-                                    .with_size(Size::XSmall),
-                                )
+                                // The product's one status band, so the search
+                                // page's notices read exactly like the ones the
+                                // rest of the app paints.
+                                this.child(common::status_message(
+                                    Severity::Warning,
+                                    search_limit_detail(scanned),
+                                    None,
+                                    cx,
+                                ))
                             })
                             .when(partial, |this| {
                                 // Incomplete results are a statement about what the
                                 // app could not read, not a fault in the results it
-                                // did read, so the notice keeps the neutral variant
-                                // and the confidence marker rather than a status hue.
-                                // A warning colour here would read as "these
-                                // resources are unhealthy".
-                                this.child(
-                                    Alert::new(
-                                        "resource-search-partial-notice",
-                                        PARTIAL_RESULTS_NOTICE,
-                                    )
-                                    .icon(design::confidence::icon(Confidence::Unknown))
-                                    .with_size(Size::XSmall),
-                                )
+                                // did read, so the notice is neutral: a warning
+                                // colour here would read as "these resources are
+                                // unhealthy".
+                                this.child(common::status_message(
+                                    Severity::Neutral,
+                                    PARTIAL_RESULTS_NOTICE,
+                                    None,
+                                    cx,
+                                ))
                             }),
                     )
                     .child(

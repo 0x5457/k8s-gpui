@@ -76,6 +76,16 @@ pub const PROBE_INTERVAL: Duration = Duration::from_secs(60);
 /// Number of recent probes used for packet loss.
 pub const PROBE_WINDOW: usize = 32;
 
+/// Successful probes behind the published round-trip time.
+///
+/// The tier, the watch timeout it selects and the one latency number the app ever
+/// shows all read this value, so it has to survive a single bad minute. One probe
+/// is a sample and not a rate: a credential that was not ready yet, one retry, or
+/// one packet that took a different path is enough to call a healthy link
+/// cross-region, and a tier chosen that way costs a 300 second watch timeout and
+/// streaming lists until enough fast probes push it back out of the window.
+pub const RTT_SMOOTHING_SAMPLES: usize = 5;
+
 /// Maximum concurrent background requests for one cluster.
 pub const BACKGROUND_CONCURRENCY: usize = 4;
 
@@ -113,7 +123,8 @@ pub fn classify(rtt: Option<Duration>, loss_rate: f64) -> LatencyTier {
 /// Snapshot of the latest probe results.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Latency {
-    /// RTT from the last successful probe. It is `None` before the first success.
+    /// RTT from the recent successful probes: their median, so one slow probe
+    /// cannot move it. `None` before the first success.
     pub rtt: Option<Duration>,
     /// Packet loss over the recent probe window.
     pub loss_rate: f64,
@@ -144,7 +155,7 @@ impl Default for Latency {
 #[derive(Debug, Default)]
 pub struct LatencyTracker {
     window: VecDeque<bool>,
-    last_rtt: Option<Duration>,
+    rtt_samples: VecDeque<Duration>,
     probes: u64,
     failures: u64,
 }
@@ -153,9 +164,13 @@ impl LatencyTracker {
     /// `None` records a failed probe.
     pub fn record(&mut self, sample: Option<Duration>) {
         self.probes = self.probes.saturating_add(1);
-        match sample {
-            Some(rtt) => self.last_rtt = Some(rtt),
-            None => self.failures = self.failures.saturating_add(1),
+        if let Some(rtt) = sample {
+            if self.rtt_samples.len() >= RTT_SMOOTHING_SAMPLES {
+                self.rtt_samples.pop_front();
+            }
+            self.rtt_samples.push_back(rtt);
+        } else {
+            self.failures = self.failures.saturating_add(1);
         }
         if self.window.len() >= PROBE_WINDOW {
             self.window.pop_front();
@@ -171,12 +186,20 @@ impl LatencyTracker {
             lost as f64 / self.window.len() as f64
         };
         Latency {
-            rtt: self.last_rtt,
+            rtt: median(&self.rtt_samples),
             loss_rate,
             probes: self.probes,
             failures: self.failures,
         }
     }
+}
+
+/// The middle of the window, taking the later of two middles so an even window
+/// answers with the slower half rather than the faster one.
+fn median(samples: &VecDeque<Duration>) -> Option<Duration> {
+    let mut sorted: Vec<Duration> = samples.iter().copied().collect();
+    sorted.sort_unstable();
+    sorted.get(sorted.len() / 2).copied()
 }
 
 #[cfg(test)]
@@ -235,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    fn tracker_keeps_last_rtt_and_uses_rolling_window() {
+    fn tracker_publishes_a_median_rtt_and_a_rolling_loss_window() {
         let mut tracker = LatencyTracker::default();
         tracker.record(millis(20));
         assert_eq!(tracker.snapshot().tier(), LatencyTier::Local);
@@ -259,5 +282,20 @@ mod tests {
             0.0,
             "a failed sample leaves the window"
         );
+
+        // One slow probe is a slow minute, not a slow link: the tier decides a
+        // 300 second watch timeout and streaming lists, so a single outlier must
+        // not be able to choose it.
+        tracker.record(millis(400));
+        let snapshot = tracker.snapshot();
+        assert_eq!(snapshot.rtt, millis(10));
+        assert_eq!(snapshot.tier(), LatencyTier::Local);
+
+        // A link that is slow every time is slow.
+        tracker.record(millis(400));
+        tracker.record(millis(400));
+        let snapshot = tracker.snapshot();
+        assert_eq!(snapshot.rtt, millis(400));
+        assert_eq!(snapshot.tier(), LatencyTier::HighLatency);
     }
 }

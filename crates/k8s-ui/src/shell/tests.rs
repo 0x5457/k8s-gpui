@@ -16,12 +16,10 @@ use gpui_kit::{
 use rand::RngExt as _;
 use rand::prelude::StdRng;
 
-use k8s_core::cluster::ClusterId;
 use k8s_core::discovery::ResourceCatalog;
 use k8s_core::helm::{Helm, HelmError};
-use k8s_core::hotbar::{Bank, Hotbar, Slot};
 use k8s_core::latency::LatencyTier;
-use k8s_core::machines::{HotbarEvent, SEARCH_DEBOUNCE_MS, SearchHit, SearchPhase};
+use k8s_core::machines::{SEARCH_DEBOUNCE_MS, SearchHit, SearchPhase};
 use kube_core::DynamicObject;
 
 use super::commands::{
@@ -96,6 +94,26 @@ fn test_runtime() -> tokio::runtime::Handle {
 fn init_cluster_runtime(cx: &mut TestAppContext) -> tokio::runtime::Handle {
     cx.dispatcher.allow_parking();
     test_runtime()
+}
+
+/// The entities behind every mounted tab view.
+///
+/// A session change drops the views the old session built and rebuilds the active
+/// one, so "is anything left over" is a question about entities and not about slots.
+fn mounted_view_ids(shell: &Shell) -> Vec<u64> {
+    shell
+        .views
+        .iter()
+        .flatten()
+        .map(|view| match view {
+            TabView::Resource(view) => view.entity_id().as_u64(),
+            TabView::Preview(view) => view.entity_id().as_u64(),
+            TabView::Overview(view) => view.entity_id().as_u64(),
+            TabView::Forwards(view) => view.entity_id().as_u64(),
+            TabView::Helm(view) => view.entity_id().as_u64(),
+            TabView::Settings(view) => view.entity_id().as_u64(),
+        })
+        .collect()
 }
 
 fn load_test_registry(
@@ -634,7 +652,6 @@ fn generic_commands_are_action_backed_with_binding_metadata() {
         ("keymap.reload", "k8s_shell::ReloadKeymap"),
         ("keymap.preset.lens", "k8s_shell::UseKeymapPreset"),
         ("keymap.preset.vscode", "k8s_shell::UseKeymapPreset"),
-        ("hotbar.toggle", "k8s_hotbar::ToggleHotbar"),
     ] {
         let command = commands
             .iter()
@@ -913,6 +930,59 @@ fn selection_commands_explain_wrong_view_or_missing_selection(cx: &mut TestAppCo
             .as_ref()
             .is_some_and(|toast| toast.message.contains("Select a row"))
     }));
+}
+
+/// The shape of a shell command that acts on what the table has selected.
+type SelectionCommand = fn(&mut Shell, &mut gpui_kit::Window, &mut gpui_kit::Context<Shell>);
+
+/// The table selects a range or a set; the Inspector and every object action read one row.
+///
+/// Hitting the anchor of a three-row selection restarts one Pod and leaves the reader believing
+/// it acted on all three, so each action that reaches exactly one object stops here and counts
+/// the rows. Delete and Scale state their own multi-row answers inside the table; these four
+/// had none.
+#[gpui_kit::test]
+fn a_multi_row_selection_stops_every_action_that_hits_one_object(cx: &mut TestAppContext) {
+    init_ui(cx);
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
+    let ops = Rc::new(RecordingOps::default());
+    inject_ops(cx, &shell, Rc::clone(&ops));
+    focus_table(cx, &shell);
+
+    // Select All is the shortest route to a selection that one row cannot describe.
+    cx.simulate_keystrokes("ctrl-a");
+    cx.run_until_parked();
+    assert_eq!(
+        shell.read_with(cx, |shell, cx| shell.pods.read(cx).selection_count()),
+        3,
+        "the demo table must list more than one row for this to mean anything"
+    );
+
+    for (action, command) in [
+        ("Show logs", Shell::command_show_logs as SelectionCommand),
+        ("Exec", Shell::command_exec as SelectionCommand),
+        (
+            "Start port forward",
+            Shell::command_forward_port as SelectionCommand,
+        ),
+        ("Restart", Shell::command_restart as SelectionCommand),
+    ] {
+        cx.update(|window, cx| shell.update(cx, |shell, cx| command(shell, window, cx)));
+        cx.run_until_parked();
+        let message = shell
+            .read_with(cx, |shell, _| {
+                shell.toast.as_ref().map(|toast| toast.message.clone())
+            })
+            .unwrap_or_default();
+        assert!(
+            message.contains(action) && message.contains("3 selected rows"),
+            "{action} must refuse a multi-row selection by naming itself and the count, got: {message}"
+        );
+    }
+    assert!(
+        ops.calls.borrow().is_empty(),
+        "no action may hit one of three selected rows"
+    );
 }
 
 #[gpui_kit::test]
@@ -1217,7 +1287,6 @@ fn settings_keeps_the_resource_chrome_and_its_own_panel_switches(cx: &mut TestAp
     cx.simulate_resize(gpui_kit::size(px(960.0), px(640.0)));
     cx.run_until_parked();
     assert!(cx.debug_bounds("resource-tree-panel").is_some());
-    assert!(cx.debug_bounds("hotbar-rail").is_some());
 
     cx.update(|_, cx| {
         shell.update(cx, |shell, cx| {
@@ -1238,11 +1307,7 @@ fn settings_keeps_the_resource_chrome_and_its_own_panel_switches(cx: &mut TestAp
     assert!(cx.debug_bounds("open-settings-keycap").is_none());
     // The tree stays, and so does the toolbar that switches it.
     assert!(cx.debug_bounds("resource-tree-panel").is_some());
-    // The hotbar rail is the one thing Settings still folds away: it is a launcher for other
-    // clusters, and the settings content area is already carrying a second column.
-    assert!(cx.debug_bounds("hotbar-rail").is_none());
     assert!(shell.read_with(cx, |shell, _| shell.sidebar_open));
-    assert!(shell.read_with(cx, |shell, _| !shell.hotbar_open));
 
     // The sidebar switch still works while Settings is open, and raises no toast.
     cx.update(|window, cx| {
@@ -1265,9 +1330,7 @@ fn settings_keeps_the_resource_chrome_and_its_own_panel_switches(cx: &mut TestAp
     });
     cx.run_until_parked();
     assert!(cx.debug_bounds("resource-tree-panel").is_some());
-    assert!(cx.debug_bounds("hotbar-rail").is_some());
     assert!(shell.read_with(cx, |shell, _| shell.sidebar_open));
-    assert!(shell.read_with(cx, |shell, _| shell.hotbar_open));
 }
 
 #[gpui_kit::test]
@@ -1362,15 +1425,15 @@ fn shell_action_dispatch_defers_until_update_completes(cx: &mut TestAppContext) 
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
             shell.dispatch(super::ToggleLeftPanel, window, cx);
-            shell.dispatch(super::ToggleHotbar, window, cx);
+            shell.dispatch(super::ToggleDock, window, cx);
             assert!(shell.sidebar_open);
-            assert!(shell.hotbar_open);
+            assert!(shell.dock_open);
         });
     });
     cx.run_until_parked();
 
     assert!(!shell.read_with(cx, |shell, _| shell.sidebar_open));
-    assert!(!shell.read_with(cx, |shell, _| shell.hotbar_open));
+    assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
 }
 
 #[gpui_kit::test]
@@ -1384,6 +1447,14 @@ fn connection_failure_has_one_primary_shell_surface(cx: &mut TestAppContext) {
         matches!(&shell.connection, ConnectionState::Failed(_))
     }));
     assert!(shell.read_with(cx, |shell, cx| shell.connection_failure_is_primary(cx)));
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .tabs
+            .get(shell.active_tab)
+            .map(|tab| tab.content)),
+        Some(TabContent::Overview),
+        "a kubeconfig that could not be read leaves the reader on the tab that explains it, with the failure surface in front of it"
+    );
     assert!(cx.debug_bounds("connection-failure").is_some());
     assert!(cx.debug_bounds("pods-error").is_none());
     assert!(cx.debug_bounds("tree-failure").is_none());
@@ -1420,13 +1491,18 @@ fn startup_loading_replacement_advances_epoch_and_rebinds_owned_ui(cx: &mut Test
     });
     cx.run_until_parked();
 
-    let (old_epoch, old_pods, old_dock) = shell.read_with(cx, |shell, _| {
+    let (old_epoch, old_pods, old_dock, old_views) = shell.read_with(cx, |shell, _| {
         (
             shell.session_epoch,
-            shell.pods.entity_id(),
-            shell.dock_panel.entity_id(),
+            shell.pods.entity_id().as_u64(),
+            shell.dock_panel.entity_id().as_u64(),
+            mounted_view_ids(shell),
         )
     });
+    assert!(
+        !old_views.is_empty(),
+        "a shell with no registry opens on a mounted Overview, so there is a view to outlive"
+    );
     assert!(shell.read_with(cx, |shell, _| {
         matches!(&shell.connection, ConnectionState::Connecting)
             && matches!(&shell.catalog_state, CatalogState::Loading)
@@ -1440,9 +1516,18 @@ fn startup_loading_replacement_advances_epoch_and_rebinds_owned_ui(cx: &mut Test
 
     shell.read_with(cx, |shell, cx| {
         assert_eq!(shell.session_epoch, old_epoch + 1);
-        assert_ne!(shell.pods.entity_id(), old_pods);
-        assert_ne!(shell.dock_panel.entity_id(), old_dock);
-         assert!(shell.views.iter().all(|view| view.is_none()));
+        assert_ne!(shell.pods.entity_id().as_u64(), old_pods);
+        assert_ne!(shell.dock_panel.entity_id().as_u64(), old_dock);
+         // Nothing built for the replaced session is still mounted. The active tab's view
+         // is rebuilt rather than kept — it was built with no handle, and a handle is the
+         // one thing that view can never be given — so this asks about the entities, not
+         // about the slots being empty.
+         assert!(
+             mounted_view_ids(shell)
+                 .iter()
+                 .all(|id| !old_views.contains(id)),
+             "no view from the replaced session survives the replacement"
+         );
          assert!(shell.latency_auto_paused.is_empty());
          assert_eq!(shell.latency_tier, LatencyTier::Local);
          assert!(shell.search_epoch.is_none());
@@ -1937,58 +2022,11 @@ fn the_status_bar_forward_link_opens_the_centre_list(cx: &mut TestAppContext) {
         )
     });
     assert_eq!(content, TabContent::Forwards, "the link opened the list");
-    assert_eq!(title.as_ref(), "Port Forwards");
+    assert_eq!(title.as_ref(), "Port forwards");
     assert!(
         cx.debug_bounds("center-tab-panel").is_some(),
         "the list is mounted in the centre column"
     );
-}
-
-#[gpui_kit::test]
-fn hotbar_keeps_fixed_controls_and_roving_slot_focus(cx: &mut TestAppContext) {
-    init_ui(cx);
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
-    let hotbar = Hotbar {
-        active: 0,
-        banks: vec![Bank {
-            name: "test".to_owned(),
-            slots: (0..k8s_core::hotbar::MAX_SLOTS_PER_BANK)
-                .map(|index| Slot::new(ClusterId::from_bits(index as u64 + 1), format!("c{index}")))
-                .collect(),
-        }],
-    };
-    shell.update(cx, |shell, cx| {
-        shell.hotbar_machine.handle(&HotbarEvent::Load(hotbar));
-        cx.notify();
-    });
-    cx.run_until_parked();
-    cx.simulate_resize(gpui_kit::size(px(1440.), px(420.)));
-    cx.run_until_parked();
-
-    let rail = cx.debug_bounds("hotbar-rail").expect("hotbar rail");
-    let bank = cx
-        .debug_bounds("hotbar-bank-control")
-        .expect("bank control");
-    let slots = cx.debug_bounds("hotbar-slots").expect("slot scroller");
-    let add = cx.debug_bounds("hotbar-add-control").expect("add control");
-    let hide = cx
-        .debug_bounds("hotbar-hide-control")
-        .expect("hide control");
-    assert!(bank.bottom() <= slots.top());
-    assert!(slots.bottom() <= add.top());
-    assert!(hide.bottom() <= rail.bottom());
-
-    // The rail is one Tab stop and the arrow keys move a cursor through the slots.
-    // Every slot is a gpui-kit button with its own focus, so the rail claims the
-    // arrows rather than a roving focus ring it cannot own.
-    let rail_focus = shell.read_with(cx, |shell, _| shell.hotbar_focus_handle.clone());
-    cx.update(|window, cx| window.focus(&rail_focus, cx));
-    cx.simulate_keystrokes("down");
-    assert_eq!(shell.read_with(cx, |shell, _| shell.hotbar_slot_cursor), 0);
-    cx.simulate_keystrokes("end");
-    assert_eq!(shell.read_with(cx, |shell, _| shell.hotbar_slot_cursor), 11);
-    cx.simulate_keystrokes("home");
-    assert_eq!(shell.read_with(cx, |shell, _| shell.hotbar_slot_cursor), 0);
 }
 
 #[gpui_kit::test]
@@ -2041,103 +2079,6 @@ fn preview_metrics_visibility_follows_the_active_preview_only(cx: &mut TestAppCo
     // With the Preview gone the panel takes the metrics over, so switching away
     // does not silently stop the reader from watching them.
     assert!(shell.read_with(cx, |shell, cx| shell.inspector.read(cx).metrics_visible()));
-}
-
-/// The three fixed Hotbar controls are tab stops, and each one runs its action: the bank control
-/// opens its list and the list switches banks, Add fills the active bank from the current
-/// context, and Hide collapses the rail.
-///
-/// The bank list is reached from both input paths, and the keyboard path is a regression guard.
-/// The rail's key handler is a `cx.listener`, so the trigger's key handling runs while Shell's own
-/// update lease is still on the stack. The list's open flag used to be written from there, which
-/// leased Shell a second time and panicked with "cannot update k8s_ui::shell::Shell while it is
-/// already being updated". That write now lands after the lease ends, so the keyboard activation
-/// still has to report the list as open.
-#[gpui_kit::test]
-fn hotbar_fixed_controls_take_focus_and_activate_by_mouse_and_keyboard(cx: &mut TestAppContext) {
-    init_ui(cx);
-    let handle = init_cluster_runtime(cx);
-    let registry = load_test_registry(&handle, SWITCH_KUBECONFIG, "hotbar-controls");
-    let session = ClusterSession::from_registry(registry, handle);
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::with_cluster(session, cx));
-    shell.update(cx, |shell, cx| {
-        shell.hotbar_machine.handle(&HotbarEvent::Load(Hotbar {
-            active: 0,
-            banks: vec![Bank::new("first"), Bank::new("second")],
-        }));
-        cx.notify();
-    });
-    cx.run_until_parked();
-    cx.simulate_resize(gpui_kit::size(px(1440.), px(420.)));
-    cx.run_until_parked();
-
-    // The bank control is the rail's first Tab stop, so Tab from the rail lands
-    // on it, and Enter is the key it opens its list with. The second row of that
-    // list is the second bank, so walking to it and pressing Enter both proves
-    // the list is the bank list and proves it runs the switch.
-    let rail_focus = shell.read_with(cx, |shell, _| shell.hotbar_focus_handle.clone());
-    cx.update(|window, cx| window.focus(&rail_focus, cx));
-    cx.run_until_parked();
-    cx.update(|window, cx| window.focus_next(cx));
-    cx.run_until_parked();
-    cx.simulate_keystrokes("enter");
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("popup-menu").is_some(),
-        "the bank control opens its menu"
-    );
-    assert!(
-        shell.read_with(cx, |shell, _| shell.hotbar_bank_open),
-        "the bank control reports that its menu opened"
-    );
-    cx.simulate_keystrokes("down down enter");
-    cx.run_until_parked();
-    assert_eq!(
-        shell.read_with(cx, |shell, _| shell.hotbar().map(|hotbar| hotbar.active)),
-        Some(1),
-        "the second row of the list is the second bank"
-    );
-    assert!(
-        cx.debug_bounds("popup-menu").is_none(),
-        "choosing a bank closes the list"
-    );
-    assert!(
-        !shell.read_with(cx, |shell, _| shell.hotbar_bank_open),
-        "closing the menu clears the flag again"
-    );
-
-    let trigger = cx
-        .debug_bounds("hotbar-bank-control")
-        .expect("bank control");
-    cx.simulate_click(trigger.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert!(cx.debug_bounds("popup-menu").is_some());
-    cx.simulate_click(trigger.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert!(
-        cx.debug_bounds("popup-menu").is_none(),
-        "the trigger closes the menu it opened"
-    );
-
-    let add = cx.debug_bounds("hotbar-add-control").expect("add control");
-    cx.simulate_click(add.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert_eq!(
-        shell.read_with(cx, |shell, _| {
-            shell
-                .hotbar()
-                .and_then(Hotbar::active_bank)
-                .map_or(0, |bank| bank.slots.len())
-        }),
-        1
-    );
-
-    let hide = cx
-        .debug_bounds("hotbar-hide-control")
-        .expect("hide control");
-    cx.simulate_click(hide.center(), Modifiers::none());
-    cx.run_until_parked();
-    assert!(!shell.read_with(cx, |shell, _| shell.hotbar_open));
 }
 
 /// `UI-SPEC` §11.2 has three Inspector states, and only one of them is "not on screen".
@@ -2954,8 +2895,6 @@ fn commands_with_actions_have_bindings(cx: &mut TestAppContext) {
                          | "keymap.reload"
                          | "keymap.preset.lens"
                          | "keymap.preset.vscode"
-                          // Palette-only action without a default shortcut.
-                          | "hotbar.toggle"
                          | "cluster.reload_kubeconfigs"
                 ) {
                     continue;
@@ -4707,29 +4646,6 @@ fn scale_dialog_validates_and_submits(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn bank_dialog_starts_on_input_and_restores_focus(cx: &mut TestAppContext) {
-    init_ui(cx);
-    let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
-    let previous = shell.read_with(cx, |shell, _| shell.tree_focus_handle.clone());
-    cx.update(|window, cx| window.focus(&previous, cx));
-    cx.update(|window, cx| {
-        shell.update(cx, |shell, cx| {
-            shell.open_hotbar_bank_dialog(None, "Bank 1".to_owned(), window, cx);
-        });
-    });
-    cx.run_until_parked();
-
-    let input = shell
-        .read_with(cx, |shell, _| shell.dialog_input())
-        .expect("bank dialog input");
-    let input_focus = cx.update(|_, cx| input.read(cx).focus_handle(cx));
-    assert!(cx.update(|window, _| input_focus.is_focused(window)));
-    cx.simulate_keystrokes("escape");
-    assert!(shell.read_with(cx, |shell, _| shell.dialog.is_none()));
-    assert!(cx.update(|window, _| previous.is_focused(window)));
-}
-
-#[gpui_kit::test]
 fn scale_dialog_mouse_click_positions_caret_and_modal_tab_escape(cx: &mut TestAppContext) {
     init_ui(cx);
     install_test_keymap(cx);
@@ -5094,7 +5010,6 @@ fn tab_order_puts_the_table_before_the_panels(cx: &mut TestAppContext) {
     cx.run_until_parked();
 
     let (
-        hotbar,
         tree,
         center_tabs,
         tree_filter,
@@ -5109,7 +5024,6 @@ fn tab_order_puts_the_table_before_the_panels(cx: &mut TestAppContext) {
     ) = cx.update(|_, cx| {
         let shell = shell.read(cx);
         (
-            shell.hotbar_focus_handle.clone(),
             shell.tree_focus_handle.clone(),
             shell.center_tabs_focus.clone(),
             shell.tree_filter_input.read(cx).focus_handle(cx),
@@ -5132,7 +5046,6 @@ fn tab_order_puts_the_table_before_the_panels(cx: &mut TestAppContext) {
     for _ in 0..64 {
         let focused = cx.update(|window, cx| window.focused(cx));
         let tag = match focused {
-            Some(handle) if handle == hotbar => "hotbar",
             Some(handle) if handle == tree => "tree",
             Some(handle) if handle == center_tabs => "center-tabs",
             Some(handle) if handle == tree_filter => "tree-filter",
@@ -5155,7 +5068,6 @@ fn tab_order_puts_the_table_before_the_panels(cx: &mut TestAppContext) {
 
     let position = |tag: &str| order.iter().position(|entry| *entry == tag);
     for tag in [
-        "hotbar",
         "tree",
         "center-tabs",
         "tree-filter",
@@ -5335,7 +5247,7 @@ fn failing_terminal_from_exec_dialog_does_not_panic(cx: &mut TestAppContext) {
 }
 
 #[gpui_kit::test]
-fn registry_current_context_is_used_without_a_hotbar_choice(cx: &mut TestAppContext) {
+fn registry_current_context_is_used_without_a_remembered_choice(cx: &mut TestAppContext) {
     init_ui(cx);
     let handle = init_cluster_runtime(cx);
     let source =
@@ -5368,9 +5280,8 @@ fn switching_a_to_b_clears_search_state_and_retargets_the_executor(cx: &mut Test
     assert!(shell.read_with(cx, |shell, cx| !shell.search.read(cx).hits().is_empty()));
     let old_dock = shell.read_with(cx, |shell, _| shell.dock_panel.entity_id());
     shell.update(cx, |shell, cx| {
-        shell.dialog = Some(Dialog::HotbarRemove {
-            index: 0,
-            name: "old".into(),
+        shell.dialog = Some(Dialog::ConfirmTabClose {
+            request: super::TabCloseRequest::All,
         });
         shell.dock_panel.update(cx, |dock, cx| {
             dock.set_lines(vec!["old log".to_owned()], cx)
@@ -5966,7 +5877,7 @@ fn divider_drag_follows_the_panel_edge(cx: &mut TestAppContext) {
     let press = point(divider.left() + px(1.0), divider.center().y);
     // The grab is the distance from the panel edge to the press, so the divider edge
     // must not jump while the pointer stays where it landed.
-    let edge = shell.read_with(cx, |shell, _| super::hotbar_width() + shell.left_width);
+    let edge = shell.read_with(cx, |shell, _| shell.left_width);
     cx.simulate_mouse_move(press, None, Modifiers::none());
     cx.simulate_mouse_down(press, MouseButton::Left, Modifiers::none());
     assert_eq!(
@@ -6285,7 +6196,7 @@ fn tab_drag_reorder_follows_the_settings_layout(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.sidebar_open));
     assert!(shell.read_with(cx, |shell, _| shell.settings_layout_saved.is_some()));
 
-    // Dragging another tab while Settings is active restores the hotbar rail.
+    // Dragging another tab while Settings is active leaves the Settings layout alone.
     let other = shell.read_with(cx, |shell, _| {
         shell
             .open_tabs
@@ -6982,4 +6893,133 @@ fn a_tab_without_a_view_falls_back_to_the_shell_focus(cx: &mut TestAppContext) {
     assert!(!shell.read_with(cx, |shell, _| shell.focus_active_view_pending));
     let root = shell.read_with(cx, |shell, _| shell.focus_handle.clone());
     assert!(cx.update(|window, _| root.is_focused(window)));
+}
+
+/// A session with nothing to read opens on the screen that explains it.
+///
+/// This is the whole first run: production builds the shell before kubeconfigs are
+/// read, so a machine with no kubeconfig, an unreadable one, or one whose contexts
+/// all failed to load arrives here, and the Overview is the only tab that says what
+/// happened and carries the control that fixes it. The window used to open on the
+/// Pods registry slot instead — an empty table beside an empty tree, with the
+/// explanation one click away and never shown — because `ensure_tab_view` skips
+/// index 0 and nothing else ever moved the first tab.
+#[gpui_kit::test]
+fn a_session_with_no_registry_opens_on_the_overview(cx: &mut TestAppContext) {
+    init_ui(cx);
+    // Exactly what production builds with: kubeconfigs have not been read yet, so
+    // there is no registry and no context. The read either lands and replaces this
+    // session, or fails and puts the connection surface in front of this tab.
+    let session = ClusterSession::unavailable(super::STARTUP_LOADING_REASON);
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::with_cluster(session, cx));
+    cx.run_until_parked();
+
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell
+            .tabs
+            .get(shell.active_tab)
+            .map(|tab| (tab.content, tab.title.clone()))),
+        Some((TabContent::Overview, "Overview".into())),
+        "a first run has to open on the Overview"
+    );
+    // The answer is a bool rather than the view: `read_with` cannot hand back a
+    // borrow out of the Shell, and the test is about which tab is mounted, not
+    // about the view's identity.
+    assert!(
+        shell.read_with(cx, |shell, _| {
+            matches!(
+                shell.views.get(shell.active_tab),
+                Some(Some(TabView::Overview(_)))
+            )
+        }),
+        "the Overview the window opens on is mounted, not a tab whose view is never built"
+    );
+    assert!(
+        cx.debug_bounds("overview-reload-kubeconfigs").is_some(),
+        "the arrival names itself and offers the reload that fixes it"
+    );
+    assert_eq!(
+        shell.read_with(cx, |shell, _| shell.tabs[0].kind.clone()),
+        SharedString::from("Pod"),
+        "`secondary-1` still opens the Pods table, one click from the explanation"
+    );
+}
+
+/// The reload the no-cluster state offers rebuilds the Overview it navigates to.
+///
+/// A recovery button that leaves the reader on a view which never refreshes is a
+/// dead end, and the view in question is rebuilt by `apply_session` rather than by
+/// the Overview itself: the Overview built with no handle has no way to be given
+/// one, so the shell has to build a new one. Both halves are pinned here — the tab
+/// stays on the Overview, and the mounted view is a different entity, which is the
+/// only thing that can carry the recovered session's handle.
+#[gpui_kit::test]
+fn reload_kubeconfigs_rebuilds_the_overview_the_reader_is_on(cx: &mut TestAppContext) {
+    init_ui(cx);
+    init_cluster_runtime(cx);
+    let session = ClusterSession::unavailable(super::STARTUP_LOADING_REASON);
+    let (shell, cx) = cx.add_window_view(|_, cx| Shell::with_cluster(session, cx));
+    cx.run_until_parked();
+    let (active, before) = shell.read_with(cx, |shell, _| {
+        let view = match shell.views.get(shell.active_tab) {
+            Some(Some(TabView::Overview(view))) => view.clone(),
+            _ => panic!("the shell opens on the Overview"),
+        };
+        (shell.active_tab, view)
+    });
+
+    let path = std::env::temp_dir().join(format!(
+        "k8s-gpui-first-run-recovery-{}.yaml",
+        std::process::id()
+    ));
+    std::fs::write(&path, RELOADED_KUBECONFIG).expect("write reloaded config");
+    shell.update(cx, |shell, _| {
+        shell.reload_kubeconfig_path = Some(path.clone());
+    });
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.reload_kubeconfigs(&ReloadKubeconfigs, window, cx);
+        });
+    });
+    for _ in 0..100 {
+        if shell.read_with(cx, |shell, _| {
+            !shell.reload_in_progress
+                && shell
+                    .toast
+                    .as_ref()
+                    .is_some_and(|toast| toast.message.contains("Kubeconfigs reloaded"))
+        }) {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(10));
+        cx.run_until_parked();
+    }
+    let _ = std::fs::remove_file(&path);
+    cx.run_until_parked();
+
+    shell.read_with(cx, |shell, _| {
+        assert_eq!(
+            shell.active_tab, active,
+            "the recovery keeps the reader on the tab they asked from"
+        );
+        match shell.views.get(shell.active_tab) {
+            Some(Some(TabView::Overview(view))) => assert_ne!(
+                view, &before,
+                "the Overview is rebuilt: the one built with no handle can never be given one"
+            ),
+            _ => panic!("the recovery leaves an Overview mounted"),
+        }
+    });
+    assert!(
+        shell.read_with(cx, |shell, _| shell
+            .session
+            .as_ref()
+            .and_then(ClusterSession::cluster_id)
+            .is_some()),
+        "the reload gave the session a cluster to read"
+    );
+    assert!(
+        cx.debug_bounds("overview-reload-kubeconfigs").is_none(),
+        "the recovered Overview has a handle, so it no longer offers the reload that gets one"
+    );
 }

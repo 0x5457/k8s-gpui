@@ -12,6 +12,16 @@ autobins = false
 
 [features]
 spike = ["k8s-ui/spike"]
+# `diagnostics` reads GPUI's frame and hang instrumentation, which gpui-kit keeps
+# opt-in because most applications never want the cost. This application does:
+# `diagnostics.rs` uses `gpui_kit::profiler::hang` and `::journal` unconditionally,
+# so the feature is part of the DEFAULT set rather than something a build has to
+# remember. Leaving it off-by-default made `cargo run` and `cargo build` fail to
+# resolve the module, while `cargo check` and `cargo test` passed — the profile
+# instrumentation is only type-checked there, never linked, which is why the
+# breakage survived unnoticed.
+default = ["profiler"]
+profiler = ["gpui-kit/profiler"]
 
 [[bin]]
 name = "k8s-app"

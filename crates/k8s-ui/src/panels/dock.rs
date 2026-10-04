@@ -35,12 +35,12 @@ use crate::session::{LOG_EVENT_MAX_BYTES, TextInput};
 use crate::settings::DataTypography;
 
 use super::common::{
-    buffer_font, label_body, label_panel_title, label_small, label_text, menu_item, spinner,
-    status_message,
+    buffer_font, label_body, label_panel_title, label_small, label_text, labelled, menu_item,
+    spinner, status_message,
 };
 use super::logs::{
-    LOG_LEVEL_COLUMNS, LOG_SEVERITY_COLUMNS, LogBuffer, LogEvent, LogFactory, LogLevelScope,
-    LogLine, LogPhase, LogRequest, LogSubscription, RING_CAPACITY, TailLines,
+    LOG_LEVEL_COLUMNS, LOG_SEVERITY_COLUMNS, LogBuffer, LogEvent, LogFactory, LogFailure,
+    LogLevelScope, LogLine, LogPhase, LogRequest, LogSubscription, RING_CAPACITY, TailLines,
 };
 use super::terminal::{
     ALL_NAMESPACES, ForwardBinding, ForwardHandle, ForwardRequest, StartedForward, TerminalEvent,
@@ -115,10 +115,10 @@ const LOGS_TAB: usize = 0;
 /// Index of the Terminal tab.
 const TERMINAL_TAB: usize = 1;
 
-/// The Dock's tab pill. The strip is 28px and the pill is 22px, so 3px of chrome is left above
+/// The Dock's tab pill. The strip is 40px and the pill is 28px, so 6px of chrome is left above
 /// and below: an active tab that fills its strip is a band, and two bands stacked read as one
 /// taller band rather than as a tab in a strip. `docs/mockup/secondary.html` draws exactly this.
-const DOCK_TAB_HEIGHT: Pixels = px(22.);
+const DOCK_TAB_HEIGHT: Pixels = design::size::TAB_PILL;
 
 /// Height of a control that sits *in* one of the Dock's 28px bands, rather than being one.
 ///
@@ -170,13 +170,13 @@ const FOLLOW_PAUSED_LABEL_MAX_WIDTH: Pixels = px(140.);
 /// out of it in five words, because the reader who scrolled away is reading lines, not chrome.
 const FOLLOW_PAUSED_LABEL: &str = "Follow paused · jump to latest";
 /// Label of the divider between the two terminal panes.
-const TERMINAL_SPLIT_LABEL: &str = "Resize Terminal Split";
+const TERMINAL_SPLIT_LABEL: &str = "Resize terminal split";
 /// Label of the Dock header control that hides the Dock.
-const DOCK_CLOSE_LABEL: &str = "Close Dock";
+const DOCK_CLOSE_LABEL: &str = "Close dock";
 /// Label of the Dock header control that folds the body away and leaves the strip.
-const DOCK_COLLAPSE_LABEL: &str = "Collapse Dock";
+const DOCK_COLLAPSE_LABEL: &str = "Collapse dock";
 /// The same control once the body is already folded away.
-const DOCK_EXPAND_LABEL: &str = "Expand Dock";
+const DOCK_EXPAND_LABEL: &str = "Expand dock";
 /// Widest the object name on a tab may grow before it truncates.
 ///
 /// A tab strip has to survive a collapsed Dock, and a cluster-qualified name is the longest thing
@@ -289,6 +289,10 @@ fn tab_status_label(severity: Option<Severity>) -> &'static str {
     match severity {
         Some(Severity::Error) => "Stream stopped",
         Some(Severity::Warning) => "Reconnecting",
+        // A grey mark means the stream ended without a failure to act on — a container that ran to
+        // completion. "Needs attention" is a demand, and there is nothing to do about a Job that
+        // finished; the word that matches the mark is the word that keeps it honest.
+        Some(Severity::Muted) => "Stream finished",
         Some(_) => "Needs attention",
         None => "Nothing open",
     }
@@ -312,7 +316,7 @@ fn tab_status_dot(severity: Option<Severity>, cx: &App) -> AnyElement {
                     .w(design::size::STATUS_DOT)
                     .h(design::size::STATUS_DOT)
                     .rounded_full()
-                    .bg(status_role(severity, cx)),
+                    .bg(design::icon::status(cx, severity)),
             )
         })
         .into_any_element()
@@ -367,6 +371,17 @@ const FILTER_PASS_FRAME_BUDGET: u32 = 12;
 fn dock_chrome_height() -> Pixels {
     design::size::DOCK_TABS + design::size::DOCK_TOOLBAR + design::size::DOCK_TOOLBAR
 }
+
+/// The height of the status banner above a populated log body.
+///
+/// The third of the Dock's three chrome bands, and the only one whose height is not one of the
+/// two 28px chrome rows: it holds a status plate, and a plate is its own height — `space::SM` of
+/// padding above and below, a `LABEL_LINE_HEIGHT` line, and the hairline on each edge. `Pixels`
+/// arithmetic is not `const`, so the sum is a function.
+fn log_banner_height() -> Pixels {
+    space::SM * 2. + design::text::LABEL_LINE_HEIGHT + design::border::LINE * 2.
+}
+
 /// The terminal split cannot swallow either pane, so the divider stays inside these bounds.
 const TERMINAL_SPLIT_MIN_RATIO: f32 = 0.2;
 const TERMINAL_SPLIT_MAX_RATIO: f32 = 0.8;
@@ -505,27 +520,6 @@ enum TerminalFocusRecovery {
     OnlyIfHeld(FocusHandle),
 }
 
-/// The role a mark or a word of state wears.
-///
-/// `Severity::color` and `Severity::marker` both read the legacy theme keys, so every mark in the
-/// Dock reached the screen through the skin rather than the role layer. The mapping is written
-/// out instead of delegated, for the reason `design::severity_icon` states: a new severity has to
-/// be a compile error here rather than a quiet fall-through to a colour nobody chose.
-///
-/// `Success` is grey, not green. `UI-SPEC` §3.2 inverts the vocabulary so a healthy thing is
-/// quiet and the problem is what moves — a Dock whose live stream wore green would spend a
-/// status channel on the answer it always gives.
-fn status_role(severity: Severity, cx: &App) -> Hsla {
-    match severity {
-        Severity::Success => design::role::fg_tertiary(cx),
-        Severity::Warning => design::role::warning(cx),
-        Severity::Error => design::role::danger(cx),
-        Severity::Info => design::role::info(cx),
-        Severity::Neutral => design::role::fg_secondary(cx),
-        Severity::Muted => design::role::fg_disabled(cx),
-    }
-}
-
 /// The role a log level wears, per `UI-SPEC` §16.3 — and specifically the ink its **word**
 /// wears.
 ///
@@ -549,19 +543,19 @@ fn log_level_role(severity: Severity, cx: &App) -> Hsla {
 
 /// The ink a log level's **mark** wears, in the same lane and beside the word above.
 ///
-/// [`design::role::status_for`] for the two levels that are a state, and `fg.tertiary` for the
+/// [`design::icon::status`] for the two levels that are a state, and `fg.tertiary` for the
 /// two that are not — and that split is the whole reason this is a function rather than a
-/// delegation to `status_for`. `status_for(Neutral)` is `fg_primary` and `status_for(Info)` is the
-/// info channel, and the log parser reports `INFO` and `NOTICE` as `Neutral`: delegating would
-/// paint a hundred `fg_primary` marks down the left of the busiest data surface in the product
-/// and then either a hundred blue ones or a hundred red ones, both of which is the
-/// "status colour as decoration" and "five coloured badges a screen" failure the design removes
-/// rather than tunes. A level mark says "this line needs a look", and only two of the four
-/// words do.
+/// delegation to [`design::icon::status`]. `status_for(Neutral)` is `fg_primary` and
+/// `status_for(Info)` is the info channel, and the log parser reports `INFO` and `NOTICE` as
+/// `Neutral`: delegating would paint a hundred `fg_primary` marks down the left of the busiest
+/// data surface in the product and then either a hundred blue ones or a hundred red ones, both
+/// of which is the "status colour as decoration" and "five coloured badges a screen" failure the
+/// design removes rather than tunes. A level mark says "this line needs a look", and only two of
+/// the four words do.
 fn log_level_mark(severity: Severity, cx: &App) -> Hsla {
     match severity {
-        Severity::Error => design::role::status_for(Severity::Error, cx),
-        Severity::Warning => design::role::status_for(Severity::Warning, cx),
+        Severity::Error => design::icon::status(cx, Severity::Error),
+        Severity::Warning => design::icon::status(cx, Severity::Warning),
         Severity::Neutral | Severity::Info | Severity::Muted | Severity::Success => {
             design::role::fg_tertiary(cx)
         }
@@ -1024,6 +1018,14 @@ struct LogStream {
 }
 
 impl LogStream {
+    /// The container this stream reads, in the words the control that changes it uses.
+    ///
+    /// A stream with no container named is a Pod whose containers the list never reported, and
+    /// the label says so rather than printing an empty control.
+    fn container_label(&self) -> SharedString {
+        self.container.clone().unwrap_or_else(|| "all".into())
+    }
+
     /// A stream with nothing behind it yet: the state the Logs tab is in before a target is
     /// chosen, and the state a fresh slot is handed when the reader closes one.
     fn empty() -> Self {
@@ -1226,7 +1228,7 @@ impl DockPanel {
                 "Find in Logs",
                 "Type text to highlight the log lines that contain it. Press Enter for the next \
                  match, Shift with Enter for the previous one, and Escape to close.",
-                "Close Find",
+                "Close find",
             )
             .with_width(design::size::ROW * 5.)
             // The band owns Escape for the find bar, and the field has to let go of it to let
@@ -1252,9 +1254,9 @@ impl DockPanel {
                 writing.set(false);
             })
             .with_accessibility(
-                "Filter Logs",
+                "Filter logs",
                 "Type text to match log lines. Press Escape to clear the filter.",
-                "Clear Log Filter",
+                "Clear log filter",
             )
         });
         Self {
@@ -1644,8 +1646,9 @@ impl DockPanel {
     /// is a message the reader never sees. `Self::log_cap_notice` puts it on the strip, which is
     /// the one Dock surface that is always painted.
     pub fn open_logs(&mut self, request: LogRequest, cx: &mut Context<Self>) {
-        // Multi-container Pods require an explicit container. Default to the first one; the menu
-        // can change it.
+        // `spec.containers[0]` is the container a single-container Pod has and the one a
+        // multi-container Pod most likely means. It is a *guess* on a five-container Pod, so the
+        // toolbar names it and the menu changes it — the guess is never the only thing on screen.
         let container = request.containers.first().cloned();
         let namespace = request.namespace.as_deref().unwrap_or("default").to_owned();
         let identity = (
@@ -1765,13 +1768,105 @@ impl DockPanel {
     // Terminal sessions and port forwards.
 
     /// Sets terminal and port forward services.
+    ///
+    /// The Dock treats a change of *context* as a change of cluster and drops what belonged to the
+    /// old one. It used to keep them: the reader switched cluster with three shells open and the
+    /// Dock kept all three, each chip naming the cluster it was actually on, in a window whose
+    /// title bar, status bar and every table now said something else. Every shell is a live
+    /// connection and every forward is a live tunnel into the cluster it was started against, so
+    /// "it survived the switch" is not a feature — it is three ways to run a command against the
+    /// wrong cluster by typing into a chip that looks like it belongs to this window.
+    ///
+    /// A change of *namespace* is not a change of cluster and keeps everything. A shell pinned to
+    /// `team-a` is still in `team-a` after the reader looks at `team-b`, and its chip already says
+    /// so; that is the reader comparing two namespaces, which is the reason the session exists.
     pub fn set_terminal_services(
         &mut self,
         services: Option<TerminalServices>,
         cx: &mut Context<Self>,
     ) {
+        let context = services.as_ref().and_then(|services| services.context.clone());
+        if self.terminal_context() != context.as_deref() {
+            self.close_sessions_off_cluster(context.as_deref(), cx);
+        }
         self.terminal_services = services;
         cx.notify();
+    }
+
+    /// Drops everything the Dock is holding against a cluster other than `context`.
+    ///
+    /// `context` is the cluster being switched *to*. Reading it off `self.terminal_services`
+    /// instead would test every session against the cluster it is leaving, which keeps exactly the
+    /// sessions that should have gone.
+    ///
+    /// The log streams go with the sessions. A Pod name is not unique across clusters, so a stream
+    /// that reopened against the new one would carry on filling the same tab with a different
+    /// Pod's lines under the same `namespace/pod` label — the silent wrong answer the whole tab is
+    /// named to prevent. It used to reconnect on the new factory and hope the reader noticed.
+    fn close_sessions_off_cluster(&mut self, context: Option<&str>, cx: &mut Context<Self>) {
+        let terminals = self.terminals.len();
+        let forwards = self.forwards.len();
+        self.terminals
+            .retain(|entry| Self::session_is_on(entry, context));
+        self.terminal_focus_handles
+            .truncate(self.terminals.len());
+        self.forwards
+            .retain(|entry| Self::forward_is_on(entry, context));
+        let closed = (terminals - self.terminals.len()) + (forwards - self.forwards.len());
+        let slots = self.slots_with_streams();
+        let streams = slots.len();
+        for slot in slots {
+            self.close_log_slot(slot, cx);
+        }
+        if closed == 0 && streams == 0 {
+            return;
+        }
+        if self.terminal_split {
+            self.close_terminal_split();
+        }
+        self.terminal_maximized = false;
+        self.active_terminal = self.active_terminal.min(self.terminals.len().saturating_sub(1));
+        self.sync_terminal_focus_handles();
+        self.sync_focus_handles();
+        eprintln!(
+            "k8s-gpui: cluster changed to {context:?}: {closed} sessions and forwards and \
+             {streams} log streams closed"
+        );
+        // Both kinds are named. A log tab that emptied itself with nothing said about it is the
+        // same silent wrong answer one step later: the reader comes back to a closed pane and has
+        // to work out whether they closed it or something else did.
+        let mut parts = Vec::new();
+        if closed > 0 {
+            parts.push(format!(
+                "{closed} session{}",
+                if closed == 1 { "" } else { "s" }
+            ));
+        }
+        if streams > 0 {
+            parts.push(format!(
+                "{streams} log stream{}",
+                if streams == 1 { "" } else { "s" }
+            ));
+        }
+        self.notify(
+            &format!(
+                "{} closed. {} belonged to the previous cluster.",
+                parts.join(" and "),
+                if closed + streams == 1 { "It" } else { "They" },
+            ),
+            Severity::Warning,
+            cx,
+        );
+    }
+
+    /// True when a session was started against the cluster the Dock is showing now.
+    fn session_is_on(entry: &TerminalEntry, context: Option<&str>) -> bool {
+        entry.request.context.as_deref() == context
+    }
+
+    /// The same for a port forward, which is a live tunnel into the same cluster.
+    fn forward_is_on(entry: &ForwardEntry, context: Option<&str>) -> bool {
+        entry.request.context.as_deref() == context
     }
 
     pub fn show_terminal_tab(&mut self, cx: &mut Context<Self>) {
@@ -2614,7 +2709,12 @@ impl DockPanel {
         cx.notify();
     }
 
-    /// Removes sessions and forwards that belong to the old cluster.
+    /// Removes every session and forward, whatever cluster they are on.
+    ///
+    /// [`Self::set_terminal_services`] already closes what belonged to the cluster being left, so a
+    /// cluster switch does not need this. It stays because it is the one call that drops the
+    /// Dock's sessions on *losing* a cluster entirely, where there is no new one to compare
+    /// against, and because it is the seam the shell owns for "there is no cluster any more".
     pub fn close_cluster_sessions(&mut self, cx: &mut Context<Self>) {
         if self.terminals.is_empty() && self.forwards.is_empty() {
             return;
@@ -3100,11 +3200,16 @@ impl DockPanel {
         if let Some(mut subscription) = stream.subscription.take() {
             subscription.cancel();
         }
+        // A reason the API server has already ruled on is not an interrupted connection. Giving it
+        // the backoff ladder made a deleted Pod report "Reconnecting, attempt 3" for half a minute
+        // — five identical requests against a server that has answered — and the reader had to
+        // wait out a wait that could not end in an answer.
+        let terminal = LogFailure::classify(&reason).is_terminal();
         if stream.lines_received > 0 {
             stream.attempts = 0;
         }
         stream.attempts += 1;
-        if stream.attempts > MAX_RECONNECT_ATTEMPTS {
+        if terminal || stream.attempts > MAX_RECONNECT_ATTEMPTS {
             stream.phase = LogPhase::Failed {
                 reason: reason.clone(),
             };
@@ -3750,7 +3855,7 @@ impl DockPanel {
                 )
                 .into(),
                 severity: Severity::Warning,
-                icon: IconName::RotateCw,
+                icon: design::glyph::action::reload(),
                 detail: Some(reason.clone()),
                 retry: false,
             }),
@@ -3760,13 +3865,17 @@ impl DockPanel {
                     title: failure.word(),
                     guidance: failure.guidance().into(),
                     severity: failure.severity(),
-                    icon: IconName::TriangleAlert,
+                    // A finished container is not an alert. It drew a warning triangle for a Job
+                    // that ran to completion, so the one state with nothing wrong in it was the
+                    // loudest thing in the row, and it wore the same glyph as a denied request.
+                    // The mark follows the severity, which is what every other state already does.
+                    icon: design::health_icon(failure.severity()),
                     detail: Some(reason.clone()),
                     retry: true,
                 })
             }
             LogPhase::Unavailable(reason) => Some(LogFailureNotice {
-                title: "No Log Source",
+                title: "No log source",
                 guidance: "Select a context, then open Logs.".into(),
                 severity: Severity::Muted,
                 icon: IconName::TriangleAlert,
@@ -4109,21 +4218,33 @@ impl DockPanel {
             .child(div().flex_1().min_w(px(0.)))
             .when_some(status, |this, status| this.child(status))
             // One cluster, so the three trailing controls share a frame: the same 8px inset the
-            // strip gives its own leading edge, one 2px gap between neighbours, and the close one
-            // step further out. They were three unrelated boxes before — `×` had 8px of padding and
-            // `⋯` and `⌃` had none, so the row's trailing edge was ragged and the three read as three
-            // unrelated things rather than as one group of controls for this strip.
+            // strip gives its own leading edge, one `space::XS` between neighbours, and the close
+            // one step further out.
+            //
+            // The gap was `space::XXS`, which is 2px. These are three separate 24px hit targets,
+            // not three pills: a pointer aimed between `⋯` and `⌃` had a 2px seam to find, and
+            // `design::size::HIT_MIN` — the width a target may not be smaller than — was being
+            // spent on boxes whose edges were 2px apart, so in practice the pair was one 50px
+            // target. One `space::XS` step is the smallest gap in the ladder that separates two
+            // adjacent boxes rather than abutting them, and it is the same step the close already
+            // takes for itself, so the cluster now reads 4 / 8 instead of 2 / 6.
             //
             // The extra room before `×` is separation, not decoration: folding the body and hiding
             // the Dock are different gestures on different objects, and the guide asks for "a
             // destructive decision can gain separation". `render_close_control` owns the step.
+            //
+            // Nothing in the group is made quieter than its neighbours to carry that weight.
+            // `design::icon::incidental` would put the close at `fg_tertiary` directly under two
+            // `fg_secondary` glyphs, and `UI-SPEC`'s first rule for this sweep is that a glyph in
+            // the tertiary tier beside secondary text reads as DISABLED — the close is a live
+            // control, so space says it is the last one and ink does not.
             .child(
                 h_flex()
                     .id("dock-strip-controls")
                     .debug_selector(|| "dock-strip-controls".to_owned())
                     .flex_none()
                     .items_center()
-                    .gap(space::XXS)
+                    .gap(space::XS)
                     .child(self.render_overflow_menu(cx))
                     .child(self.render_collapse_control(window, cx))
                     .child(self.render_close_control(window, cx)),
@@ -4148,7 +4269,14 @@ impl DockPanel {
             // Reconnecting is different from connecting: the first second of every stream is
             // ordinary, and a stream that has already broken once is not.
             LogPhase::Reconnecting { .. } => Some(Severity::Warning),
-            LogPhase::Failed { .. } => Some(Severity::Error),
+            LogPhase::Failed { .. } => Some(
+                // A container that finished is not a stopped stream, so it does not wear the
+                // tab's error dot. The tab's job is to make the reader notice a dead stream, and
+                // a red dot for a Job that completed trains them to ignore the red one.
+                self.log_slot(slot)
+                    .and_then(|stream| stream.phase.failure())
+                    .map_or(Severity::Error, |failure| failure.severity()),
+            ),
             // No log source is a state the reader has to act on, and the dot is how it says so
             // while the reader is on the Terminal tab and the log body is not on screen to say
             // it in words.
@@ -4187,11 +4315,10 @@ impl DockPanel {
     /// is at its tail, and the cluster is a fact the title bar prints 60px above as its own `▾`.
     ///
     /// The cluster is not in the tooltip or the accessible name either — that is [`Self::tab_detail`]
-    /// — so a reader who needs to know which cluster a stale tab belongs to still has it, and the
-    /// `close_cluster_sessions` that would make it obvious is not something the shell calls today
-    /// (reported). What stays on the strip is the namespace, which is the half that is *not*
-    /// otherwise on screen: with `All namespaces` selected, two tabs on Pods from different
-    /// namespaces are the case where it is the only thing telling them apart.
+    /// — so a reader who needs to know which cluster a stale tab belongs to still has it. What
+    /// stays on the strip is the namespace, which is the half that is *not* otherwise on screen:
+    /// with `All namespaces` selected, two tabs on Pods from different namespaces are the case
+    /// where it is the only thing telling them apart.
     fn tab_detail_parts(&self, tab: DockTab) -> Option<(SharedString, Vec<SharedString>)> {
         let whole: SharedString = match tab {
             DockTab::Terminal => self
@@ -4299,8 +4426,8 @@ impl DockPanel {
             })
             .child(
                 Icon::new(IconName::X)
-                    .xsmall()
-                    .text_color(design::role::fg_tertiary(cx)),
+                    .with_size(Size::Size(design::icon::IN_TOOLBAR))
+                    .text_color(design::icon::resting(cx)),
             )
             .into_any_element()
     }
@@ -4324,7 +4451,11 @@ impl DockPanel {
         // on the stream it was on and the field keeps the filter that stream is showing. Closing the
         // one in the body hands the body to whatever is left, or to the empty first slot when there
         // is nothing left — the state §16.2 draws, with the `Open Logs` control back in the band.
-        if self.active_log == slot {
+        //
+        // Only a reader who was on a log tab is moved off it. Closing a *background* log stream
+        // used to switch the strip to the Logs tab, so tidying up a cluster switch dropped a reader
+        // out of the shell they were working in to look at an empty log pane.
+        if self.active_tab.is_logs() {
             self.active_log = self.slots_with_streams().first().copied().unwrap_or(0);
             self.active_tab = DockTab::Logs(self.active_log);
             self.write_log_filter_input("", cx);
@@ -4387,13 +4518,25 @@ impl DockPanel {
             }))
             .child(
                 Button::new("dock-collapse-button")
+                    // No glyph size is stated on any `Button` icon in this file. gpui-kit's
+                    // `Button` applies `content_style`'s `icon_size`, or `box * 0.75` when it is
+                    // not given one, *after* the caller's own size — so the size on the `Icon`
+                    // is overwritten and never reaches the screen, and stating one here is a
+                    // claim about a number that is not drawn.
+                    //
+                    // The ink is stated for the opposite reason and is not optional: the size is
+                    // overwritten, but the *colour* is not read at all. `Button` puts its own
+                    // `.text_color()` on the root and the `Icon` resolves a missing one to the
+                    // theme foreground, so a ghost button with no ink on its `Icon` is a control
+                    // painted a step above every other control in the window. See
+                    // `render_overflow_menu`.
                     .icon(
                         Icon::new(if collapsed {
                             IconName::ChevronDown
                         } else {
                             IconName::ChevronUp
                         })
-                        .xsmall(),
+                        .text_color(design::icon::resting(cx)),
                     )
                     .ghost()
                     .with_size(Size::Size(design::size::ICON_BUTTON))
@@ -4504,7 +4647,11 @@ impl DockPanel {
             }))
             .child(
                 Button::new("dock-close-button")
-                    .icon(Icon::new(IconName::X).xsmall())
+                    // Stated, for the reason `render_overflow_menu` gives: a ghost `Button` never
+                    // hands its own `.text_color()` to the `Icon` inside it, so without this the
+                    // one control that hides the whole Dock was painted a step above the two
+                    // beside it and a step above the Dock's own `×` on the tab pill.
+                    .icon(Icon::new(IconName::X).text_color(design::icon::resting(cx)))
                     .ghost()
                     // An icon button is 24px (`UI-SPEC` §4.6), not the 28px
                     // control height. The strip is 28px and the wrapper above
@@ -4673,7 +4820,10 @@ impl DockPanel {
             // with one behaviour is a question the reader has to learn; `UI-SPEC` §16.2 names four
             // controls here and this was not one of them.
             .child(self.render_follow_switch(follow, can_control, cx))
-            .child(self.render_log_level_menu(cx));
+            .child(self.render_log_level_menu(cx))
+            .when_some(self.render_container_menu(cx), |this, menu| {
+                this.child(menu)
+            });
         h_flex()
             .id("dock-log-toolbar")
             .debug_selector(|| "dock-log-toolbar".to_owned())
@@ -4815,12 +4965,12 @@ impl DockPanel {
             )
             .child(
                 Button::new("dock-find-close")
-                    .icon(Icon::new(IconName::X).xsmall())
+                    .icon(Icon::new(IconName::X))
                     .ghost()
                     .with_size(Size::Size(BAND_CONTROL))
                     .tab_index(12isize)
-                    .tooltip("Close Find")
-                    .accessibility_label("Close Find")
+                    .tooltip("Close find")
+                    .accessibility_label("Close find")
                     .on_click(cx.listener(|this, _, window, cx| this.close_find(window, cx))),
             )
             .into_any_element()
@@ -4893,9 +5043,10 @@ impl DockPanel {
                     .bg(design::role::accent_wash(cx))
                     // A selected control still acknowledges the pointer. Without this, the one
                     // row control whose state is a fill loses that fill the moment the pointer
-                    // arrives and reads as if it turned itself off.
+                    // arrives and reads as if it turned itself off. Hover is `state::hover_on`,
+                    // press is `state::press_on`, the same two steps the tab pills state.
                     .hover(|this| {
-                        this.bg(design::state::press_on(
+                        this.bg(design::state::hover_on(
                             design::role::accent_wash(cx),
                             design::role::fg_primary(cx),
                         ))
@@ -4970,6 +5121,67 @@ impl DockPanel {
         note.into_any_element()
     }
 
+    /// Which container the stream is tailed from, when the Pod has more than one.
+    ///
+    /// A container that is the Pod's only one is not a choice, so it draws nothing: a reader
+    /// looking at one container's logs is not being asked anything and should not be shown a menu
+    /// with one item in it.
+    ///
+    /// It sits beside the level scope rather than in the strip's `⋯` menu because it is the same
+    /// kind of question — which slice of what the Pod is saying reaches the pane — and it used to
+    /// sit under "Show timestamps" and "Wrap long lines", where a reader with the wrong answer had
+    /// no reason to think the menu held it. Two places to look for one fact is how a silent wrong
+    /// container becomes a half-minute of reading someone else's log.
+    fn render_container_menu(&self, cx: &Context<Self>) -> Option<AnyElement> {
+        let panel = cx.entity().downgrade();
+        let selected = self.log().container.clone();
+        let containers = self
+            .log()
+            .request
+            .as_ref()
+            .map(|request| request.containers.clone())
+            .unwrap_or_default();
+        if containers.len() < 2 {
+            return None;
+        }
+        Some(
+            labelled(
+                Button::new("dock-log-container")
+                    .debug_selector(|| "dock-log-container".to_owned())
+                    .ghost()
+                    // The height is stated rather than derived, for the reason the level trigger
+                    // states it: a labelled `Button` takes its box from the text inside it, and two
+                    // neighbouring controls at different heights is the row's only misalignment.
+                    .with_size(Size::Size(design::size::CONTROL))
+                    .h(BAND_CONTROL)
+                    .tab_index(10isize)
+                    .dropdown_caret(true)
+                    .tooltip("Which container this stream reads. Changing it restarts the stream."),
+                format!("Container: {}", self.log().container_label()),
+            )
+            // The two words differ on purpose: the visible value is the container's short name,
+            // and the announced one repeats it as a field of the log stream, so a reader hearing
+            // only the trigger knows what the caret is about to change.
+            .accessibility_label(format!("Log container: {}", self.log().container_label()))
+            // A labelled Button is what `labelled` builds, so the menu wraps after it.
+            .dropdown_menu(move |menu, _, _| {
+                containers.clone().into_iter().fold(menu, |menu, name| {
+                    let toggled = selected.as_ref() == Some(&name);
+                    let panel = panel.clone();
+                    let name = name.clone();
+                    menu.item(menu_item(name.clone()).checked(toggled).on_click(
+                        move |_, _, cx| {
+                            panel
+                                .update(cx, |panel, cx| panel.set_container(name.clone(), cx))
+                                .ok();
+                        },
+                    ))
+                })
+            })
+            .into_any_element(),
+        )
+    }
+
     /// Severity scope for the log list. Severity is parsed from the first token of a line, so
     /// this is the only way to ask for warnings or errors without typing their labels.
     fn render_log_level_menu(&self, cx: &Context<Self>) -> impl IntoElement {
@@ -4978,35 +5190,42 @@ impl DockPanel {
         let has_lines = !self.log().buffer.is_empty();
         // gpui-kit owns the popup surface and the trigger's dismissal, so the
         // panel only describes the rows.
-        Button::new("dock-log-level")
-            .debug_selector(|| "dock-log-level".to_owned())
-            .label(format!("Level: {}", level.short_label()))
-            .ghost()
-            // The height is stated, not derived: a labelled `Button` takes its box from the text.
-            .with_size(Size::Size(design::size::CONTROL))
-            .h(BAND_CONTROL)
-            .tab_index(11isize)
-            .dropdown_caret(true)
-            .tooltip(level.description())
-            .accessibility_label(format!("Log level: {}", level.label()))
-            .disabled(!has_lines)
-            .dropdown_menu(move |menu, _, _| {
+        labelled(
+            Button::new("dock-log-level")
+                .debug_selector(|| "dock-log-level".to_owned())
+                .ghost()
+                // The height is stated, not derived: a labelled `Button` takes its box
+                // from the text.
+                .with_size(Size::Size(design::size::CONTROL))
+                .h(BAND_CONTROL)
+                .tab_index(11isize)
+                .dropdown_caret(true)
+                .tooltip(level.description())
+                .disabled(!has_lines),
+            format!("Level: {}", level.short_label()),
+        )
+        // The two words differ on purpose: the visible value is the scope's short name and the
+        // announced one spells the field out, so a reader hearing only the trigger knows what the
+        // caret is about to change.
+        .accessibility_label(format!("Log level: {}", level.label()))
+        // A labelled Button is what `labelled` builds, so the menu wraps after it.
+        .dropdown_menu(move |menu, _, _| {
+            let panel = panel.clone();
+            if !has_lines {
+                return menu;
+            }
+            LogLevelScope::ALL.into_iter().fold(menu, |menu, option| {
                 let panel = panel.clone();
-                if !has_lines {
-                    return menu;
-                }
-                LogLevelScope::ALL.into_iter().fold(menu, |menu, option| {
-                    let panel = panel.clone();
-                    menu.item(menu_item(option.label()).checked(option == level).on_click(
-                        move |_, _, cx| {
-                            panel
-                                .update(cx, |panel, cx| panel.set_log_level(option, cx))
-                                .ok();
-                        },
-                    ))
-                })
+                menu.item(menu_item(option.label()).checked(option == level).on_click(
+                    move |_, _, cx| {
+                        panel
+                            .update(cx, |panel, cx| panel.set_log_level(option, cx))
+                            .ok();
+                    },
+                ))
             })
-            .into_any_element()
+        })
+        .into_any_element()
     }
 
     /// The strip's overflow menu: everything about the active panel that is not one of the four
@@ -5034,13 +5253,6 @@ impl DockPanel {
         let has_lines = !self.log().buffer.is_empty();
         let history_lines = self.log().history_lines;
         let cap = history_cap();
-        let container = self.log().container.clone();
-        let containers = self
-            .log()
-            .request
-            .as_ref()
-            .map(|request| request.containers.clone())
-            .unwrap_or_default();
         // The press wash, read from the same pair of roles the two icon buttons beside it use, so
         // an open menu and a held pointer are the same colour.
         let chrome = design::role::surface_chrome(cx);
@@ -5049,7 +5261,25 @@ impl DockPanel {
         let trigger_panel = panel.clone();
         Button::new("dock-overflow")
             .debug_selector(|| "dock-overflow".to_owned())
-            .icon(Icon::new(IconName::Ellipsis).xsmall())
+            // The glyph's ink is stated, because an `Icon` resolves a missing colour to the
+            // theme's foreground rather than to the button's: `Button` paints `.text_color()` on
+            // its own root, and the `Icon` never reads it. Measured on the strip, the three
+            // trailing controls came out at the theme foreground — `#FAFAFA`-ish, ~1.65x the
+            // contrast of every other chrome control in the window, including the Dock's own
+            // `×` on the tab pill 60px away, which states `icon::resting`. Three marks a full
+            // step above the selected tab's label is what made the cluster read as one bright
+            // blob rather than as three quiet controls.
+            //
+            // Open is a state, so open is the ink step, exactly as `shell/panels.rs` states it
+            // on the bell: the trigger has to say it owns the menu that is up, and hover cannot
+            // say it once focus has moved into the menu.
+            .icon(
+                Icon::new(IconName::Ellipsis).text_color(if menu_open {
+                    design::icon::active(cx)
+                } else {
+                    design::icon::resting(cx)
+                }),
+            )
             .ghost()
             // 24x24, the same icon-button box as `⌃` and `×` beside it. It used to override the
             // height down to the 22px tab pill, so the one control in the strip that is not a
@@ -5058,31 +5288,10 @@ impl DockPanel {
             // strip above and below it.
             .with_size(Size::Size(design::size::ICON_BUTTON))
             .tab_index(3isize)
-            .tooltip("Log source, history and display options.")
+            .tooltip("Log history and display options.")
             .accessibility_label("Log options")
             .when(menu_open, |this| this.bg(open_wash))
             .dropdown_menu(move |menu, _, _| {
-                let mut menu = menu;
-                // The container is the first thing a reader changes on a multi-container Pod, so
-                // it leads rather than sitting under a display section.
-                if containers.len() > 1 {
-                    let selected = container.clone();
-                    let panel = panel.clone();
-                    menu = menu.item(menu_item("Container").disabled(true)).separator();
-                    menu = containers.clone().into_iter().fold(menu, |menu, name| {
-                        let toggled = selected.as_ref() == Some(&name);
-                        let panel = panel.clone();
-                        let name = name.clone();
-                        menu.item(menu_item(name.clone()).checked(toggled).on_click(
-                            move |_, _, cx| {
-                                panel
-                                    .update(cx, |panel, cx| panel.set_container(name.clone(), cx))
-                                    .ok();
-                            },
-                        ))
-                    });
-                    menu = menu.separator();
-                }
                 let tail_panel = panel.clone();
                 let mut menu = menu
                     .item(menu_item("History fetched").disabled(true))
@@ -5171,23 +5380,42 @@ impl DockPanel {
     /// rebuilt against the same target with the same options, and a reader who is told `Retry`
     /// cannot tell whether the same thing will happen differently or whether they should be
     /// changing something first.
+    ///
+    /// `secondary`, not `primary`. It was the Dock's last `Accent` control and the loudest thing
+    /// in the pane, and it appeared in exactly the two places a recovery action should not be the
+    /// main event: the empty state and the error row. Both of those are states the reader arrived
+    /// at rather than chose, so a filled accent button there tells them the pane is about a
+    /// decision when it is about a stream that stopped — and it spent the surface's whole accent
+    /// budget on a button that is one click of several ways back. `secondary` keeps the push-button
+    /// read (§4.6's 6% fill) and lets the *reason* stay the loudest thing in the row, which is the
+    /// part the reader actually needs.
     fn render_log_retry(&self, cx: &Context<Self>) -> AnyElement {
-        Button::new("dock-retry")
-            .label("Reconnect")
-            .primary()
-            .with_size(Size::Size(design::size::CONTROL))
-            // Stated for the same reason as the level trigger, and to the same height: the two are
-            // the row's only push buttons and they are 28px and 20px apart otherwise.
-            .h(BAND_CONTROL)
-            .tab_index(9isize)
-            .tooltip("Reconnect the log stream")
-            .on_click(cx.listener(|this, _, _, cx| this.retry(cx)))
-            .into_any_element()
+        labelled(
+            Button::new("dock-retry")
+                .secondary()
+                .with_size(Size::Size(design::size::CONTROL))
+                // Stated for the same reason as the level trigger, and to the same
+                // height: the two are the row's only push buttons and they are 28px
+                // and 20px apart otherwise.
+                .h(BAND_CONTROL)
+                .tab_index(9isize)
+                .tooltip("Reconnect the log stream")
+                .on_click(cx.listener(|this, _, _, cx| this.retry(cx))),
+            "Reconnect",
+        )
+        .into_any_element()
     }
 
     /// Shows a recoverable log stream status, unless the log body is already showing it. The
     /// banner and the empty state are one entry point with two shapes, so a failure is never
     /// stated twice in the same view.
+    ///
+    /// The band holds [`log_banner_height`] rather than `design::size::ROW`. Thirty-two was two
+    /// pixels short of the status plate it holds, so on every failed stream with lines in the
+    /// buffer — which is the state this row exists for, because an empty body reports the failure
+    /// in its own empty state instead — the plate's bottom hairline and two pixels of its wash
+    /// painted over the top of the first log row. The band and the thing inside it have to be one
+    /// height, and the plate is the thing that is drawn.
     fn render_banner(&self, cx: &Context<Self>) -> Option<AnyElement> {
         if self.log_body_carries_state() {
             return None;
@@ -5200,7 +5428,7 @@ impl DockPanel {
                 .debug_selector(|| "dock-log-banner".to_owned())
                 .flex_none()
                 .w_full()
-                .h(design::size::ROW)
+                .h(log_banner_height())
                 .px(space::SM)
                 .gap(space::XS)
                 .items_center()
@@ -5247,13 +5475,26 @@ impl DockPanel {
                 }
                 None => match &self.log().phase {
                     LogPhase::Idle => self.logs_unavailable_state(cx),
-                    _ => empty_state_block(dock_empty_state(
-                        IconName::LoaderCircle,
-                        "Loading logs",
-                        "Waiting for the first log line…",
-                        None,
-                        cx,
-                    )),
+                    // The waiting state names the thing it is waiting for. A pane that says
+                    // "Loading logs" over an arbitrary number of seconds cannot tell the reader
+                    // whether the cluster is slow or the request went to the wrong Pod, and the
+                    // one fact the reader has — which object this stream is pointed at — is
+                    // printed nowhere on the surface at that moment. It goes in the sentence
+                    // rather than a third heading, because the sentence is the row that is allowed
+                    // to change shape per state.
+                    _ => {
+                        let target = log_target_label(
+                            self.log().request.as_ref(),
+                            self.log().container.as_deref(),
+                        );
+                        empty_state_block(dock_empty_state(
+                            IconName::LoaderCircle,
+                            "Waiting for logs",
+                            format!("Opening the stream for {target}"),
+                            None,
+                            cx,
+                        ))
+                    }
                 },
             }
         } else if self.visible_log_count() == 0 {
@@ -5406,9 +5647,8 @@ impl DockPanel {
                     window.dispatch_action(Box::new(crate::shell::OpenLogs), cx);
                 }
             }))
-            .child(
+            .child(labelled(
                 Button::new("dock-open-logs")
-                    .label("Open Logs")
                     // `secondary`, not `primary`. It was the only `primary` on the first screen
                     // and it spent 94% of the screen's accent — 7,013 of 7,448 measured
                     // `#4F8CFF` pixels — on a control that starts a repeatable action rather
@@ -5425,8 +5665,7 @@ impl DockPanel {
                     //
                     // It was never competing with another `primary`: `render_log_toolbar_shell`
                     // draws only when there is no log source, which is exactly when
-                    // [`Self::render_log_retry`] is not on screen, so `Reconnect` stays the sole
-                    // `primary` in the one state where recovering is the only way forward.
+                    // [`Self::render_log_retry`] is not on screen, so the two never shared a row.
                     .secondary()
                     // `BAND_CONTROL`, stated outright. It used to ask for `DOCK_TOOLBAR`, which
                     // the component turned into 5.6px of horizontal padding and a height of 20px:
@@ -5440,11 +5679,11 @@ impl DockPanel {
                         "Stream the logs of the selected Pod. With nothing selected, this \
                          reports which step is missing.",
                     )
-                    .accessibility_label("Open Logs")
                     .on_click(cx.listener(|_, _, window, cx| {
                         window.dispatch_action(Box::new(crate::shell::OpenLogs), cx);
                     })),
-            )
+                "Open Logs",
+            ))
             .into_any_element()
     }
 
@@ -5891,9 +6130,8 @@ impl DockPanel {
                         this.new_local_terminal(window, cx);
                     }
                 }))
-                .child(
+                .child(labelled(
                     Button::new("terminal-empty-add")
-                        .label("New Terminal")
                         // `secondary`, for the same reason `Open Logs` is, and because
                         // `table_view` already draws the line this follows: its empty states spend
                         // the accent on the control that *repairs* the table (`Retry`, and
@@ -5901,8 +6139,10 @@ impl DockPanel {
                         // single click undoes whatever stopped them") and leave `Refresh` — the
                         // "nothing here yet, here is the way to get something" state, which is
                         // what this is — on the resting surface. `forwards.rs`'s `+ New` is the
-                        // third instance of the same answer. `Reconnect` is the Dock's `Accent`
-                        // one, and it is the only control left that gets it.
+                        // third instance of the same answer, and `Reconnect` is the fourth: a
+                        // recovery control that fills in accent says the recovery is the decision,
+                        // and in both of its states it is not — the reader wants their lines back,
+                        // not a commitment.
                         //
                         // Left as `primary` it was the third accent on the Terminal tab: the
                         // resource header's kind icon (§4.2) and this tab's own selection rail (§3)
@@ -5916,11 +6156,11 @@ impl DockPanel {
                         .tab_index(5isize)
                         .tab_stop(false)
                         .tooltip("Open a local shell with the current context.")
-                        .accessibility_label("New Terminal")
                         .on_click(
                             cx.listener(|this, _, window, cx| this.new_local_terminal(window, cx)),
                         ),
-                )
+                    "New terminal",
+                ))
                 .into_any_element()
         });
         div()
@@ -5992,7 +6232,7 @@ impl DockPanel {
                 let handles = focus_handles.clone();
                 // Resolved before the builder chain, so the chip's own handlers keep the context.
                 let verdict = session_verdict(entry.exit.as_ref())
-                    .map(|severity| (design::health_icon(severity), severity.marker(cx)));
+                    .map(|severity| (design::health_icon(severity), severity));
                 // The verdict slot is always reserved, so a session that ends does not slide the
                 // title sideways, and it stays empty while the Dock has no verdict rather than
                 // claiming a healthy state it has not observed.
@@ -6003,11 +6243,11 @@ impl DockPanel {
                     .w(design::size::STATUS_MARKER)
                     .h(design::size::STATUS_MARKER)
                     .items_center()
-                    .when_some(verdict, |this, (icon, marker)| {
+                    .when_some(verdict, |this, (icon, severity)| {
                         this.child(
                             Icon::new(icon)
                                 .with_size(Size::Size(design::size::STATUS_MARKER))
-                                .text_color(marker),
+                                .text_color(design::icon::status(cx, severity)),
                         )
                     });
                 let mut chip = Tab::new()
@@ -6017,7 +6257,20 @@ impl DockPanel {
                     .aria_description(aria_description)
                     .accessibility_id(format!("terminal-session-{index}"))
                     .aria_keyshortcuts("Enter Delete Backspace ArrowLeft ArrowRight Home End")
-                    .prefix(Icon::new(IconName::SquareTerminal).xsmall())
+                    // The chip's own identity mark, and it states its ink because an
+                    // `Icon` resolves a missing colour to the theme's foreground
+                    // rather than to the tab's: every chip drew the shell mark at
+                    // `fg.primary` whatever its state, so the one chip the reader is
+                    // on and the eleven beside it carried an identical glyph.
+                    .prefix(
+                        Icon::new(IconName::SquareTerminal)
+                            .with_size(Size::Size(design::icon::IN_TOOLBAR))
+                            .text_color(if active {
+                                design::icon::active(cx)
+                            } else {
+                                design::icon::resting(cx)
+                            }),
+                    )
                     .suffix(verdict_slot)
                     // As on the header's tabs: no cursor, per §9.3.
                     .w(design::size::MAIN_CONTENT_MIN)
@@ -6076,9 +6329,9 @@ impl DockPanel {
             );
         }
         let maximize_label = if self.terminal_maximized {
-            "Restore Terminal"
+            "Restore terminal"
         } else {
-            "Maximize Terminal"
+            "Maximize terminal"
         };
         let mut commands = h_flex().flex_none().gap(space::XS).items_center();
         if self.terminal_available() && !self.terminals.is_empty() {
@@ -6097,13 +6350,13 @@ impl DockPanel {
                     }))
                     .child(
                         Button::new("terminal-add")
-                            .icon(Icon::new(IconName::Plus).xsmall())
+                            .icon(Icon::new(IconName::Plus))
                             .ghost()
                             .with_size(Size::Size(BAND_CONTROL))
                             .tab_index(5isize)
                             .tab_stop(false)
                             .tooltip("Open a local shell with the current context.")
-                            .accessibility_label("New Terminal")
+                            .accessibility_label("New terminal")
                             .on_click(cx.listener(|this, _, window, cx| {
                                 this.new_local_terminal(window, cx)
                             })),
@@ -6113,14 +6366,11 @@ impl DockPanel {
         if (!compact || self.terminal_maximized) && !self.terminals.is_empty() {
             commands = commands.child(
                 Button::new("terminal-maximize")
-                    .icon(
-                        Icon::new(if self.terminal_maximized {
-                            IconName::WindowRestore
-                        } else {
-                            IconName::Maximize
-                        })
-                        .xsmall(),
-                    )
+                    .icon(Icon::new(if self.terminal_maximized {
+                        IconName::WindowRestore
+                    } else {
+                        IconName::Maximize
+                    }))
                     .ghost()
                     .with_size(Size::Size(BAND_CONTROL))
                     .tab_index(7isize)
@@ -6185,7 +6435,7 @@ impl DockPanel {
                 }),
                 |this, description| {
                     this.child(self.render_status_chip_with(
-                        "Session Ended",
+                        "Session ended",
                         Severity::Warning,
                         &description,
                         cx,
@@ -6239,100 +6489,104 @@ impl DockPanel {
         );
         let menu_open = self.overflow_menu_open.get();
         let trigger_panel = panel.clone();
-        Button::new(id)
-            .label("Actions")
-            .ghost()
-            .with_size(Size::Size(BAND_CONTROL))
-            .h(BAND_CONTROL)
-            .icon(Icon::new(IconName::Menu).xsmall())
-            .tab_index(8isize)
-            .dropdown_caret(true)
-            .tooltip("Terminal actions")
-            .accessibility_label("Terminal actions")
-            .when(menu_open, |this| this.bg(open_wash))
-            .dropdown_menu(move |menu, _, _| {
-                let panel = panel.clone();
-                let active_title = active_title.clone();
-                let mut menu = menu;
-                if has_service {
-                    let new_panel = panel.clone();
-                    menu = menu.item(menu_item("New Terminal").icon(IconName::Plus).on_click(
-                        move |_, window, cx| {
-                            new_panel
-                                .update(cx, |panel, cx| panel.new_local_terminal(window, cx))
-                                .ok();
-                        },
-                    ));
-                }
-                if has_terminal {
-                    let restart_panel = panel.clone();
-                    let restart_title = active_title.clone();
-                    if can_restart {
-                        menu = menu.item(
-                            menu_item(format!("Restart {restart_title}"))
-                                .icon(IconName::RotateCw)
-                                .on_click(move |_, window, cx| {
-                                    restart_panel
-                                        .update(cx, |panel, cx| {
-                                            panel.restart_terminal(active_terminal, window, cx)
-                                        })
-                                        .ok();
-                                }),
-                        );
-                    }
-                    let split_panel = panel.clone();
-                    let maximize_panel = panel.clone();
-                    menu = menu
-                        .item(menu_item("Split Terminal").icon(IconName::Split).on_click(
-                            move |_, window, cx| {
-                                split_panel
-                                    .update(cx, |panel, cx| panel.split_terminal(window, cx))
-                                    .ok();
-                            },
-                        ))
-                        .item(
-                            menu_item(if maximized {
-                                "Restore Terminal"
-                            } else {
-                                "Maximize Terminal"
-                            })
-                            .icon(if maximized {
-                                IconName::WindowRestore
-                            } else {
-                                IconName::Maximize
-                            })
-                            .checked(maximized)
-                            .on_click(move |_, _, cx| {
-                                maximize_panel
-                                    .update(cx, |panel, cx| panel.toggle_terminal_maximized(cx))
+        labelled(
+            Button::new(id)
+                .ghost()
+                .with_size(Size::Size(BAND_CONTROL))
+                .h(BAND_CONTROL)
+                .icon(Icon::new(IconName::Menu))
+                .tab_index(8isize)
+                .dropdown_caret(true)
+                .tooltip("Terminal actions"),
+            "Actions",
+        )
+        // The two words differ on purpose: `Actions` on its own is the vaguest word on the
+        // strip, and the announced name says which pane's menu the caret opens.
+        .accessibility_label("Terminal actions")
+        .when(menu_open, |this| this.bg(open_wash))
+        .dropdown_menu(move |menu, _, _| {
+            let panel = panel.clone();
+            let active_title = active_title.clone();
+            let mut menu = menu;
+            if has_service {
+                let new_panel = panel.clone();
+                menu = menu.item(menu_item("New terminal").icon(IconName::Plus).on_click(
+                    move |_, window, cx| {
+                        new_panel
+                            .update(cx, |panel, cx| panel.new_local_terminal(window, cx))
+                            .ok();
+                    },
+                ));
+            }
+            if has_terminal {
+                let restart_panel = panel.clone();
+                let restart_title = active_title.clone();
+                if can_restart {
+                    menu = menu.item(
+                        menu_item(format!("Restart {restart_title}"))
+                            .icon(design::glyph::action::restart())
+                            .on_click(move |_, window, cx| {
+                                restart_panel
+                                    .update(cx, |panel, cx| {
+                                        panel.restart_terminal(active_terminal, window, cx)
+                                    })
                                     .ok();
                             }),
-                        );
-                    let close_panel = panel.clone();
-                    menu = menu.item(menu_item("Close Terminal").icon(IconName::X).on_click(
+                    );
+                }
+                let split_panel = panel.clone();
+                let maximize_panel = panel.clone();
+                menu = menu
+                    .item(menu_item("Split terminal").icon(IconName::Split).on_click(
                         move |_, window, cx| {
-                            close_panel
-                                .update(cx, |panel, cx| {
-                                    panel.close_terminal(active_terminal, window, cx)
-                                })
+                            split_panel
+                                .update(cx, |panel, cx| panel.split_terminal(window, cx))
                                 .ok();
                         },
-                    ));
-                }
-                menu
-            })
-            // The trigger stays pressed while its menu is up, and the update is on the panel
-            // rather than the flag so the strip repaints in the same frame — the same
-            // arrangement `render_overflow_menu` uses for the Logs menu.
-            .on_open_change(move |open, _window, cx| {
-                if let Some(panel) = trigger_panel.upgrade() {
-                    panel.update(cx, |panel, cx| {
-                        panel.overflow_menu_open.set(*open);
-                        cx.notify();
-                    });
-                }
-            })
-            .into_any_element()
+                    ))
+                    .item(
+                        menu_item(if maximized {
+                            "Restore terminal"
+                        } else {
+                            "Maximize terminal"
+                        })
+                        .icon(if maximized {
+                            IconName::WindowRestore
+                        } else {
+                            IconName::Maximize
+                        })
+                        .checked(maximized)
+                        .on_click(move |_, _, cx| {
+                            maximize_panel
+                                .update(cx, |panel, cx| panel.toggle_terminal_maximized(cx))
+                                .ok();
+                        }),
+                    );
+                let close_panel = panel.clone();
+                menu = menu.item(menu_item("Close terminal").icon(IconName::X).on_click(
+                    move |_, window, cx| {
+                        close_panel
+                            .update(cx, |panel, cx| {
+                                panel.close_terminal(active_terminal, window, cx)
+                            })
+                            .ok();
+                    },
+                ));
+            }
+            menu
+        })
+        // The trigger stays pressed while its menu is up, and the update is on the panel
+        // rather than the flag so the strip repaints in the same frame — the same
+        // arrangement `render_overflow_menu` uses for the Logs menu.
+        .on_open_change(move |open, _window, cx| {
+            if let Some(panel) = trigger_panel.upgrade() {
+                panel.update(cx, |panel, cx| {
+                    panel.overflow_menu_open.set(*open);
+                    cx.notify();
+                });
+            }
+        })
+        .into_any_element()
     }
 
     fn log_viewport_height(&self, row_height: Pixels) -> Pixels {
@@ -6849,13 +7103,13 @@ fn dock_empty_state(
     let glyph: AnyElement = if loading {
         spinner(
             icon,
-            design::role::fg_tertiary(cx),
-            Size::Size(design::size::ICON_LARGE),
+            design::icon::incidental(cx),
+            Size::Size(design::icon::LEAD),
         )
     } else {
         Icon::new(icon)
-            .with_size(Size::Size(design::size::ICON_LARGE))
-            .text_color(design::role::fg_tertiary(cx))
+            .with_size(Size::Size(design::icon::LEAD))
+            .text_color(design::icon::incidental(cx))
             .into_any_element()
     };
     div()
@@ -6917,11 +7171,9 @@ fn dock_empty_state(
                             // 13/400 against 15/600 is the pair the scale is built for: 2px and a
                             // weight, so the two levels separate in greyscale.
                             //
-                            // The 270px cap is `table_view`'s `EMPTY_MEASURE` for the same slot.
-                            // The number is repeated rather than shared because the constant is
-                            // private to that file; §2.3's rule is the 40ch, and 40ch of 13px Inter
-                            // lands inside 270 either way.
-                            .max_w(px(270.))
+                            // The cap is the design token, so every panel wraps the
+                            // same sentence at the same width.
+                            .max_w(design::size::EMPTY_MEASURE)
                             // The description is the quieter half of the pair, so it wears the
                             // quieter ink. It inherited the title's `fg.primary` from the column
                             // above, and a sentence is wider than a title: the two lines came out
@@ -7171,14 +7423,18 @@ fn log_row(
     let mut message = div()
         .debug_selector(|| "dock-log-message".to_owned())
         .min_w(px(0.))
-        // The message carries the level's ink when the level is a problem and secondary ink
-        // otherwise, so a failing line is one coloured block rather than a grey paragraph with a
-        // red word at the start of it. An ordinary line is quiet, which is most of them.
-        .text_color(if line.severity == Severity::Error {
-            design::role::danger(cx)
-        } else {
-            design::role::fg_secondary(cx)
-        })
+        // One ink for every line. The message used to wear `danger` outright on an `ERROR` line,
+        // which is the "wall of colour" the brief rules out: a message is a paragraph of arbitrary
+        // length, and painting all of it — every wrapped continuation line included — turns one
+        // row into a block of red in a surface whose reader scans for *the line that is not
+        // ordinary*. A hundred errors then reads as a hundred red paragraphs, and the severity
+        // stops being a signal because it is the background.
+        //
+        // Severity is carried by the level lane instead: a mark and a word, both in the severity's
+        // own ink, on a fixed column. That is the channel that survives greyscale, that stays
+        // legible when the pane is a hundred rows deep, and that costs one word of colour rather
+        // than the whole line. What is left here is body copy, and body copy is `fg_secondary`.
+        .text_color(design::role::fg_secondary(cx))
         .child(display_message.clone());
     if wrap {
         message = message.flex_1().whitespace_normal();
@@ -7198,9 +7454,9 @@ fn log_row(
     // the right edge — a wall of glyphs on the one surface where the reader is scanning hardest for
     // the line that is not ordinary.
     let copy_label = if long {
-        "Copy Full Log Line"
+        "Copy full log line"
     } else {
-        "Copy Log Line"
+        "Copy log line"
     };
     // The control is out of the tab order on purpose: the row itself takes the caret and the
     // selection chord copies, so a second stop would make the copy path a Tab away from the
@@ -7213,7 +7469,7 @@ fn log_row(
     let copy_width = design::size::CONTROL;
     let copy_height = row_height;
     let copy = Button::new(("dock-log-copy", row_id))
-        .icon(Icon::new(IconName::Copy).xsmall())
+        .icon(Icon::new(IconName::Copy))
         .ghost()
         .with_size(Size::Size(copy_width))
         .h(copy_height)
@@ -9729,6 +9985,10 @@ mod tests {
                 );
                 services.context = Some(context.into());
                 panel.set_terminal_services(Some(services), cx);
+                // Handing the Dock a cluster drops every stream that belonged to the one it was
+                // on, so the harness's own stream is gone the moment the context is set and has
+                // to be opened again for the strip to hold two.
+                panel.open_logs(request(), cx);
                 // The harness's own stream is closed afterwards, so the one left on the strip is
                 // the only `Logs` tab and it is the first one whatever its slot number.
                 panel.open_logs(
@@ -11059,6 +11319,74 @@ mod tests {
         assert_eq!(state.borrow().restarts, 2);
     }
 
+    /// A reason the API server has already ruled on gets no second request.
+    ///
+    /// The reconnect ladder used to run for every reason, so a deleted Pod sat in
+    /// "Reconnecting, attempt 3" for half a minute — five identical requests against a server that
+    /// has answered — and the reader had to wait out a wait that could not end in an answer. The
+    /// transient failure still retries; the ruled-on one does not.
+    #[gpui_kit::test]
+    fn a_pod_the_server_no_longer_has_is_not_reconnected(cx: &mut TestAppContext) {
+        let (panel, state, cx) = setup(cx);
+        push(
+            &state,
+            vec![LogEvent::Ended(
+                "The log request failed: pods \"web-0\" not found. Check the Pod, cluster \
+                 connection, and access permissions, then try again."
+                    .into(),
+            )],
+            cx,
+        );
+        panel.read_with(cx, |panel, _| {
+            assert!(
+                matches!(panel.phase(), LogPhase::Failed { .. }),
+                "a missing Pod is reported, not retried: {:?}",
+                panel.phase()
+            );
+        });
+        cx.executor()
+            .advance_clock(RECONNECT_BASE * 8 + Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            state.borrow().restarts,
+            1,
+            "no request went out again against a Pod that is gone"
+        );
+    }
+
+    /// A container that ran to completion is the answer, not a fault.
+    ///
+    /// A `--follow` stream closes when the process ends, which for a Job is what the reader opened
+    /// the logs to see. It used to be classified as a failed request: a red dot, an alert icon, an
+    /// `Error` verdict, and five reconnection attempts against a container that had exited zero.
+    #[gpui_kit::test]
+    fn a_container_that_exited_is_reported_as_finished(cx: &mut TestAppContext) {
+        let (panel, state, cx) = setup(cx);
+        push(
+            &state,
+            vec![LogEvent::Ended("The log stream ended.".into())],
+            cx,
+        );
+        panel.read_with(cx, |panel, _| {
+            let notice = panel.log_failure_notice().expect("a verdict to report");
+            assert_eq!(notice.title, "Container finished");
+            assert_eq!(notice.severity, Severity::Muted);
+            assert!(
+                !notice.guidance.contains("log stream stopped"),
+                "nothing stopped: {}",
+                notice.guidance
+            );
+        });
+        cx.executor()
+            .advance_clock(RECONNECT_BASE * 8 + Duration::from_secs(1));
+        cx.run_until_parked();
+        assert_eq!(
+            state.borrow().restarts,
+            1,
+            "a finished container is not reconnected behind the reader's back"
+        );
+    }
+
     /// A first request that never answers has to become a failure, not a spinner.
     ///
     /// The watchdog used to be armed only when `attempts > 0`, so the one connection with no way
@@ -11163,13 +11491,20 @@ mod tests {
         cx.run_until_parked();
         panel.read_with(cx, |panel, _| {
             let notice = panel.log_failure_notice().expect("a failure to report");
-            assert_eq!(notice.title, "No Container");
+            assert_eq!(notice.title, "No container");
             let guidance = notice.guidance.to_ascii_lowercase();
             assert!(
                 guidance.contains("no container can stream yet"),
                 "{guidance}"
             );
-            assert!(guidance.contains("retry"), "{guidance}");
+            // The next step is named with the word on the control. The old sentence said
+            // "select Retry" for a button the Dock renamed to `Reconnect` when it decided a
+            // reconnect is what it does, so a reader following the sentence looked for a word
+            // that is not on the screen.
+            assert!(
+                guidance.contains("reconnect"),
+                "the guidance names the control: {guidance}"
+            );
             for claim in ["gone", "exist", "deleted", "not found"] {
                 assert!(
                     !guidance.contains(claim),
@@ -11269,16 +11604,16 @@ mod tests {
     fn every_failure_class_reports_its_own_next_step(cx: &mut TestAppContext) {
         let (panel, _state, cx) = setup(cx);
         for (reason, title, severity) in [
-            ("pods \"web-0\" not found", "Pod Missing", Severity::Warning),
-            (PENDING_POD_REASON, "No Container", Severity::Warning),
+            ("pods \"web-0\" not found", "Pod missing", Severity::Warning),
+            (PENDING_POD_REASON, "No container", Severity::Warning),
             (
                 "pods \"web-0\" is forbidden: User \"dev\" cannot get resource \"pods/log\"",
-                "Access Denied",
+                "Access denied",
                 Severity::Error,
             ),
             (
                 "The server rejected our request for an unknown reason",
-                "Log Request Failed",
+                "Log request failed",
                 Severity::Error,
             ),
         ] {
@@ -11303,7 +11638,7 @@ mod tests {
         panel.read_with(cx, |panel, _| {
             let notice = panel.log_failure_notice().expect("a failure to report");
             let guidance = notice.guidance.to_ascii_lowercase();
-            assert_eq!(notice.title, "Pod Missing");
+            assert_eq!(notice.title, "Pod missing");
             assert!(
                 guidance.contains("no longer has this pod"),
                 "a Pod the cluster cannot find is the only failure that says so: {guidance}"
@@ -11767,7 +12102,7 @@ mod tests {
         let state = cx
             .debug_bounds("empty-state")
             .expect("Terminal empty state");
-        let add = cx.debug_bounds("terminal-add").expect("New Terminal");
+        let add = cx.debug_bounds("terminal-add").expect("New terminal");
         assert!(f32::from(context.size.width) > 0.0);
         assert!(context.origin.y >= toolbar.origin.y);
         assert!(context.bottom() <= toolbar.bottom());
@@ -12197,6 +12532,122 @@ mod tests {
             assert!(!panel.terminal_split);
             assert_eq!(panel.terminal_split_ratio, 0.5);
             assert!(panel.terminal_split_drag.is_none());
+        });
+    }
+
+    /// Switching cluster closes the sessions pointed at the old one.
+    ///
+    /// A shell is a live connection and a forward is a live tunnel, both into the cluster they
+    /// were started against. Keeping them across a cluster switch left the reader with chips
+    /// naming one cluster in a window whose every other surface named another, and three easy
+    /// ways to run a command against the wrong cluster. A *namespace* switch is not a cluster
+    /// switch and must leave a shell alone.
+    #[gpui_kit::test]
+    fn switching_cluster_closes_the_old_cluster_sessions(cx: &mut TestAppContext) {
+        let (panel, terminals, forwards, cx) = setup_terminals(cx);
+        panel
+            .update(cx, |panel, cx| panel.open_terminal(TerminalKind::Local, cx))
+            .expect("open");
+        assert_eq!(panel.read_with(cx, |panel, _| panel.terminal_count()), 1);
+
+        // The namespace moves and the shell stays: comparing two namespaces is what it is for.
+        let mut scoped = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
+        scoped.namespace = Some("team-a".to_owned());
+        let scoped_context = scoped.context.clone();
+        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(scoped), cx));
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(panel.terminal_count(), 1);
+            assert_eq!(
+                panel.terminals[0].request.context.as_deref(),
+                scoped_context.as_deref(),
+            );
+        });
+
+        let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
+        elsewhere.context = Some("other-cluster".to_owned());
+        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(
+                panel.terminal_count(),
+                0,
+                "a shell in the previous cluster does not survive the switch"
+            );
+            assert_eq!(
+                panel.terminal_focus_handles.len(),
+                0,
+                "the focus handles go with the sessions, or the next session inherits a stale one"
+            );
+        });
+    }
+
+    /// Switching cluster closes the old cluster's forwards.
+    #[gpui_kit::test]
+    fn switching_cluster_closes_the_old_cluster_forwards(cx: &mut TestAppContext) {
+        let (panel, terminals, forwards, cx) = setup_terminals(cx);
+        panel
+            .update(cx, |panel, cx| {
+                panel.start_forward(
+                    ForwardRequest {
+                        context: Some("kind-dev".to_owned()),
+                        namespace: Some("default".to_owned()),
+                        name: "web-0".into(),
+                        remote_port: 8080,
+                        local_port: None,
+                    },
+                    cx,
+                )
+            })
+            .expect("start forward");
+        cx.run_until_parked();
+        assert_eq!(panel.read_with(cx, |panel, _| panel.forward_count()), 1);
+
+        let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
+        elsewhere.context = Some("other-cluster".to_owned());
+        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.read_with(cx, |panel, _| {
+            assert_eq!(
+                panel.forward_count(),
+                0,
+                "a tunnel into the previous cluster does not survive the switch"
+            );
+        });
+    }
+
+    /// A log stream does not follow the window to another cluster.
+    ///
+    /// A Pod name is not unique across clusters. The stream used to reconnect against the new
+    /// factory and keep filling the same tab, so a reader who switched from `prod` to `staging`
+    /// with `default/web-0` open went on reading a *different* Pod's logs under the same label,
+    /// with nothing on screen saying the tab had changed what it was pointed at.
+    #[gpui_kit::test]
+    fn switching_cluster_closes_the_old_cluster_log_streams(cx: &mut TestAppContext) {
+        let (panel, terminals, forwards, cx) = setup_terminals(cx);
+        panel.update(cx, |panel, cx| {
+            panel.open_logs(
+                LogRequest {
+                    namespace: Some("default".into()),
+                    name: "web-0".into(),
+                    containers: vec!["app".into()],
+                },
+                cx,
+            )
+        });
+        panel.read_with(cx, |panel, _| {
+            assert!(
+                panel.request().is_some(),
+                "the stream is open before the switch"
+            );
+        });
+
+        let mut elsewhere = fake_services(Rc::clone(&terminals), Rc::clone(&forwards));
+        elsewhere.context = Some("other-cluster".to_owned());
+        panel.update(cx, |panel, cx| panel.set_terminal_services(Some(elsewhere), cx));
+        panel.read_with(cx, |panel, _| {
+            assert!(
+                panel.request().is_none(),
+                "a stream against the previous cluster does not survive the switch"
+            );
+            assert_eq!(panel.phase(), &LogPhase::Idle);
         });
     }
 

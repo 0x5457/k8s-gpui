@@ -46,16 +46,21 @@ fn bind_overlay_key(cx: &mut App) {
 }
 
 fn start_hang_detection(cx: &App) {
+    // A hang is a window that stopped answering, and about a second is where a
+    // person stops believing the app is alive. 100ms is one dropped frame, which
+    // the frame budget below already measures, and it fired fifty times more
+    // eagerly than the same build's debug profile: a threshold that tracks how
+    // fast the machine is cannot be read as a judgement about the app.
     let hang_threshold = if cfg!(debug_assertions) {
         Duration::from_secs(5)
     } else {
-        Duration::from_millis(100)
+        Duration::from_secs(1)
     };
+    // A debug frame costs several release frames, so the same dropped-frame
+    // question is asked with a longer leash.
     let frame_budget = if cfg!(debug_assertions) {
-        // Release frames use a lower budget than debug frames.
         Duration::from_millis(100)
     } else {
-        // This budget is about one dropped display frame.
         Duration::from_millis(24)
     };
 
@@ -87,13 +92,15 @@ fn start_hang_detection(cx: &App) {
 
 fn report_incident(incident: &HangIncident, threshold: Duration) {
     let snapshot = &incident.snapshot;
-    eprintln!(
+    let summary = format!(
         "[hang] trigger={:?} foreground={:.1}ms busy={:.0}% events={}",
         incident.trigger,
         millis(snapshot.occupancy()),
         snapshot.busy_fraction() * 100.0,
         incident.contributors.len(),
     );
+    eprintln!("{summary}");
+    crash::note(&summary);
 
     for event in incident.contributors.iter().take(MAX_CONTRIBUTORS) {
         eprintln!("[hang]   - {}", describe_event(event));
@@ -308,6 +315,24 @@ pub mod crash {
             }
             previous(info);
         }));
+    }
+
+    /// One line about a running app, in the same private log a panic writes.
+    ///
+    /// The hang detector runs on a thread with no console and reports to stderr,
+    /// which a person who launched the app from a launcher never sees. A report
+    /// only counts as evidence if the reader can find it and attach it, and the
+    /// startup banner already prints the path of this file for the crash hook; the
+    /// same line about a frozen window belongs beside it rather than in a terminal
+    /// window that was never open.
+    pub fn note(message: &str) {
+        let Some(path) = log_path() else {
+            return;
+        };
+        let record = format!("[{}] {message}\n", timestamp(SystemTime::now()));
+        if let Err(error) = append(&path, &record) {
+            eprintln!("[crash] cannot write {}: {error}", path.display());
+        }
     }
 
     fn build() -> &'static str {

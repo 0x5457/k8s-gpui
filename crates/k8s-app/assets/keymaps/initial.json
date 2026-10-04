@@ -5,7 +5,7 @@
 // JSONC supports comments and trailing commas.
 //
 // Contexts used by the built-in keymap are Shell, CommandPalette, Table,
-// Inspector, Hotbar, Terminal, Editor, TextInput, ResourceSearch, Dialog, and
+// Inspector, Terminal, Editor, TextInput, ResourceSearch, Dialog, and
 // menu. Terminal owns a focused session, Editor and TextInput own typing, the
 // Inspector owns the selected object's YAML and its Describe values, and
 // ResourceSearch, Dialog, and menu own an open overlay. A binding with no

@@ -18,9 +18,6 @@ use std::rc::Rc;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::IndexPath;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
-use gpui_kit::component::empty::{
-    Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyMediaVariant, EmptyTitle,
-};
 use gpui_kit::component::input::{Input, InputEvent, InputState};
 use gpui_kit::component::label::Label;
 use gpui_kit::component::list::{List, ListDelegate, ListState};
@@ -67,7 +64,9 @@ const ROW_HEIGHT: Pixels = design::size::PALETTE_ROW;
 /// `size::KIND_ICON` rather than `size::ICON`: this is the chrome glyph set — a
 /// cluster is a server, a namespace is a folder — drawn and judged at fourteen
 /// pixels, and the same glyphs are fourteen pixels in the toolbar that opened this
-/// card.
+/// card. Fourteen is `design::icon::NAV`, and `panels::search` reserves the same
+/// lane for the same glyphs, because a mark that moves between the two cards and
+/// the sidebar has to keep its weight rather than be redrawn per surface.
 const ICON_SLOT: Pixels = design::size::KIND_ICON;
 
 /// Width of the lane the current-value check sits in, reserved on every row.
@@ -77,6 +76,17 @@ const ICON_SLOT: Pixels = design::size::KIND_ICON;
 /// others: a check that appears by taking space from the label moves the label.
 const CHECK_LANE: Pixels = design::size::KIND_ICON;
 
+/// The button box whose *derived* glyph is [`design::icon::IN_ROW`].
+///
+/// gpui-kit reads an icon button's mark off the box at `size * 0.75` and overwrites whatever the
+/// caller named on the mark, so the box is the only lever there is — and at `size::ICON_BUTTON` it
+/// drew this one at eighteen pixels, a lane of its own that no other control in the product is on.
+/// Stated once, for the reason `shell::panels::toolbar_glyph_box` states the toolbar's: two
+/// buttons that each ask for a different box are two different glyphs.
+fn field_glyph_box() -> Pixels {
+    Pixels::from(f32::from(design::icon::IN_ROW) / 0.75)
+}
+
 /// How many rows the list shows before it scrolls, and therefore how tall this
 /// card can ever be.
 ///
@@ -85,6 +95,23 @@ const CHECK_LANE: Pixels = design::size::KIND_ICON;
 /// are fixed, so a cap on the rows is a cap on the card, and it is one number
 /// rather than a height that has to be re-derived whenever a band moves.
 const LIST_ROWS: f32 = 8.0;
+
+/// The card's width.
+///
+/// Its own number, and not one borrowed from another region. It was
+/// `design::size::INSPECTOR_MIN`, which is a *pane* floor — the narrowest the
+/// right-hand inspector may be while the centre still holds its columns. Reading
+/// it here meant the width of a floating card was being decided by a constraint
+/// that has nothing to do with it, and the number it produced, 260px, is too
+/// narrow for the thing the card is for: a kubeconfig context is routinely longer
+/// than that, so the row spends its budget on an ellipsis while the check lane it
+/// also has to hold sits on the trailing edge.
+///
+/// 320 is the width at which the commonest value in either card fits whole, and it
+/// is still narrow enough that the card reads as belonging to the button it hangs
+/// off rather than as a second window. The `max_w_full` beside it is what keeps
+/// the card inside a window narrower than this.
+const CARD_WIDTH: f32 = 320.;
 
 /// The share of the card's width the trailing lane may take before the name has
 /// to truncate.
@@ -302,17 +329,19 @@ pub(super) fn result_label(visible: usize, total: usize) -> String {
 /// the field above to work out why. Naming the query is the one fact this state
 /// can add, and it is the one the repair below it acts on. No terminal period: it
 /// is a label, not a sentence.
-fn empty_title(kind: PickerKind, query: &str) -> String {
-    let query = query.trim();
-    if query.is_empty() {
-        return match kind {
-            PickerKind::Cluster => "No contexts available".to_owned(),
-            PickerKind::Namespace => "No namespaces available".to_owned(),
-        };
-    }
+/// The heading an empty card carries.
+///
+/// A `&'static str` and not a `String`, because the shared empty state takes a
+/// short heading that is the same whatever the reader typed, and the variable
+/// half belongs in the sentence under it. It used to interpolate the query into
+/// the title — "No namespace matches \"pro\"" — which meant the only card in the
+/// product that could not use the shared empty state was this one, because its
+/// heading was not static. The query is now named by [`PickerDelegate::empty_guidance`],
+/// which is the sentence that is allowed to be about this attempt.
+fn empty_title(kind: PickerKind) -> &'static str {
     match kind {
-        PickerKind::Cluster => format!("No context matches \"{query}\""),
-        PickerKind::Namespace => format!("No namespace matches \"{query}\""),
+        PickerKind::Cluster => "No contexts available",
+        PickerKind::Namespace => "No namespaces available",
     }
 }
 
@@ -377,7 +406,7 @@ fn icon_lane(icon: Option<IconName>, ink: Hsla) -> Div {
 /// check lane right by the gap in front of it. The check lane itself is always
 /// drawn, so a name never moves when the cursor crosses the current row.
 ///
-/// The check is `fg_primary` and not the accent on purpose. The accent on this
+/// The check is the active ink and not the accent on purpose. The accent on this
 /// card means one thing — the keyboard is here — and it is spent on the selected
 /// row's fill. The tick says a different fact: which value the card would answer
 /// with if the reader dismissed it now, which is true whether or not the cursor
@@ -769,10 +798,13 @@ impl PickerDelegate {
             index,
             selector: option.debug_selector.clone(),
             icon: option.icon,
-            // The mark is `fg_tertiary` on every row, selected or not: a folder is
-            // what the row *is*, not a state it is in.
-            icon_ink: design::role::fg_tertiary(cx),
-            check_ink: design::role::fg_primary(cx),
+            // The resting ink of a control, one step under the name beside it. It was
+            // `fg_tertiary`, which is the placeholder and count tier: measured on the
+            // namespace switcher that painted the folder `#737880` against a name at
+            // `#EFF1F4`, and an enabled row whose own glyph reads as disabled is the
+            // failure the icon contract exists to prevent.
+            icon_ink: design::icon::resting(cx),
+            check_ink: design::icon::active(cx),
             name: label(option.label.clone(), design::text::BODY)
                 .text_color(name_ink)
                 .truncate()
@@ -804,11 +836,22 @@ impl PickerDelegate {
     /// frame reads as a hole cut in it. The glyph is unframed, because
     /// `EmptyMediaVariant::Icon` is a `size_8()` `bg(muted)` plate and §4.13 asks
     /// for a bare 24px `fg.tertiary` glyph.
-    fn empty(&self, cx: &App) -> AnyElement {
+    /// One empty state for the whole product.
+    ///
+    /// It used to hand-roll `Empty` here, and the command palette — the one other
+    /// card in this product — renders the shared `common::empty_state` instead. Two
+    /// cards, two icon sizes, two title weights and two measures, for the same
+    /// event. What the hand-rolled version bought was `flex_none`, because the
+    /// shared wrapper is `flex_1` and a percentage height inside a `List`'s empty
+    /// area resolves against nothing; that is a wrapper, not a reason for a second
+    /// implementation, so the shared state is used and wrapped here instead.
+    ///
+    /// The inset stays the card's, so an empty card's sentence starts on the same
+    /// spine the rows would have started on.
+    fn empty(&self) -> AnyElement {
         let searching = !self.query.trim().is_empty();
-        let title = empty_title(self.kind, &self.query);
         let clear = self.clear.clone();
-        let clear_button = searching.then(|| {
+        let action: Option<AnyElement> = searching.then(|| {
             div()
                 .id("searchable-picker-clear-search")
                 .debug_selector(|| "searchable-picker-clear-search".to_owned())
@@ -818,83 +861,43 @@ impl PickerDelegate {
                         .label("Clear search")
                         .ghost()
                         .with_size(Size::Size(design::size::CONTROL))
-                        .accessibility_label("Clear Picker Search")
+                        .accessibility_label("Clear picker search")
                         .on_click(move |_, window, cx| clear(window, cx)),
                 )
+                .into_any_element()
         });
         div()
             .id("searchable-picker-empty")
             .w_full()
             .flex_none()
-            // The same inset as every band above it, so an empty card's sentence
-            // starts on the spine the rows would have started on.
             .px(CONTENT_INSET)
             .py(design::space::MD)
+            .flex()
             .items_center()
             .justify_center()
-            .gap(design::space::SM)
             .role(Role::Status)
-            .aria_label(title.clone())
-            .child(
-                Empty::new()
-                    .border_0()
-                    .p_0()
-                    .rounded(design::radius::LG)
-                    .flex_none()
-                    .gap(design::space::SM)
-                    .text_color(design::role::fg_primary(cx))
-                    .header(
-                        EmptyHeader::new()
-                            // A percentage of a 260px popover is not a measure.
-                            // The same 40ch `UI-SPEC` §2.3 gives every other
-                            // state's description.
-                            .max_w(px(f32::from(design::text::BODY)
-                                * 0.6
-                                * crate::panels::common::EMPTY_MEASURE_CH))
-                            .gap(design::space::SM)
-                            .media(
-                                EmptyMedia::new()
-                                    .with_variant(EmptyMediaVariant::Default)
-                                    .mb_0()
-                                    .child(
-                                        Icon::new(IconName::Search)
-                                            .with_size(Size::Size(design::size::ICON_LARGE))
-                                            .text_color(design::role::fg_tertiary(cx)),
-                                    ),
-                            )
-                            .title(
-                                EmptyTitle::new()
-                                    .text_size(design::text::TITLE)
-                                    .line_height(design::text::TITLE_LINE_HEIGHT)
-                                    .font_weight(gpui_kit::FontWeight::SEMIBOLD)
-                                    .text_color(design::role::fg_primary(cx))
-                                    .child(title),
-                            )
-                            .description(
-                                EmptyDescription::new()
-                                    .line_height(design::text::BODY_LINE_HEIGHT)
-                                    .child(
-                                        label(self.empty_guidance(), design::text::BODY)
-                                            .text_color(design::role::fg_secondary(cx)),
-                                    ),
-                            ),
-                    )
-                    .when_some(clear_button, Empty::child),
-            )
+            .child(crate::panels::common::empty_state_with_action(
+                IconName::Search,
+                empty_title(self.kind),
+                self.empty_guidance(),
+                action,
+            ))
             .into_any_element()
     }
 
-    fn empty_guidance(&self) -> &'static str {
-        if self.query.trim().is_empty() {
-            match self.kind {
+    fn empty_guidance(&self) -> SharedString {
+        let query = self.query.trim();
+        if query.is_empty() {
+            return match self.kind {
                 PickerKind::Cluster => {
-                    "Add a context to a kubeconfig file, then reload kubeconfigs."
+                    "Add a context to a kubeconfig file, then reload kubeconfigs.".into()
                 }
-                PickerKind::Namespace => "Refresh the namespace list, then try again.",
-            }
-        } else {
-            "Clear the search, or type another name."
+                PickerKind::Namespace => "Refresh the namespace list, then try again.".into(),
+            };
         }
+        // Naming the query is what makes this sentence specific, and it is why the
+        // heading above it no longer has to be.
+        format!("Nothing matches \"{query}\". Clear the search, or type another name.").into()
     }
 }
 
@@ -928,9 +931,9 @@ impl ListDelegate for PickerDelegate {
     fn render_empty(
         &mut self,
         _: &mut Window,
-        cx: &mut Context<ListState<Self>>,
+        _: &mut Context<ListState<Self>>,
     ) -> impl IntoElement {
-        self.empty(cx)
+        self.empty()
     }
 
     fn cancel(&mut self, _: &mut Window, _: &mut Context<ListState<Self>>) {}
@@ -991,15 +994,14 @@ fn search_field(
     cx: &App,
 ) -> AnyElement {
     let plane = design::role::surface_raised(cx);
-    let mut field = Input::new(query)
+    let field = Input::new(query)
         .id(("searchable-picker-search", query.entity_id()))
         .role(RoleOverride::from(Role::SearchInput))
         .aria_label(placeholder)
-        .h(design::size::CONTROL)
         .w_full()
-        // The height is the control's. One horizontal inset inside it, and no
-        // vertical padding at all, so the text is centred in the 28 rather than sat
-        // in a twelve-pixel content box.
+        // One horizontal inset inside the field, and no vertical padding at all, so
+        // the text is centred in the control rather than sat in a twelve-pixel
+        // content box.
         .px(design::space::SM)
         .py_0()
         .text_size(design::text::BODY)
@@ -1021,9 +1023,23 @@ fn search_field(
             div().w(ICON_SLOT).flex_none().child(
                 Icon::new(IconName::Search)
                     .with_size(Size::Size(ICON_SLOT))
-                    .text_color(design::graphic_on(plane, design::role::fg_tertiary(cx))),
+                    // The resting ink of a control, solved against the plane the
+                    // field is painted on. It was the placeholder tier, which is
+                    // one step below the resting tier: an enabled field whose own
+                    // leading glyph reads as disabled is the exact failure the
+                    // icon contract was written for.
+                    .text_color(design::graphic_on(plane, design::icon::resting(cx))),
             ),
         );
+    // `Input::h` is an INHERENT method, so it wins method resolution over
+    // `Styled::h`, and the component only applies it to a MULTI-LINE input. A
+    // `.h(CONTROL)` in the chain above therefore reached nothing and the field drew
+    // at gpui-kit's own `Size::Medium` height of 32 — measured off the running card,
+    // the field's border box was exactly a result row tall, so the one control on the
+    // card that is not a row wore a row's height. `Styled::h` is the call that writes
+    // the style refinement the component refines on last, and it is the only lever
+    // for a single-line field's box.
+    let mut field = Styled::h(field, design::size::CONTROL);
     // The clear control is the field's own suffix, as it was when the list drew the
     // field: a repair for this field, on this field, reachable without the keyboard.
     // It is not a tab stop, so Tab out of the field leaves the card rather than
@@ -1034,7 +1050,9 @@ fn search_field(
                 .icon(Icon::new(IconName::Close))
                 .text()
                 .ghost()
-                .with_size(Size::Size(design::size::ICON_BUTTON))
+                .with_size(Size::Size(field_glyph_box()))
+                .w(design::size::ICON_BUTTON)
+                .h(design::size::ICON_BUTTON)
                 .tab_stop(false)
                 .accessibility_label("Clear search")
                 .on_click(move |_, window, cx| clear(window, cx)),
@@ -1276,18 +1294,28 @@ impl Render for SearchablePicker {
         v_flex()
             .id("searchable-picker")
             .debug_selector(|| "searchable-picker".to_owned())
-            .w(px(f32::from(design::size::INSPECTOR_MIN)))
+            .w(px(CARD_WIDTH))
             .min_w(px(0.0))
             .max_w_full()
-            // One boundary, and it is the popover's. The hosting `Popover` and the
-            // menu it builds already give this card the raised surface, a corner
-            // radius, a hairline ring and `shadow::popover`, so a second line one
-            // step inside it was two surfaces faking a level they did not have. This
-            // is why the card draws no radius and no shadow of its own: the
-            // popover's treatment *is* the card's, and a popover sits close to the
-            // surface it belongs to rather than casting the palette's
-            // `shadow::overlay` across the window.
+            // The card owns its own frame: plane, `radius::LG` and `shadow::popover`.
+            //
+            // It used to own none of the three, because the hosting `Popover` draws a plane,
+            // a radius and a shadow of its own — and gpui-kit's `Popover` also gives that
+            // plane a `p_3` gutter. Measured on the namespace switcher at 2x, the switcher
+            // showed three nested rectangles: `Popover`'s rounded plane twelve logical
+            // pixels out from a square-cornered `surface_raised` card that was itself
+            // twelve pixels inside it. Twenty-four pixels of gutter on all four sides, two
+            // fills thirteen levels apart, and a rounded outer edge around a square inner
+            // one — the card-inside-a-card the design asks for by name.
+            //
+            // `picker_menu` turns the `Popover`'s appearance off so that gutter and that
+            // plane go with it, and the three things that are left are the card's own. The
+            // border it used to draw here was one step inside the popover's hairline, which
+            // is two surfaces faking a level they did not have, and it is not back: a
+            // floating card in this product is carried by its plane and its shadow.
             .bg(design::role::surface_raised(cx).alpha(1.0))
+            .rounded(design::radius::LG)
+            .shadow(design::shadow::popover(cx))
             // The content inset is one constant, restated by the bands that carry
             // it and by nothing else: a card whose children each name their own
             // padding is a card whose columns drift.
@@ -1314,7 +1342,7 @@ impl Render for SearchablePicker {
                     .px(CONTENT_INSET)
                     .child(lanes(
                         None,
-                        design::role::fg_tertiary(cx),
+                        design::icon::resting(cx),
                         label_panel_title(kind.title()),
                         trailing_lane(
                             Some(
@@ -1324,7 +1352,7 @@ impl Render for SearchablePicker {
                                     .into_any_element(),
                             ),
                             false,
-                            design::role::fg_primary(cx),
+                            design::icon::active(cx),
                         ),
                     )),
             )
@@ -1345,11 +1373,11 @@ impl Render for SearchablePicker {
                         .aria_label(format!("Current {}: {current}", kind.singular()))
                         .child(lanes(
                             None,
-                            design::role::fg_tertiary(cx),
+                            design::icon::resting(cx),
                             label(format!("Current: {current}"), design::text::LABEL)
                                 .text_color(design::role::fg_tertiary(cx))
                                 .truncate(),
-                            trailing_lane(None, false, design::role::fg_primary(cx)),
+                            trailing_lane(None, false, design::icon::active(cx)),
                         )),
                 )
             })

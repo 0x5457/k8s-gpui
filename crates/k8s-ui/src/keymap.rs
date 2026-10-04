@@ -1309,7 +1309,7 @@ mod tests {
     use crate::shell::{
         CloseAllTabs, CloseOtherTabs, CloseTab, Copy, Cut, Dismiss, FocusNext, FocusPrevious,
         FocusYaml, NextTab, Paste, PreviousTab, Redo, ReloadKubeconfigs, SearchResources,
-        SelectAll, SwitchBank, SwitchCluster, SwitchTab, ToggleCommandPalette, ToggleDock,
+        SelectAll, SwitchCluster, SwitchTab, ToggleCommandPalette, ToggleDock,
         ToggleLeftPanel, ToggleNotifications, Undo,
     };
     use gpui_kit::TestAppContext;
@@ -1576,7 +1576,6 @@ mod tests {
     /// table and Reload tab in the inspector without a conflict.
     const FOCUS_PATHS: &[&[&str]] = &[
         &["Shell"],
-        &["Shell", "Hotbar"],
         &["Shell", "Tree"],
         &["Shell", "Table"],
         &["Shell", "Table", "TextInput"],
@@ -1647,22 +1646,15 @@ mod tests {
         "k8s_shell::FocusPrevious",
     ];
 
-    /// The keystroke that selects a Hotbar slot. A bank holds `MAX_SLOTS_PER_BANK` slots, so the
-    /// keys continue past the nine digits.
-    fn hotbar_slot_keystrokes(slot: usize) -> String {
-        match slot {
-            0..=8 => format!("alt-{}", slot + 1),
+    /// The keystroke that switches to the context at `index`. The run continues past the nine
+    /// digits, so a reader with more than nine contexts still has all of them on the keyboard.
+    fn cluster_switch_keystrokes(index: usize) -> String {
+        match index {
+            0..=8 => format!("alt-{}", index + 1),
             9 => "alt-0".to_owned(),
             10 => "alt--".to_owned(),
             _ => "alt-=".to_owned(),
         }
-    }
-
-    /// The two forms a bank key can take: the digit and the level-2 symbol a layout reports for
-    /// Shift+digit.
-    fn hotbar_bank_keystrokes(index: usize) -> [String; 2] {
-        let symbol = ["!", "@", "#", "$", "%", "^", "&", "*", "("][index];
-        [format!("alt-shift-{}", index + 1), format!("alt-{symbol}")]
     }
 
     #[gpui_kit::test]
@@ -2187,6 +2179,58 @@ mod tests {
         }
     }
 
+    /// The table's filter field is a text surface that sits inside the table, and it is the only
+    /// `TextInput` in the app. Every bare key the table body answers is therefore reachable from it
+    /// unless the keymap says otherwise, and the framework's own `Input` bindings sitting deeper on
+    /// the focus path are not a guarantee — they are a coincidence of what gpui-kit happens to bind
+    /// today, and `space` is the proof: gpui-kit binds Delete, Enter, Tab, Up and Down on `Input`
+    /// and binds nothing at all for space, so a query containing a space opened the selected row's
+    /// details while the reader was still typing it. `delete` was one framework-binding removal away
+    /// from opening a confirmation dialog over a filter.
+    ///
+    /// This names the released keys rather than the surviving ones, so a bare key the table does not
+    /// bind is not a row here and a key that stops being released fails loudly. The macOS overlay
+    /// gives the destructive key a Command chord and unbinds the bare one, so on that platform
+    /// there is no bare `delete` for the field to swallow and only the table body keeps the chord.
+    #[gpui_kit::test]
+    fn the_table_filter_field_keeps_the_bare_keys_the_table_body_answers(cx: &mut TestAppContext) {
+        const TABLE_BARE_KEYS: [(&str, &str); 8] = [
+            ("up", "k8s_table::SelectPrevious"),
+            ("down", "k8s_table::SelectNext"),
+            ("tab", "k8s_table::SelectNextColumn"),
+            ("shift-tab", "k8s_table::SelectPreviousColumn"),
+            ("shift-enter", "k8s_table::SortSelectedColumn"),
+            ("enter", "k8s_table::OpenDetails"),
+            ("space", "k8s_table::OpenDetails"),
+            ("delete", "k8s_ops::DeleteSelection"),
+        ];
+        for (target, _) in PLATFORMS {
+            let status = install_target(cx, target);
+            assert!(!status.has_issues(), "{target}: {status:?}");
+            for (key, action) in TABLE_BARE_KEYS {
+                assert!(
+                    !effective_action_names(cx, key, TEXT_SURFACE_PATHS[0].1)
+                        .iter()
+                        .any(|entry| entry == action),
+                    "{target}: {action} must not fire from the table's filter field on {key}"
+                );
+            }
+            // The table body is the other half of the rule: releasing a key on the field must not
+            // release it everywhere. Read on every platform, so a platform that gave a key away
+            // without binding it somewhere else fails here rather than shipping a dead chord.
+            for (key, action) in TABLE_BARE_KEYS.into_iter().filter(|(key, _)| {
+                target != "macos" || *key != "delete"
+            }) {
+                assert!(
+                    effective_action_names(cx, key, &["Shell", "Table"])
+                        .iter()
+                        .any(|entry| entry == action),
+                    "{target}: {action} must still work on {key} in the table body"
+                );
+            }
+        }
+    }
+
     /// A text surface owns typing. The shared base releases the two close keys and the two commands
     /// that own typing keys, and the macOS overlay releases the replacement keys it introduces, so
     /// both platforms release the same commands and keep the same editing keys.
@@ -2234,7 +2278,7 @@ mod tests {
             for command in [
                 "k8s_shell::OpenLogs",
                 "k8s_shell::ApplyYaml",
-                "k8s_hotbar::ToggleHotbar",
+                "k8s_shell::ToggleTheme",
             ] {
                 assert!(
                     released.contains(command),
@@ -2346,8 +2390,7 @@ mod tests {
         assert!(cx.update(|cx| has_binding(&SearchResources, cx)));
         assert!(cx.update(|cx| has_binding(&ToggleNotifications, cx)));
         assert!(cx.update(|cx| has_binding(&ReloadKubeconfigs, cx)));
-        assert!(cx.update(|cx| has_binding(&SwitchCluster { slot: 0 }, cx)));
-        assert!(cx.update(|cx| has_binding(&SwitchBank { index: 0 }, cx)));
+        assert!(cx.update(|cx| has_binding(&SwitchCluster { index: 0 }, cx)));
         let status = cx.update(|cx| status(cx));
         assert!(
             !status.has_issues(),
@@ -2462,6 +2505,80 @@ mod tests {
                 .count()),
             1
         );
+    }
+
+    /// Every `unbind` row in the shipped default keymap names a chord some binding actually owns.
+    ///
+    /// A release is a promise that the surface gives a command back, and it is only true while the
+    /// chord it names is live somewhere. Four rows in the Terminal block outlived the bindings
+    /// they released — the keymap preset chords, which moved to the Settings panel, and the
+    /// notification and kubeconfig chords, which were respelled into the shift family — and read
+    /// as promises the app was not keeping, in the one file whose header says a row naming a key
+    /// no binding owns is as wrong as a binding would be. Nothing in the suite could see it,
+    /// because every other rule here asks whether a command IS released, and a release of nothing
+    /// is trivially satisfied.
+    ///
+    /// This reads the default assets rather than the installed keymap, because a preset is allowed
+    /// one thing the default is not: a release that is inert until a platform overlay supplies the
+    /// chord it names. The VS Code preset releases the macOS sidebar and panel chords, and says so,
+    /// so a reader on Linux sees two rows that match nothing. That is a preset's business; the
+    /// default keymap ships on every platform and has no such excuse.
+    ///
+    /// A row may name a chord owned by any context, not just the one it is written in: a release
+    /// exists because a command is live on a focus path the release's own context shares.
+    #[test]
+    fn every_unbind_row_names_a_chord_a_binding_owns() {
+        // Every (chord, action) pair the given assets bind.
+        let owned = |sources: &[&str]| -> BTreeSet<(String, String)> {
+            sources
+                .iter()
+                .flat_map(|source| {
+                    KeymapFile::parse(source)
+                        .expect("a shipped keymap asset must parse")
+                        .sections()
+                        .flat_map(|section| section.bindings.iter())
+                        .filter_map(|(key, action)| {
+                            KeymapFile::parse_action(action)
+                                .ok()
+                                .flatten()
+                                .map(|(name, _)| (key.clone(), name))
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .collect()
+        };
+        // Every (chord, action) pair the given assets release, with the context it
+        // was released in, because "this row is dead" and "this row is dead in
+        // the Terminal block" are different bugs to go looking for.
+        let released = |source: &str| -> Vec<(String, String, String)> {
+            KeymapFile::parse(source)
+                .expect("a shipped keymap asset must parse")
+                .unbind_sections()
+                .flat_map(|section| {
+                    let context = section.context.to_owned();
+                    section
+                        .releases
+                        .into_iter()
+                        .map(move |(key, action)| (key.to_owned(), action, context.clone()))
+                })
+                .collect()
+        };
+        for (name, sources) in [
+            ("linux", vec![DEFAULT_KEYMAP]),
+            ("macos", vec![DEFAULT_KEYMAP, DEFAULT_MACOS_KEYMAP]),
+        ] {
+            let owned = owned(&sources);
+            for source in sources {
+                for (key, action, context) in released(source) {
+                    assert!(
+                        owned.contains(&(key.clone(), action.clone())),
+                        "{name}: in `{context}`, the release of {action} on {key} names a chord no \
+                         binding owns, so it promises that surface gives a command back that is \
+                         not there"
+                    );
+                }
+            }
+        }
     }
 
     #[gpui_kit::test]
@@ -2761,10 +2878,16 @@ mod tests {
     }
 
     /// An application command gives the keyboard back on every surface that owns it: a focused
-    /// session, a search field, a dialog, and a menu. On a text surface only the commands that
-    /// would steal the surface are released, and the rest must never use a bare key, because a
-    /// bare key is a keystroke the value being edited needs. The rule is read back from the loaded
-    /// keymap, which is what the dispatcher sees.
+    /// session, a search field, a dialog, and a menu. On a text surface the command gives the
+    /// keyboard back entirely, because a chord is a keystroke too: `secondary-shift-c` is a
+    /// modified key, so it cannot be typed as a character, and it still opens a modal context
+    /// picker over the YAML being typed. A bare key is worse still. The rule is read back from the
+    /// loaded keymap, which is what the dispatcher sees.
+    ///
+    /// The bare-key half of this rule was enforced before the modified-key half existed, and that is
+    /// how Control+Shift+C stayed live inside a text field while `secondary-c` there was the copy
+    /// the field owed the reader. Every shell command now has to be released on both text paths,
+    /// and the release list is the whole of the text surface's protection.
     #[gpui_kit::test]
     fn application_commands_are_released_on_protected_surfaces(cx: &mut TestAppContext) {
         for (name, overlay, preset) in ASSET_COMBINATIONS {
@@ -2795,8 +2918,8 @@ mod tests {
                 for path in TEXT_PATHS {
                     let place = path.join(" ");
                     assert!(
-                        is_modified_key(&row.key) || !held(row, path, &rows),
-                        "{name}: {} uses the bare key {} on {place}; a text surface needs that \
+                        !held(row, path, &rows),
+                        "{name}: {} is bound to {} on {place}; a text surface owns that \
                          keystroke, so the command must be released there",
                         row.action,
                         row.key
@@ -2804,13 +2927,6 @@ mod tests {
                 }
             }
         }
-    }
-
-    /// True when the key carries a modifier, so a text surface cannot be typing it.
-    fn is_modified_key(key: &str) -> bool {
-        ["ctrl-", "alt-", "shift-", "secondary-"]
-            .iter()
-            .any(|modifier| key.contains(modifier))
     }
 
     /// True when the row dispatches a command, rather than releasing one.
@@ -3090,52 +3206,31 @@ mod tests {
         }
     }
 
-    /// The Hotbar keys keep working with the sidebar collapsed, and they never reach a session.
+    /// The cluster keys reach every context from the keyboard, and never reach a session.
+    ///
+    /// This is the shortcut a reader with six clusters cannot do without, so it survives the rail
+    /// the rest of this task removed.
     #[gpui_kit::test]
-    fn hotbar_keys_work_without_the_rail_and_leave_a_session_alone(cx: &mut TestAppContext) {
+    fn cluster_keys_switch_contexts_and_leave_a_session_alone(cx: &mut TestAppContext) {
         for (target, _) in PLATFORMS {
             install_target(cx, target);
-            for slot in 0..k8s_core::hotbar::MAX_SLOTS_PER_BANK {
-                let keystrokes = hotbar_slot_keystrokes(slot);
+            for index in 0..12 {
+                let keystrokes = cluster_switch_keystrokes(index);
                 assert_eq!(
                     effective_actions(cx, &keystrokes, &["Shell"]),
-                    BTreeSet::from(["k8s_hotbar::SwitchCluster".to_owned()]),
-                    "{target}: slot {slot} must work with a collapsed sidebar on {keystrokes}"
+                    BTreeSet::from(["k8s_shell::SwitchCluster".to_owned()]),
+                    "{target}: context {index} must be reachable on {keystrokes}"
                 );
                 assert!(
                     effective_actions(cx, &keystrokes, &["Shell", "Terminal"]).is_empty(),
                     "{target}: a session must keep {keystrokes}"
                 );
             }
-            for index in 0..9 {
-                for keystrokes in hotbar_bank_keystrokes(index) {
-                    assert_eq!(
-                        effective_actions(cx, &keystrokes, &["Shell"]),
-                        BTreeSet::from(["k8s_hotbar::SwitchBank".to_owned()]),
-                        "{target}: bank {index} must work with a collapsed sidebar on {keystrokes}"
-                    );
-                    assert!(
-                        effective_actions(cx, &keystrokes, &["Shell", "Terminal"]).is_empty(),
-                        "{target}: a session must keep {keystrokes}"
-                    );
-                }
-                let keystrokes = hotbar_slot_keystrokes(index);
-                assert_eq!(
-                    effective_actions(cx, &keystrokes, &["Shell", "Hotbar"]),
-                    BTreeSet::from(["k8s_hotbar::SwitchCluster".to_owned()]),
-                    "{target}: the rail keeps slot {index} on {keystrokes}"
-                );
-            }
-            assert_eq!(
-                effective_actions(cx, "secondary-shift-b", &["Shell"]),
-                BTreeSet::from(["k8s_hotbar::ToggleHotbar".to_owned()]),
-                "{target}: the rail toggles without a pointer"
-            );
         }
     }
 
     /// The distinct actions a key reaches on a focus path. The same command can be bound on two
-    /// levels of one path, for example the Hotbar rail inside the shell.
+    /// levels of one path, for example the sidebar inside the shell.
     fn effective_actions(
         cx: &mut TestAppContext,
         keystrokes: &str,
@@ -3209,28 +3304,10 @@ mod tests {
             "a text surface releases the shell keys too"
         );
         assert_eq!(
-            cx.update(|cx| binding_for_context("k8s_hotbar::ToggleHotbar", "Shell", cx)),
-            Some(hotbar_toggle_chord(cx)),
-            "the shell keeps the rail toggle"
-        );
-        assert_eq!(
             cx.update(|cx| binding_for_context("k8s_shell::NoSuchCommand", "Shell", cx)),
             None,
             "an unknown action has no chord"
         );
-    }
-
-    fn hotbar_toggle_chord(cx: &mut TestAppContext) -> String {
-        cx.update(|cx| {
-            current_binding(&crate::shell::ToggleHotbar, cx)
-                .and_then(|binding| {
-                    binding
-                        .keystrokes()
-                        .first()
-                        .map(|keystroke| keystroke.unparse())
-                })
-                .expect("the rail toggle is keyed")
-        })
     }
 
     /// A focus path and a context expression are different things, and the difference decides
@@ -3372,7 +3449,7 @@ mod tests {
             "k8s_shell::OpenLogs",
             "k8s_shell::SearchResources",
             "k8s_inspector::CopyValue",
-            "k8s_hotbar::ToggleHotbar",
+            "k8s_shell::SwitchCluster",
             "k8s_shell::NoSuchCommand",
         ];
 
@@ -3390,48 +3467,68 @@ mod tests {
         }
     }
 
-    #[gpui_kit::test]
-    fn zz_probe(cx: &mut TestAppContext) {
-        install_target(cx, "linux");
-        for path in FOCUS_PATHS {
-            for keys in ["escape", "tab", "shift-tab"] {
-                println!(
-                    "PROBE {:?} {:10} -> {:?}",
-                    path,
-                    keys,
-                    effective_action_names(cx, keys, path)
-                );
-            }
-        }
-        for path in TEXT_SURFACE_PATHS {
-            for keys in ["escape", "tab", "shift-tab"] {
-                println!(
-                    "PROBE-text {:?} {:10} -> {:?}",
-                    path.1,
-                    keys,
-                    effective_action_names(cx, keys, path.1)
-                );
-            }
-        }
-        // Every single-character key the assets bind anywhere, with the modifiers it carries.
-        let mut singles: Vec<(String, String, String)> = Vec::new();
-        for source in [DEFAULT_KEYMAP, DEFAULT_MACOS_KEYMAP, VSCODE_KEYMAP] {
-            let file = KeymapFile::parse(source).expect("keymap parses");
-            for section in file.sections() {
-                for (keystrokes, _) in section.bindings {
-                    let Ok(keystroke) = gpui_kit::Keystroke::parse(keystrokes) else {
-                        continue;
-                    };
-                    let unparsed = keystroke.unparse();
-                    let key = keystroke.key;
-                    if key.chars().count() == 1 && key.chars().all(|c| c.is_ascii_alphanumeric()) {
-                        singles.push((key.to_owned(), unparsed, section.context.to_owned()));
-                    }
-                }
-            }
-        }
-        singles.sort();
-        println!("PROBE-singles {singles:#?}");
+    /// The bound actions that no palette row and no menu entry names.
+    ///
+    /// This is the list the shortcut reference has to finish. Every entry is reachable from the
+    /// surface that owns it — the table's toolbar, the sidebar, the review strip, the movement
+    /// keys the surface prints — and the two a person has to be able to *find* rather than
+    /// remember, `k8s_ops::DeleteSelection` and `k8s_table::OpenDetails`, are the ones with no name
+    /// in Settings either. A binding that lands outside the palette and outside the menu bar
+    /// belongs in this list, and leaving it out is how a shortcut ends up undiscoverable.
+    #[test]
+    fn bound_actions_with_no_palette_or_menu_name_are_own_to_their_surface() {
+        // The application binary's own menu bar names these four, and k8s-ui cannot see that menu.
+        const BINARY_MENU_ACTIONS: [&str; 4] = [
+            "k8s_app::CloseWindow",
+            "k8s_app::Hide",
+            "k8s_app::MinimizeWindow",
+            "k8s_app::Quit",
+        ];
+        let mut named: BTreeSet<String> = crate::shell::commands::NATIVE_MENU_TITLES
+            .iter()
+            .map(|(_, action)| (*action).to_owned())
+            .collect();
+        named.extend(
+            crate::shell::commands::MENU_ONLY_ACTIONS
+                .iter()
+                .map(|action| (*action).to_owned()),
+        );
+        named.extend(
+            crate::shell::commands::demo_commands(true)
+                .iter()
+                .filter_map(|command| command.action_name()),
+        );
+        let unnamed: Vec<String> = built_in_action_names()
+            .into_iter()
+            .filter(|action| action.starts_with("k8s_"))
+            .filter(|action| {
+                !named.contains(action)
+                    && !UNBOUND_ACTIONS.contains(&action.as_str())
+                    && !BINARY_MENU_ACTIONS.contains(&action.as_str())
+            })
+            .collect();
+        assert_eq!(
+            unnamed,
+            [
+                "k8s_inspector::CancelApplyReview",
+                "k8s_ops::DeleteSelection",
+                "k8s_ops::Refresh",
+                "k8s_shell::Dismiss",
+                "k8s_shell::FocusNext",
+                "k8s_shell::FocusPrevious",
+                "k8s_shell::OpenShortcutReference",
+                "k8s_shell::SwitchCluster",
+                "k8s_shell::SwitchTab",
+                "k8s_table::OpenDetails",
+                "k8s_table::OpenRowActions",
+                "k8s_table::SelectNext",
+                "k8s_table::SelectNextColumn",
+                "k8s_table::SelectPrevious",
+                "k8s_table::SelectPreviousColumn",
+            ],
+            "a bound command with no name in the palette, the menu bar, or Settings is a command \
+             nobody can find"
+        );
     }
 }
 
@@ -3492,6 +3589,17 @@ mod keymap_file {
     pub struct KeymapSection<'a> {
         pub context: &'a str,
         pub bindings: &'a [(String, serde_json::Value)],
+    }
+
+    /// One `unbind` block, with each row's action name already resolved.
+    ///
+    /// The keymap parser keeps releases as raw JSON because the loader needs the payload; a reader
+    /// that only asks "which action does this row name" wants the name, and reading it here keeps
+    /// that question from being re-asked in each test that has it.
+    #[cfg(test)]
+    pub struct KeymapRelease<'a> {
+        pub context: &'a str,
+        pub releases: Vec<(&'a str, String)>,
     }
 
     /// One section of a keymap file: an optional context predicate and the
@@ -3601,6 +3709,28 @@ mod keymap_file {
             self.sections.iter().map(|section| KeymapSection {
                 context: &section.context,
                 bindings: &section.bindings,
+            })
+        }
+
+        /// The `unbind` blocks, with each row's action name resolved.
+        ///
+        /// A row whose action is not a name names nothing, so it is skipped rather than reported
+        /// as a release of the empty string: the loader treats it as a no-op binding and this
+        /// reader is asking the same question about the same rows.
+        #[cfg(test)]
+        pub fn unbind_sections(&self) -> impl Iterator<Item = KeymapRelease<'_>> {
+            self.sections.iter().map(|section| KeymapRelease {
+                context: &section.context,
+                releases: section
+                    .unbind
+                    .iter()
+                    .filter_map(|(key, action)| {
+                        Self::parse_action(action)
+                            .ok()
+                            .flatten()
+                            .map(|(name, _)| (key.as_str(), name))
+                    })
+                    .collect(),
             })
         }
 

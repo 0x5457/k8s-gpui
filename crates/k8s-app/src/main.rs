@@ -179,6 +179,34 @@ fn install_theme(cx: &mut App, window: &mut Window) {
     apply_theme(cx, Some(window), choice);
 }
 
+/// Makes a window that opened *after* the theme was chosen render in that theme.
+///
+/// The first window calls [`install_theme`], which reads `settings.json` and
+/// applies the choice to itself. A window opened later — Settings is the only
+/// one — arrives at the desktop's default appearance instead, because nothing
+/// has applied the app's choice to it yet: `watch_system_appearance` only
+/// *observes*, and it deliberately stays silent whenever the choice is forced,
+/// since a forced theme is not the desktop's to change. So the settings window
+/// opened light while the main window was dark, reading as a second application
+/// rather than as the same one.
+///
+/// This is the narrow half of [`apply_theme`]: the same mode, resolved the same
+/// way, handed to *this* window. It touches no global and writes nothing, so
+/// calling it as a window opens is idempotent and cannot fight a later choice.
+pub(crate) fn adopt_app_theme(window: &mut Window, cx: &mut App) {
+    let choice = configured_theme(cx).unwrap_or(ThemeChoice::System);
+    match &choice {
+        // A named theme is applied whole, exactly as `apply_theme` does it.
+        ThemeChoice::Named(name) => {
+            product_theme::select(cx, name);
+        }
+        choice => {
+            let mode = mode_for(cx, Some(window), choice);
+            product_theme::set_mode(cx, mode, Some(window));
+        }
+    }
+}
+
 fn sync_theme_from_settings(cx: &mut App) {
     ui_settings::sync_increase_contrast(cx);
     let choice = configured_theme(cx).unwrap_or(ThemeChoice::System);
@@ -353,7 +381,9 @@ fn window_options(cx: &App) -> WindowOptions {
     WindowOptions {
         window_bounds: Some(WindowBounds::Windowed(initial_window_bounds(cx))),
         titlebar: Some(TitlebarOptions {
-            title: Some("k8s-gpui".into()),
+            // The product name, not the binary name: one spelling of the
+            // product everywhere a person reads it.
+            title: Some(crate::menus::product_name().into()),
             appears_transparent: false,
             traffic_light_position: None,
         }),
@@ -420,7 +450,9 @@ fn show_about(cx: &mut App) {
     };
     let _ = window.update(cx, |_, window, cx| {
         window.open_alert_dialog(cx, |alert, _, _| {
-            alert.title("K8s GPUI").description(format!(
+            alert
+                .title(format!("About {}", crate::menus::product_name()))
+                .description(format!(
                 "Version {}. Manage Kubernetes clusters and workloads.",
                 env!("CARGO_PKG_VERSION")
             ))
@@ -509,9 +541,12 @@ impl StartupState {
                 *self = Self::Ready;
             }
             Err(error) => {
-                *self = Self::Unavailable(format!(
-                    "Kubeconfig load failed: {error}. Check the kubeconfig and try again."
-                ));
+                // The core error already says which files were read, what is wrong
+                // with them, and what to do about it. Wrapping it here put a full
+                // stop after a sentence that is not one, and then appended advice
+                // that is wrong on a machine that has no kubeconfig at all —
+                // which is exactly the reader most likely to be here.
+                *self = Self::Unavailable(error.to_string());
             }
         }
     }
@@ -688,6 +723,20 @@ fn main() {
 
     app.run(|cx: &mut App| {
         app_runtime::install(cx);
+        // Grayscale antialiasing, stated rather than inherited.
+        //
+        // GPUI leaves this on the platform default, which resolves to Subpixel
+        // (ClearType) on the desktops this app runs on. Subpixel rendering tints
+        // every glyph by subpixel position, so on a DARK surface the tinting is
+        // not a subtle sharpening - it is a visible orange-and-blue fringe on
+        // every word, which is why this interface has read as cheap no matter
+        // what is done to its colour, spacing or type.
+        //
+        // Grayscale trades a little horizontal sharpness for the text looking
+        // like one colour instead of three, and on a surface this dark that is
+        // not a trade worth making. It is an App-level setting, so it has to be
+        // set before any window exists.
+        cx.set_text_rendering_mode(gpui_kit::TextRenderingMode::Grayscale);
         // gpui-kit first: it installs the component theme, the window extensions, and the
         // component root that dialogs, sheets, notifications, and tooltips need somewhere to
         // render. Nothing component-backed may be built before it.
@@ -874,7 +923,7 @@ fn main() {
                                 });
                             }
                             eprintln!(
-                                "k8s-gpui: Kubeconfig load failed: {error}. Check the kubeconfig and try again."
+                                "k8s-gpui: {error}"
                             );
                         }
                     }
@@ -918,7 +967,7 @@ mod tests {
 
     #[cfg(not(windows))]
     #[tokio::test(flavor = "current_thread")]
-    async fn startup_uses_hotbar_with_partial_kubeconfig_sources() {
+    async fn startup_resumes_the_remembered_context_with_partial_kubeconfig_sources() {
         let _guard = ENVIRONMENT_LOCK.lock().await;
         let root = tempfile::tempdir().expect("temp directory");
         let valid = root.path().join("valid.yaml");
@@ -950,11 +999,6 @@ current-context: valid-ctx
         std::fs::write(&invalid, "contexts: [").expect("write invalid kubeconfig");
         let value = std::env::join_paths([&valid, &invalid]).expect("join kubeconfig paths");
         let selected = k8s_core::cluster::ClusterId::derive("second-ctx", "http://127.0.0.1:6444/");
-        let mut hotbar = k8s_core::hotbar::Hotbar::default();
-        let bank = hotbar.create_bank("default").expect("create startup bank");
-        hotbar
-            .add_slot(bank, selected, "second-ctx")
-            .expect("create startup slot");
         let previous_kubeconfig = std::env::var_os("KUBECONFIG");
         let previous_config_home = std::env::var_os(CONFIG_HOME_ENV);
         unsafe {
@@ -962,9 +1006,17 @@ current-context: valid-ctx
             std::env::set_var(CONFIG_HOME_ENV, root.path());
         }
         let config_dir = k8s_core::paths::config_dir().expect("test config directory");
-        hotbar
-            .save(config_dir.join("hotbar.json"))
-            .expect("save startup hotbar");
+        std::fs::create_dir_all(&config_dir).expect("test config directory");
+        // The resume the app opens on is the context the reader was last on, and it is
+        // written where the app reads it: settings.json beside the kubeconfig sources.
+        std::fs::write(
+            config_dir.join("settings.json"),
+            format!(
+                "{{\"lastCluster\":{}}}",
+                serde_json::to_value(selected).expect("a cluster id")
+            ),
+        )
+        .expect("save startup settings");
         let result = spawn_registry_load(&tokio::runtime::Handle::current()).await;
         unsafe {
             match previous_kubeconfig {

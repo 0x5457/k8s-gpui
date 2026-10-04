@@ -84,7 +84,7 @@ pub(super) const TREE_KEYSHORTCUTS: &str =
 /// It is the action's own name — the one the menu and `⌘⇧K` already use for the same list of
 /// kinds — because this is not a second way to do something new, it is the way the tree's own
 /// slot in the bar does that job at a width the tree cannot be drawn at.
-const SIDEBAR_NARROW_LABEL: &str = "Choose Resource Kind";
+const SIDEBAR_NARROW_LABEL: &str = "Choose resource kind";
 /// Why a control is sitting where the tree usually is.
 ///
 /// A control that replaces a panel has to say what it replaced, or the reader spends the width
@@ -215,14 +215,19 @@ pub(super) fn palette_list_content(matches: &[&super::commands::Command]) -> f32
         content += row;
     }
     if matches.is_empty() {
-        // The empty branch is a sentence *and* the `Clear search` control, and this used to
-        // budget the sentence alone. The card is `overflow_hidden` with a `flex_1` list, so the
-        // missing control was cut off at the bottom edge — the one control the empty state
-        // exists for, unreachable by mouse and by keyboard, on a card that reported itself
-        // large enough to hold everything it listed.
-        content += f32::from(design::text::CAPTION_LINE_HEIGHT)
-            + f32::from(design::size::CONTROL)
-            + f32::from(design::space::SM) * 3.0;
+        // The empty branch is the shared empty state, and this is what that state draws: a
+        // `size::ICON_LARGE` glyph, a `text::TITLE` line, a `text::BODY` line and the
+        // `size::CONTROL` control, with `space::SM` between the glyph and the two lines,
+        // between the two lines, and between the block and the control. It used to budget one
+        // caption line and the control, which is a sentence short of the state — and the card
+        // is `overflow_hidden` over a `flex_1` list, so the missing pixels clipped the one
+        // control the state exists for, off the bottom of a card that reported itself large
+        // enough to hold everything it listed.
+        content += f32::from(design::size::ICON_LARGE)
+            + f32::from(design::space::SM) * 3.0
+            + f32::from(design::text::TITLE_LINE_HEIGHT)
+            + f32::from(design::text::BODY_LINE_HEIGHT)
+            + f32::from(design::size::CONTROL);
     }
     content
 }
@@ -408,13 +413,8 @@ fn palette_group_head_height() -> f32 {
 const TAB_HOVER_WASH_ALPHA: f32 = 0.08;
 const TAB_PRESSED_WASH_ALPHA: f32 = 0.12;
 
-/// Height of the centre tab's pill, inside the `size::TAB_BAR` strip.
-///
-/// `size::TAB_BAR` is 28 and the pill is 22, which is the shape `panels/dock.rs` draws for the
-/// Dock's own strip: three pixels of strip above and below the pill, so the selected tint has a
-/// silhouette to follow instead of filling the whole navigation band. It is a number of its own
-/// rather than a token because it is a *pill inside* a band, and the band already has one.
-const CENTER_TAB_HEIGHT: Pixels = px(22.);
+/// Height of the centre tab's pill, inside the `size::OPEN_VIEWS` strip.
+const CENTER_TAB_HEIGHT: Pixels = design::size::TAB_PILL;
 
 /// The wash the active center tab adds for hover, or for press when `pressed`.
 fn tab_accent_wash(colors: &design::ThemeColors, pressed: bool) -> gpui_kit::Hsla {
@@ -498,6 +498,26 @@ fn footer_hint(verb: &'static str, stroke: &Keystroke, cx: &App) -> AnyElement {
         .into_any_element()
 }
 
+/// The wash the row the keyboard cursor is on wears, solved against a plane other than the table's.
+///
+/// `design.rs` exports `row_selected_bg_on` for exactly this problem — a row state landing on a
+/// surface the shared tokens were not solved for — but only for the *selected* state. The cursor
+/// is the third state between the hover and the selection, and its own tokens
+/// (`ROW_FOCUS_ALPHA`, `ROW_STATE_MIN_CONTRAST`) are public, so this is the same three lines the
+/// shared helper is built from rather than a second design of the same wash. Promote it beside
+/// `row_selected_bg_on` when the token layer next owns the sidebar.
+///
+/// It has to exist at all: `design::row_focus_bg` is solved against the table's `surface_raised`,
+/// and `design.rs` says in so many words that using a row token on the surface it does not belong
+/// to leaves it "far too quiet on the surface it actually lands on".
+fn tree_cursor_bg(surface: gpui_kit::Hsla, cx: &App) -> gpui_kit::Hsla {
+    let wash = design::composite_surface(
+        surface,
+        design::role::accent(cx).opacity(design::ROW_FOCUS_ALPHA),
+    );
+    design::graphic_on_with_minimum(surface, wash, design::ROW_STATE_MIN_CONTRAST)
+}
+
 /// The keycap for one chord, or nothing when the chord does not parse.
 fn keystroke(spec: &str) -> Option<Keystroke> {
     Keystroke::parse(spec).ok()
@@ -507,7 +527,10 @@ fn toolbar_separator(cx: &Context<Shell>) -> impl IntoElement {
     Separator::vertical()
         .flex_none()
         .h(design::space::LG)
-        .color(cx.theme().colors.border)
+        .color(chrome_hairline(
+            design::role::surface_chrome(cx),
+            cx.theme().colors.border,
+        ))
 }
 
 /// A structural rule between two regions of the same window.
@@ -523,6 +546,48 @@ pub(super) fn chrome_hairline(
     preferred: gpui_kit::Hsla,
 ) -> gpui_kit::Hsla {
     design::graphic_on_with_minimum(surface, preferred, design::border::MIN_RULE_CONTRAST)
+}
+
+/// The band the centre column spends between the title bar and the open-view strip.
+///
+/// It is mounted whether or not a resource header has anything to put in it, and that is the
+/// whole point: the open-view strip is the one band in the centre a reader tracks across every
+/// tab, so the moment the header is dropped for a non-resource tab — a Pod detail, the Overview,
+/// Helm, a connection failure — the strip and the whole content plane jumped up 40px and jumped
+/// back 40px on the way out. A jump of that size on a bar that never changes content is the
+/// window telling the reader it is unstable, which is worse than the band that was dropped.
+///
+/// Reserved rather than left out on purpose: it is what this product already does everywhere
+/// else it has a band with nothing in it — the summary strip, the subline slot and the meter slot
+/// all keep their space — so an empty header reads as "this tab has no resource header", which is
+/// true, and never as "the window just moved".
+///
+/// The header owns the edge between itself and the open-view strip below it. It used to draw that
+/// rule here alone, which is why the two bands read as one 68px block with two jobs. The plane and
+/// the rule live here so a tab with a header and a tab without one are the same shape at the same
+/// weight, and the stack above the rows reads as one stack.
+fn resource_header_band(cx: &App) -> Div {
+    let content = design::role::surface_content(cx);
+    h_flex()
+        .flex_none()
+        .w_full()
+        .h(design::size::RESOURCE_HEADER)
+        .bg(content)
+        .border_b_1()
+        .border_color(chrome_hairline(content, design::colors(cx).border))
+}
+
+/// The button box whose *derived* glyph is [`design::icon::IN_TOOLBAR`].
+///
+/// gpui-kit sets a mark's size from the button's own box (`size * 0.75`) and overwrites whatever
+/// the caller named on the mark, so the box is the only lever there is and every icon control that
+/// wants the same lane has to ask for the same box. Stated once here because the bar's two button
+/// shapes disagree otherwise: at `size::ICON_BUTTON` the six icon actions drew an eighteen-pixel
+/// glyph and at `size::CONTROL` the two context fields drew a twenty-one-pixel one, on a band the
+/// design calls forty pixels tall, either side of the error chip's mark at the lane's sixteen.
+/// Those boxes are still the two *targets*; they are no longer the two glyph sizes.
+fn toolbar_glyph_box() -> Pixels {
+    Pixels::from(f32::from(design::icon::IN_TOOLBAR) / 0.75)
 }
 
 /// The trigger both title-bar selectors are built from.
@@ -548,22 +613,170 @@ pub(super) fn chrome_hairline(
 /// Shell's own flag reaching this button: `Popover::trigger` answers
 /// `selected(selected || is_open)`, so the control stays visibly pressed for as long as the list
 /// is on screen. Hover cannot explain a relationship between a trigger and its surface.
+///
+/// **The glyph's size is the component's, and the ink is the caller's.** `Button` derives its
+/// glyph from the box (`size * 0.75`) and exposes no knob that separates the two, so the mark is
+/// drawn from [`toolbar_glyph_box`] whatever size it names — which is how the two selectors and
+/// the six icon actions come to share [`design::icon::IN_TOOLBAR`] instead of the twenty-one and
+/// eighteen pixels their two different boxes produced. What a caller does own is the ink, and it
+/// has to be stated on the mark: the button's own text colour reaches the glyph only in its
+/// resting state, and a glyph that changes ink on hover reads as a different glyph.
+/// The chord that opens a top-bar switcher, drawn from the keymap the action runs from.
+///
+/// **Both switchers carry a chord and neither said so.** The bindings were there
+/// (`secondary-shift-c` / `secondary-shift-m`, and a dozen more in every preset) and
+/// the two most-used controls in the window named only what they currently hold —
+/// "Switch Context: prod · Live". A shortcut nobody can discover is not a
+/// shortcut, and these two are how every session starts: the first thing a person
+/// does is pick a context and a namespace.
+///
+/// So the chord is shown on the control, not hidden behind a hover, and it is read
+/// from the keymap rather than written here — a preset that rebinds it must not
+/// find a second, stale spelling on screen.
+fn switcher_chord(action: &str, cx: &App) -> Option<gpui_kit::Keystroke> {
+    crate::keymap::binding_for_context(action, "Shell", cx)
+        .and_then(|chord| gpui_kit::Keystroke::parse(&chord).ok())
+}
+
+/// The same chord as the tooltip spells it, so the hover text and the keycap drawn
+/// on the control can never disagree about which one it is.
+fn with_chord(sentence: String, action: &str, cx: &App) -> String {
+    match switcher_chord(action, cx) {
+        Some(chord) => format!("{sentence}  {chord}"),
+        None => sentence,
+    }
+}
+
 fn top_bar_selector_button(
     id: &'static str,
     label: impl Into<SharedString>,
     mark: Icon,
     tooltip: impl Into<SharedString>,
+    chord: Option<gpui_kit::Keystroke>,
 ) -> Button {
+    let label: SharedString = label.into();
     Button::new(id)
         .icon(mark)
-        .label(label)
+        // The name rides in as a child rather than through `Button::label`, because a button with
+        // a custom `Size` takes its label's size from `button_text_size`, and that arm resolves
+        // `Size::Size(_)` to gpui-kit's `text_base()` — 16px, a step above `text::TITLE` and three
+        // above `text::BODY`. `content_style` is the only place `Button` exposes that choice and it
+        // is `pub(crate)`, so a named button cannot be put back on the scale from outside the kit.
+        // Measured on the title bar, `kind-k8s-gpui-3n` and `All namespaces` wore an ascender-to-
+        // descender ink of 31 device pixels against 22 for the tab titles beside them, which are
+        // `text::BODY`: the chrome's most-said name was a step louder than the view it names.
+        .child(
+            div()
+                .min_w_0()
+                .whitespace_nowrap()
+                .text_ellipsis()
+                // `text::LABEL`, not `text::BODY`.
+                //
+                // This is a VALUE IN A CONTROL on a 40px chrome band, not body
+                // copy: at `BODY` it was the largest and brightest text in the
+                // whole title bar, louder than the tab titles it sits above, so a
+                // toolbar read as a sentence. It stepped down once already - the
+                // component resolved it through `button_text_size` to
+                // `text_base()`, 16px, three steps above `BODY` - and this is the
+                // second step, onto the token the scale reserves for a label.
+                //
+                // The eyebrow beside it stays `CAPTION`, one step smaller, and the
+                // two do not collapse into each other: the eyebrow is uppercase,
+                // tracked and tertiary, the value is sentence case and
+                // secondary. Size is not the only thing separating them and it
+                // does not have to carry it alone.
+                .text_size(design::text::LABEL)
+                .line_height(design::text::LABEL_LINE_HEIGHT)
+                .child(label.clone()),
+        )
+        // The chord, ON the control, between the name and the caret.
+        //
+        // **Both switchers were bound and neither said so.** Every preset carries
+        // `secondary-shift-c` and `secondary-shift-m`, and these two are how a
+        // session starts - pick a context, pick a namespace - so a reader who has
+        // to find the shortcut in a file to learn it is being asked to do something
+        // no other control in the window asks of them. Showing it here is cheaper
+        // than the alternative and it is read from the keymap, so a preset that
+        // rebinds the chord shows the new one.
+        //
+        // It sits inside the name's flex lane rather than after it, so a long
+        // context name truncates BEFORE the keycap goes, never over it: the one
+        // thing here that is not the current value must survive it.
+        .when_some(chord, |this, chord| {
+            this.child(
+                div()
+                    .flex_none()
+                    .pl(design::space::SM)
+                    .child(gpui_kit::component::kbd::Kbd::new(chord)),
+            )
+        })
+        // The name the trigger is announced by, now that the name is not the button's label.
+        .accessibility_label(label)
         .dropdown_caret(true)
         .ghost()
-        .with_size(Size::Size(design::size::CONTROL))
+        // The box is the glyph, so it asks for the lane; the height is stated
+        // beside it, because a 28px control in a 40px band is what gives this
+        // row an edge of its own without the two answers becoming one number.
+        .with_size(Size::Size(toolbar_glyph_box()))
         .h(design::size::CONTROL)
         .tooltip(tooltip)
         .role(RoleOverride::Presentational)
         .tab_stop(false)
+}
+
+/// The appearance every icon-only action in the bar is built from.
+///
+/// One builder for six controls, because they are one group: the same square target, the same
+/// gap around them, and one place where the glyph's state ink is decided. They were each named a
+/// `size::CONTROL` target — 28px inside a 40px band — which is a form field's height on a band
+/// that is asking for a toolbar, and it is why five bare glyphs read as five unrelated controls
+/// rather than as one row of actions. `size::ICON_BUTTON` is the token that means "a square icon
+/// target", so the group is square, evenly pitched, and its members are the same size as each
+/// other.
+///
+/// The ink goes on the mark, not on the button. gpui-kit's `Button` re-applies its variant's
+/// hover and selected foregrounds over whatever the caller sets, so an ink stated on the control
+/// describes the resting state and nothing else; on the mark it holds in every state, which is
+/// what `design::icon` asks for — hover is a wash on the control, never a new ink on the glyph.
+fn top_bar_icon_button(id: &'static str, icon: IconName, ink: gpui_kit::Hsla) -> Button {
+    Button::new(id)
+        .ghost()
+        .icon(Icon::new(icon).text_color(ink))
+        // The square a pointer aims at is `size::ICON_BUTTON` and is stated as
+        // both axes: the box above is smaller, because gpui-kit reads the glyph
+        // off it and `design::icon::IN_TOOLBAR` is what this lane's glyphs are.
+        // Leaving the height to the box is how the target and the mark drifted
+        // apart in the first place.
+        .with_size(Size::Size(toolbar_glyph_box()))
+        .w(design::size::ICON_BUTTON)
+        .h(design::size::ICON_BUTTON)
+}
+
+/// The eyebrow that says which of the two context controls holds what.
+///
+/// `text::CAPTION` semibold in the tertiary ink, uppercased — the one treatment `UI-SPEC.md` §2.3
+/// reserves for section heads and eyebrows, and nothing else in the bar wears it, so the two
+/// words are the only thing on the band that is *about* the band.
+///
+/// They are here because a server glyph and a folder glyph a hairline apart in a 40px band do
+/// not tell a reader which field is which. Both say "a place to point at", and the names inside
+/// them are a context name and a namespace name — two different grammars with no shared cue.
+/// The words cost 120px of a bar that has a flexible spacer in the middle, and they turn the
+/// pair from two identical chevron buttons into two labelled fields.
+///
+/// The tertiary ink is kept, deliberately, while the mark beside it moves up to the resting
+/// glyph ink: this is the one word on the band that is *about* the band rather than part of a
+/// control, and `DESIGN.md` §1.4's placeholder tier is what a tracked uppercase label belongs
+/// to. Two quiet things side by side is what stopped the pair reading as one field, so the step
+/// between the label and the glyph it names is the point.
+fn top_bar_eyebrow(word: &'static str, cx: &App) -> Label {
+    Label::new(word.to_uppercase())
+        .text_size(design::text::CAPTION)
+        .line_height(design::text::CAPTION_LINE_HEIGHT)
+        .font_weight(design::text::SEMIBOLD)
+        // Stated, not inherited: gpui-kit's `Label` re-applies `theme().foreground` after it takes
+        // the caller's style, so an ink set on the row around it never reaches the glyph.
+        .text_color(design::role::fg_tertiary(cx))
 }
 
 ///     /// A toolbar control the shell's own focus handle names.
@@ -607,7 +820,7 @@ fn namespace_picker_options(state: &NamespaceState, current: &SharedString) -> V
         NamespaceState::Loading | NamespaceState::Failed(_) => &[],
     };
     let mut all = PickerOption::new(super::ALL_NAMESPACES, super::ALL_NAMESPACES);
-    all.icon = Some(IconName::Folder);
+    all.icon = Some(design::glyph::object::namespace());
     all.current = current.as_ref() == super::ALL_NAMESPACES;
     all.debug_selector = Some(format!("MENU_ITEM-{}", super::ALL_NAMESPACES).into());
     match state {
@@ -617,18 +830,18 @@ fn namespace_picker_options(state: &NamespaceState, current: &SharedString) -> V
         }
         NamespaceState::Ready(names) if names.is_empty() => {
             all.status = Some(design::Severity::Muted);
-            all.status_label = Some("No Namespaces Found".into());
+            all.status_label = Some("No namespaces found".into());
         }
         NamespaceState::Failed(_) => {
             all.status = Some(design::Severity::Error);
-            all.status_label = Some("Load Failed".into());
+            all.status_label = Some("Load failed".into());
         }
         NamespaceState::Ready(_) => {}
     }
     let mut options = vec![all];
     options.extend(names.iter().map(|name| {
         let mut option = PickerOption::new(name.clone(), name.clone());
-        option.icon = Some(IconName::Folder);
+        option.icon = Some(design::glyph::object::namespace());
         option.current = name.as_ref() == current.as_ref();
         option.debug_selector = Some(format!("MENU_ITEM-{name}").into());
         option
@@ -662,47 +875,6 @@ fn kubeconfig_warning_message(detail: &str) -> String {
 /// it stayed put, and a filter that matched nothing took it to zero.
 fn tree_kind_label(tree: &super::tree::ResourceTree) -> String {
     design::format::count_with_noun(tree.kind_count(), "Kind", "Kinds")
-}
-
-/// The whole of a tree row's identity, for the row's tooltip and its accessible description.
-///
-/// The label on the row is elided, and at 236px a third-level API kind genuinely has to be: the
-/// catalog contains `ValidatingAdmissionPolicy` and `ValidatingAdmissionPolicyBinding` in one
-/// group, and their two labels start `Validating Admission Polic…` — so truncation was removing the
-/// only thing that told them apart and two rows became indistinguishable on the one column whose
-/// whole job is telling rows apart.
-///
-/// The recovery has to name what was cut, so this is not the visible label repeated. When the
-/// sidebar's disambiguator has already appended the API kind to the human label (`tree.rs`), that
-/// suffix is what is missing from the row, so the kind is what the hint adds. A row whose label
-/// already fits gets its kind and its group and nothing else, which is what makes the hint useful
-/// on a row that was not truncated too.
-fn tree_row_hint(row: &TreeRow) -> SharedString {
-    let label = row.label.as_ref();
-    let Some(kind) = row.resource_kind.as_deref() else {
-        return label.into();
-    };
-    let mut hint = String::with_capacity(label.len() + kind.len() + 8);
-    if label.ends_with(kind) {
-        // The visible label already carries the API kind, which means the row was disambiguated and
-        // the group is what is left to say.
-        hint.push_str(label.trim_end_matches(kind).trim_end_matches(" · "));
-        if let Some(group) = row.resource_gvk.as_ref().map(|gvk| gvk.group.as_str())
-            && !group.is_empty()
-        {
-            hint.push_str(" · ");
-            hint.push_str(group);
-        }
-    } else {
-        hint.push_str(label);
-        if let Some(group) = row.resource_gvk.as_ref().map(|gvk| gvk.group.as_str())
-            && !group.is_empty()
-        {
-            hint.push_str(" · ");
-            hint.push_str(group);
-        }
-    }
-    hint.into()
 }
 
 /// A status the tree reports instead of rows: what happened, in one line.
@@ -775,6 +947,13 @@ fn update_phase_severity(phase: UpdatePhase) -> design::Severity {
     }
 }
 
+/// The lane the sidebar's scrollbar occupies, reserved so nothing paints under it.
+///
+/// gpui-kit's own `Scrollbar::width()` is the source, restated because the width is
+/// not reachable from a layout builder and a bare 16 here would be a fourth place
+/// to keep in step with a component that owns it.
+const SIDEBAR_SCROLL_GUTTER: gpui_kit::Pixels = px(16.);
+
 impl Shell {
     pub(super) fn sync_helm_cluster(&self, view: &Entity<HelmView>, cx: &mut Context<Self>) {
         let context = self.helm_services().context;
@@ -796,7 +975,7 @@ impl Shell {
 
     fn connection_failure_message(&self) -> &'static str {
         match self.connection {
-            ConnectionState::Failed(_) => "Connection Unavailable",
+            ConnectionState::Failed(_) => "Connection unavailable",
             ConnectionState::Reconnecting(_) => "Reconnecting…",
             ConnectionState::Connecting | ConnectionState::Live => "Connected",
         }
@@ -862,21 +1041,20 @@ impl Shell {
         };
         let reload = div()
             .debug_selector(|| "connection-reload-kubeconfigs".to_owned())
-            .child(
+            .child(common::labelled(
                 Button::new("connection-reload-kubeconfigs")
-                    .label("Reload Kubeconfigs")
                     // Ghost, not outline: `PROMPT.md` §2 rule 5 keeps a visible 1px border to
                     // inputs, overlays, and the rule between two panels. An outlined button in
                     // the middle of an otherwise borderless surface is the fourth place.
                     .ghost()
                     .with_size(Size::Size(design::size::CONTROL))
                     .tab_index(0isize)
-                    .tooltip("Reload Kubeconfigs")
-                    .accessibility_label("Reload Kubeconfigs")
+                    .tooltip("Reload kubeconfigs")
                     .on_click(cx.listener(|shell, _, window, cx| {
                         shell.dispatch(super::ReloadKubeconfigs, window, cx);
                     })),
-            );
+                "Reload kubeconfigs",
+            ));
         Some(
             v_flex()
                 .id("connection-failure")
@@ -901,17 +1079,23 @@ impl Shell {
                             div()
                                 .debug_selector(|| "connection-retry".to_owned())
                                 .child(
-                                    Button::new("connection-retry")
-                                        .label("Retry")
-                                        .primary()
-                                        .with_size(Size::Size(design::size::CONTROL))
-                                        .w(px(ACTION_BUTTON_WIDTH))
-                                        .tab_index(0isize)
-                                        .tooltip("Retry Connection")
-                                        .accessibility_label("Retry Connection")
-                                        .on_click(cx.listener(|shell, _, _, cx| {
-                                            shell.retry_connection(cx)
-                                        })),
+                                    common::labelled(
+                                        Button::new("connection-retry")
+                                            .primary()
+                                            .with_size(Size::Size(design::size::CONTROL))
+                                            .w(px(ACTION_BUTTON_WIDTH))
+                                            .tab_index(0isize)
+                                            .tooltip("Retry connection")
+                                            .on_click(cx.listener(|shell, _, _, cx| {
+                                                shell.retry_connection(cx)
+                                            })),
+                                        "Retry",
+                                    )
+                                    // The two words differ on purpose: a screen reader is told
+                                    // what is being retried, because a panel that says only
+                                    // "Retry" leaves the connection failure unnamed in the one
+                                    // surface where the reason sits above it.
+                                    .accessibility_label("Retry connection"),
                                 ),
                         )
                         .child(reload),
@@ -949,7 +1133,7 @@ impl Shell {
                 .gap(design::space::XS)
                 .items_center()
                 .role(Role::Status)
-                .aria_label("Downloading Update")
+                .aria_label("Downloading update")
                 .child(crate::panels::common::spinner(
                     IconName::LoaderCircle,
                     design::status_colors(cx).info,
@@ -993,30 +1177,36 @@ impl Shell {
             .then(|| self.render_update_progress(state.progress, cx));
         let action: Option<AnyElement> = match phase {
             UpdatePhase::Ready => Some(
-                Button::new("update-restart")
-                    .label("Restart to Update")
-                    .primary()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .w(px(ACTION_BUTTON_WIDTH))
-                    .tab_index(1isize)
-                    .disabled(self.update_actions.is_none())
-                    .tooltip("Restart to Update")
-                    .accessibility_label("Restart to Update")
-                    .on_click(cx.listener(|shell, _, _, cx| shell.run_update_restart(cx)))
-                    .into_any_element(),
+                common::labelled(
+                    Button::new("update-restart")
+                        .primary()
+                        .with_size(Size::Size(design::size::CONTROL))
+                        .w(px(ACTION_BUTTON_WIDTH))
+                        .tab_index(1isize)
+                        .disabled(self.update_actions.is_none())
+                        .tooltip("Restart to update")
+                        .on_click(cx.listener(|shell, _, _, cx| shell.run_update_restart(cx))),
+                    "Restart to update",
+                )
+                .into_any_element(),
             ),
             UpdatePhase::Failed => Some(
-                Button::new("update-retry")
-                    .label("Retry")
-                    .primary()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .w(px(ACTION_BUTTON_WIDTH))
-                    .tab_index(0isize)
-                    .disabled(self.update_actions.is_none())
-                    .tooltip("Retry Update")
-                    .accessibility_label("Retry Update")
-                    .on_click(cx.listener(|shell, _, _, cx| shell.run_update_retry(cx)))
-                    .into_any_element(),
+                common::labelled(
+                    Button::new("update-retry")
+                        .primary()
+                        .with_size(Size::Size(design::size::CONTROL))
+                        .w(px(ACTION_BUTTON_WIDTH))
+                        .tab_index(0isize)
+                        .disabled(self.update_actions.is_none())
+                        .tooltip("Retry update")
+                        .on_click(cx.listener(|shell, _, _, cx| shell.run_update_retry(cx))),
+                    "Retry",
+                )
+                // The two words differ on purpose: the visible word is the action and the
+                // announced one is what is being retried, so a reader who cannot see the strip
+                // still hears that this is the update and not the connection.
+                .accessibility_label("Retry update")
+                .into_any_element(),
             ),
             _ => None,
         };
@@ -1138,16 +1328,20 @@ impl Shell {
                         this.border_1().border_color(colors.border_focused)
                     })
                     .child(
-                        Button::new("update-action-check")
-                            .label("Check for Updates")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(px(width))
-                            .tooltip("Check for Updates")
-                            .accessibility_label("Check for Updates")
-                            .disabled(self.update_actions.is_none())
-                            .on_click(cx.listener(|shell, _, _, cx| shell.run_update_check(cx))),
+                        common::labelled(
+                            Button::new("update-action-check")
+                                .icon(IconName::RefreshCw)
+                                .ghost()
+                                .with_size(Size::Size(design::size::CONTROL))
+                                .w(px(width))
+                                .tooltip("Check for updates")
+                                .disabled(self.update_actions.is_none())
+                                .on_click(
+                                    cx.listener(|shell, _, _, cx| shell.run_update_check(cx)),
+                                ),
+                            "Check for updates",
+                        )
+                        .into_any_element(),
                     ),
             )
             .child(
@@ -1165,16 +1359,20 @@ impl Shell {
                         this.border_1().border_color(colors.border_focused)
                     })
                     .child(
-                        Button::new("update-action-retry")
-                            .label("Retry Update")
-                            .icon(IconName::RefreshCw)
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(px(width))
-                            .tooltip("Retry Update")
-                            .accessibility_label("Retry Update")
-                            .disabled(self.update_actions.is_none())
-                            .on_click(cx.listener(|shell, _, _, cx| shell.run_update_retry(cx))),
+                        common::labelled(
+                            Button::new("update-action-retry")
+                                .icon(IconName::RefreshCw)
+                                .ghost()
+                                .with_size(Size::Size(design::size::CONTROL))
+                                .w(px(width))
+                                .tooltip("Retry update")
+                                .disabled(self.update_actions.is_none())
+                                .on_click(
+                                    cx.listener(|shell, _, _, cx| shell.run_update_retry(cx)),
+                                ),
+                            "Retry update",
+                        )
+                        .into_any_element(),
                     ),
             )
             .child(
@@ -1192,16 +1390,20 @@ impl Shell {
                         this.border_1().border_color(colors.border_focused)
                     })
                     .child(
-                        Button::new("update-action-restart")
-                            .label("Restart to Update")
-                            .icon(IconName::RotateCw)
-                            .ghost()
-                            .with_size(Size::Size(design::size::CONTROL))
-                            .w(px(width))
-                            .tooltip("Restart to Update")
-                            .accessibility_label("Restart to Update")
-                            .disabled(self.update_actions.is_none())
-                            .on_click(cx.listener(|shell, _, _, cx| shell.run_update_restart(cx))),
+                        common::labelled(
+                            Button::new("update-action-restart")
+                                .icon(IconName::RotateCw)
+                                .ghost()
+                                .with_size(Size::Size(design::size::CONTROL))
+                                .w(px(width))
+                                .tooltip("Restart to update")
+                                .disabled(self.update_actions.is_none())
+                                .on_click(
+                                    cx.listener(|shell, _, _, cx| shell.run_update_restart(cx)),
+                                ),
+                            "Restart to update",
+                        )
+                        .into_any_element(),
                     ),
             );
         let mut overlay = v_flex()
@@ -1324,8 +1526,15 @@ impl Shell {
             // The title bar's own bottom edge, and the only rule on it: it spans the window, so it
             // is the single owner of the boundary between chrome and whatever is under it — the
             // rail, the sidebar, the centre and the Inspector all start below this one line.
+            //
+            // Solved against the plane it lands on, like every other structural rule in the
+            // window, so the band stack reads as one stack instead of four bands that happen to
+            // share a colour name.
             .border_b_1()
-            .border_color(colors.border)
+            .border_color(chrome_hairline(
+                design::role::surface_chrome(cx),
+                colors.border,
+            ))
             .child(
                 h_flex()
                     .size_full()
@@ -1357,7 +1566,18 @@ impl Shell {
                             } else {
                                 self.render_resource_switcher(cx)
                             })
+                            // The sidebar switch is the tree's slot, not part of the sentence the
+                            // other two make, so a rule separates the panel control from the pair
+                            // that names the context. It is the same object the actions group is
+                            // held off with, so one hairline answers one question in this bar:
+                            // "these are different things".
+                            .child(toolbar_separator(cx))
                             .child(self.render_cluster_selector(cx))
+                            // The pair used to be two identical chevron buttons a `space::SM` apart,
+                            // which is the gap between two items in one group and not the gap
+                            // between two fields. A rule, plus the eyebrows each field now carries,
+                            // is what says they are separate answers to separate questions.
+                            .child(toolbar_separator(cx))
                             .child(self.render_namespace_selector(window, cx)),
                     )
                     .child(div().flex_1().min_w(px(0.0)))
@@ -1376,12 +1596,15 @@ impl Shell {
                             .role(Role::Group)
                             .aria_label("Window actions")
                             .child(toolbar_separator(cx))
-                            .child(self.render_palette_button(cx))
-                            // The connection point is the bar's answer to "which of my four
-                            // clusters is this", and the status bar prints the same state, so the
-                            // compact band drops it rather than printing one fact twice in two
-                            // strips that are 40px apart.
+                            // The connection point leads the group and the icon actions follow it,
+                            // one `space::XS` apart and nothing between them: the chip carries its
+                            // own boundary, so a second rule beside it would be the window saying
+                            // the same thing twice. The bar's answer to "which of my four clusters
+                            // is this" comes before "what can I do here", and the status bar prints
+                            // the same state, so the compact band drops the chip rather than
+                            // printing one fact twice in two strips 40px apart.
                             .when(!narrow, |this| this.child(self.render_connection_point(cx)))
+                            .child(self.render_palette_button(cx))
                             .child(self.render_settings_button(cx))
                             .when(!narrow, |this| {
                                 this.child(self.render_inspector_toggle(compact, cx))
@@ -1463,34 +1686,41 @@ impl Shell {
                 // "3 errors" and "close this" were one shape.
                 .child(
                     Icon::new(design::health_icon(design::Severity::Error))
-                        .xsmall()
-                        .text_color(design::status_colors(cx).error),
+                        // The bar's row lane beside a count, and not `xsmall()`'s 12px, which put
+                        // the one status mark in the band a full step under the bell's glyph.
+                        .with_size(Size::Size(design::icon::IN_ROW))
+                        .text_color(design::icon::status(cx, design::Severity::Error)),
                 )
                 .child(text_small(errors).text_color(colors.text_muted))
         });
-        let mut bell = Button::new("top-bar-notifications")
-            .icon(IconName::Bell)
-            .ghost()
-            .with_size(Size::Size(design::size::CONTROL))
-            .w(design::size::CONTROL)
-            .tab_index(7isize)
-            // The bell and its number are one readout, so they take one ink. The bell used to
-            // take the error count's colour, which made it an unlabelled second copy of a number
-            // printed 20px away, and the alarm belongs to the error chip on its left.
-            .text_color(colors.text_muted)
-            // The notification centre is a panel attached to this control, so the control stays
-            // visibly open while the panel is on screen. It is the same rule the two switchers
-            // follow through `Popover::trigger(trigger.selected(open))`: hover cannot explain a
-            // relationship between a trigger and a surface, and the bell's own tooltip is suppressed
-            // while the panel is open precisely because the state is on the control instead.
-            .toggled(open)
-            .on_click(cx.listener(|shell, _: &ClickEvent, window, cx| {
-                if shell.status_panel == super::StatusPanel::Notifications {
-                    shell.close_notifications(window, cx);
-                } else {
-                    shell.open_notifications(window, cx);
-                }
-            }));
+        let mut bell = top_bar_icon_button(
+            "top-bar-notifications",
+            IconName::Bell,
+            // A control's resting ink, not the count's. The bell is a control and the number
+            // beside it is a count, and the step between the two is what stops a toolbar glyph
+            // from being read as a third figure on the band. It used to take the error count's
+            // colour, which made it an unlabelled second copy of a number printed 20px away —
+            // the alarm belongs to the error chip on its left.
+            if open {
+                design::icon::active(cx)
+            } else {
+                design::icon::resting(cx)
+            },
+        )
+        .tab_index(7isize)
+        // The notification centre is a panel attached to this control, so the control stays
+        // visibly open while the panel is on screen. It is the same rule the two switchers
+        // follow through `Popover::trigger(trigger.selected(open))`: hover cannot explain a
+        // relationship between a trigger and a surface, and the bell's own tooltip is suppressed
+        // while the panel is open precisely because the state is on the control instead.
+        .toggled(open)
+        .on_click(cx.listener(|shell, _: &ClickEvent, window, cx| {
+            if shell.status_panel == super::StatusPanel::Notifications {
+                shell.close_notifications(window, cx);
+            } else {
+                shell.open_notifications(window, cx);
+            }
+        }));
         if !open {
             bell = bell.tooltip(hover);
         }
@@ -1538,7 +1768,7 @@ impl Shell {
         // tree is still there to be hidden and shown, and the toggle used to be disabled with a
         // label naming the way out instead.
         //
-        // It names the panel rather than the state — "Hide Sidebar" / "Show Sidebar" — and it keeps
+        // It names the panel rather than the state — "Hide sidebar" / "Show sidebar" — and it keeps
         // `.toggled(open)`, so the icon and the pressed state move together. It is also the tree's
         // slot in the bar in the compact band too: the sidebar collapses to the rail rather than
         // disappearing, so the toggle has a panel to act on at every width this window can be.
@@ -1547,27 +1777,31 @@ impl Shell {
             div().id("toggle-sidebar-control").flex_none(),
             &self.top_bar_focus,
             Role::Button,
-            if open { "Hide Sidebar" } else { "Show Sidebar" },
+            if open { "Hide sidebar" } else { "Show sidebar" },
             cx,
-            Button::new("toggle-sidebar")
-                .icon(if open {
+            top_bar_icon_button(
+                "toggle-sidebar",
+                if open {
                     IconName::PanelLeftOpen
                 } else {
                     IconName::PanelLeftClose
-                })
-                .ghost()
-                .with_size(Size::Size(design::size::CONTROL))
-                .w(design::size::CONTROL)
-                .tab_index(0isize)
-                .toggled(open)
-                .tooltip_with_action(
-                    if open { "Hide Sidebar" } else { "Show Sidebar" },
-                    &ToggleLeftPanel,
-                    Some("Shell"),
-                )
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.dispatch(ToggleLeftPanel, window, cx);
-                })),
+                },
+                if open {
+                    design::icon::active(cx)
+                } else {
+                    design::icon::resting(cx)
+                },
+            )
+            .tab_index(0isize)
+            .toggled(open)
+            .tooltip_with_action(
+                if open { "Hide sidebar" } else { "Show sidebar" },
+                &ToggleLeftPanel,
+                Some("Shell"),
+            )
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dispatch(ToggleLeftPanel, window, cx);
+            })),
         )
     }
 
@@ -1600,16 +1834,16 @@ impl Shell {
             Role::Button,
             label.clone(),
             cx,
-            Button::new("top-bar-resources")
-                .icon(IconName::ListTree)
-                .ghost()
-                .with_size(Size::Size(design::size::CONTROL))
-                .w(design::size::CONTROL)
-                .tab_index(0isize)
-                .tooltip_with_action(label, &super::OpenResourceKindSwitcher, Some("Shell"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.dispatch(super::OpenResourceKindSwitcher, window, cx);
-                })),
+            top_bar_icon_button(
+                "top-bar-resources",
+                IconName::ListTree,
+                design::icon::resting(cx),
+            )
+            .tab_index(0isize)
+            .tooltip_with_action(label, &super::OpenResourceKindSwitcher, Some("Shell"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dispatch(super::OpenResourceKindSwitcher, window, cx);
+            })),
         )
     }
 
@@ -1627,18 +1861,18 @@ impl Shell {
                 .flex_none(),
             &self.top_bar_settings_focus,
             Role::Button,
-            "Open Settings",
+            "Open settings…",
             cx,
-            Button::new("open-settings")
-                .icon(IconName::Settings)
-                .ghost()
-                .with_size(Size::Size(design::size::CONTROL))
-                .w(design::size::CONTROL)
-                .tab_index(5isize)
-                .tooltip_with_action("Open Settings", &crate::settings::OpenSettings, None)
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.dispatch(crate::settings::OpenSettings, window, cx);
-                })),
+            top_bar_icon_button(
+                "open-settings",
+                IconName::Settings,
+                design::icon::resting(cx),
+            )
+            .tab_index(5isize)
+            .tooltip_with_action("Open settings…", &crate::settings::OpenSettings, None)
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dispatch(crate::settings::OpenSettings, window, cx);
+            })),
         )
     }
 
@@ -1660,20 +1894,28 @@ impl Shell {
         } else {
             "Toggle Inspector"
         };
-        let button = Button::new("toggle-inspector")
-            .icon(if shown {
+        let button = top_bar_icon_button(
+            "toggle-inspector",
+            if shown {
                 IconName::PanelRightOpen
             } else {
                 IconName::PanelRightClose
-            })
-            .ghost()
-            .with_size(Size::Size(design::size::CONTROL))
-            .w(design::size::CONTROL)
-            .tab_index(6isize)
-            .toggled(shown)
-            .on_click(cx.listener(|this, _, window, cx| {
-                this.dispatch(ToggleRightPanel, window, cx);
-            }));
+            },
+            // A window too narrow for the Inspector cannot show it, so the glyph wears the
+            // disabled ink rather than the resting one: the control's own state, not a status.
+            if compact {
+                design::icon::disabled(cx)
+            } else if shown {
+                design::icon::active(cx)
+            } else {
+                design::icon::resting(cx)
+            },
+        )
+        .tab_index(6isize)
+        .toggled(shown)
+        .on_click(cx.listener(|this, _, window, cx| {
+            this.dispatch(ToggleRightPanel, window, cx);
+        }));
         let button = if compact {
             // A window too narrow for the Inspector cannot show it, so the hint is
             // the only place the reader learns why.
@@ -1705,18 +1947,18 @@ impl Shell {
                 .flex_none(),
             &self.top_bar_palette_focus,
             Role::Button,
-            "Open Command Palette",
+            "Open command palette",
             cx,
-            Button::new("command-palette")
-                .icon(IconName::Search)
-                .ghost()
-                .with_size(Size::Size(design::size::CONTROL))
-                .w(design::size::CONTROL)
-                .tab_index(4isize)
-                .tooltip_with_action("Open Command Palette", &ToggleCommandPalette, Some("Shell"))
-                .on_click(cx.listener(|this, _, window, cx| {
-                    this.dispatch(ToggleCommandPalette, window, cx);
-                })),
+            top_bar_icon_button(
+                "command-palette",
+                IconName::Search,
+                design::icon::resting(cx),
+            )
+            .tab_index(4isize)
+            .tooltip_with_action("Open command palette", &ToggleCommandPalette, Some("Shell"))
+            .on_click(cx.listener(|this, _, window, cx| {
+                this.dispatch(ToggleCommandPalette, window, cx);
+            })),
         )
     }
 
@@ -1760,6 +2002,14 @@ impl Shell {
         let shell_for_dismiss = self.shell_weak.clone();
         Popover::new(id)
             .anchor(Anchor::BottomLeft)
+            // The card draws its own plane, radius and shadow, so the popover must not
+            // draw a second set around it. `Popover`'s appearance is `popover_style` plus
+            // a `p_3` gutter, and with the card's own `CONTENT_INSET` inside that gutter
+            // the switcher measured twenty-four pixels of gutter on all four sides around a
+            // square-cornered card — one rounded object inside another, which is what
+            // `picker_menu` below spent its comment on and what made the surface read as
+            // unfinished. Turning it off leaves the card as the popover's whole surface.
+            .appearance(false)
             .open(open)
             .on_open_change(move |open, _, cx| {
                 // The callback runs while `Popover` is being rendered, which is inside
@@ -1814,12 +2064,29 @@ impl Shell {
                         window.focus(&focus, cx);
                     });
                 }
-                // The card is the popover's own body: the shared menu owns the
-                // dismissal and the popover's own focus handling around it.
-                let menu = PopupMenu::build(window, cx, move |menu, _, _| {
-                    menu.item(PopupMenuItem::element(move |_, _| picker.clone()))
-                });
-                menu.into_any_element()
+                // The card IS the popover's body, and it is placed there directly.
+                //
+                // It used to be wrapped in a `PopupMenu`, which is itself a popover
+                // surface: `Popover.content` paints one rounded plane and its own
+                // padding, and `PopupMenu::build` paints a SECOND one with a second
+                // padding inside the first. The card then painted a third, unrounded,
+                // plane inside those - so the switcher, the surface the reader opens
+                // most, was showing three frames of different sizes and radii nested
+                // inside each other. It read as a card inside a card inside a card,
+                // which is the exact thing the design guide forbids and the exact
+                // thing that made this surface look unfinished.
+                //
+                // The wrapper is removed rather than restyled because it earned
+                // nothing here: the card is one element, not a list of menu items, so
+                // the menu's rows, separators and keyboard walking have nothing to
+                // act on. Dismissal, focus and the open flag belong to the `Popover`
+                // above, which is what raised `on_open_change` in the first place.
+                //
+                // `Popover::appearance(false)` above is the other half of the same fix:
+                // the card now draws the plane, the radius and the shadow, so the plane
+                // gpui-kit would have drawn around it is a fourth frame rather than the
+                // one the card is made of.
+                picker.clone().into_any_element()
             })
     }
 
@@ -1831,15 +2098,18 @@ impl Shell {
             .cloned()
             .unwrap_or_else(|| SharedString::from("No Context"));
         let status = self.connection.label();
-        let severity = self.connection.severity();
         // `UI-SPEC.md` §4.1: the cluster name and a caret. The connection used to be appended to
         // it as `name · Live`, which put the same fact in the title bar and in the status bar
         // 1000px away and left the context name one word narrower than the space reserved for it.
         let label = current.clone();
-        let tooltip = match self.connection.detail() {
-            Some(reason) => format!("Switch Context: {current} · {status}. {reason}"),
-            None => format!("Switch Context: {current} · {status}"),
-        };
+        let tooltip = with_chord(
+            match self.connection.detail() {
+                Some(reason) => format!("Switch Context: {current} · {status}. {reason}"),
+                None => format!("Switch Context: {current} · {status}"),
+            },
+            "k8s_shell::OpenContextSwitcher",
+            cx,
+        );
         let mut options = match self.session.as_ref().and_then(ClusterSession::registry) {
             Some(registry) => registry
                 .clusters()
@@ -1850,10 +2120,10 @@ impl Shell {
                         Health::Ready => (design::Severity::Success, "Live", None),
                         Health::NotReady(reason) => (
                             design::Severity::Warning,
-                            "Not Ready",
+                            "Not ready",
                             Some(SharedString::from(reason.clone())),
                         ),
-                        Health::Unknown => (design::Severity::Muted, "Not Checked", None),
+                        Health::Unknown => (design::Severity::Muted, "Not checked", None),
                     };
                     let mut option = PickerOption::new(cluster.name(), cluster.name());
                     option.source = registry
@@ -1906,38 +2176,56 @@ impl Shell {
         // A reachable context is the state with nothing to show, so it shows no shape: a muted
         // dash in front of the context name reads as a typographic dash opening the title bar, and
         // D5 gives the amber channel to contexts that are actually in trouble.
-        // The mark is always drawn, and the severity rides its ink rather than its presence.
-        // It used to appear only on a context in trouble, which meant the name shifted right when
-        // a cluster started failing — the reader watching a name move is the reader not reading
-        // it. `fg_tertiary` is the quiet state D5 asks for, and the severity channel is spent
-        // only where there is something to say.
-        let mark = Icon::new(IconName::Server)
-            .with_size(Size::Size(design::size::NAV_MARK))
-            .text_color(if severity == design::Severity::Muted {
-                design::role::fg_tertiary(cx)
-            } else {
-                severity.marker(cx)
-            });
+        //
+        // The mark is always drawn, and it is always in the *control's* state, never the
+        // cluster's. It used to fade to `fg_tertiary` while the cluster was healthy, on the
+        // theory that a healthy cluster should be quiet — which put the one glyph that says
+        // *which context am I in* a step under every control beside it, so the context control
+        // read as disabled next to a bright sidebar toggle. An ink is a state, not a mood: the
+        // server glyph identifies the kind of thing, and severity has its own two places in this
+        // bar — the connection dot and the status word on its right.
+        let mark = Icon::new(IconName::Server).text_color(if self.cluster_menu_open {
+            design::icon::active(cx)
+        } else {
+            design::icon::resting(cx)
+        });
         let menu = self.picker_menu(
             "cluster-menu",
             PickerKind::Cluster,
             options,
             // The trigger is the popover's, so the control `top_bar_action` would have
             // wrapped is this box, and the button inside it is presentational.
-            top_bar_selector_button("cluster-selector", label, mark, tooltip.clone())
-                .tab_index(1isize),
+            top_bar_selector_button(
+                "cluster-selector",
+                label,
+                mark,
+                tooltip.clone(),
+                switcher_chord("k8s_shell::OpenContextSwitcher", cx),
+            )
+            .tab_index(1isize),
         );
-        div()
+        // The eyebrow and the trigger are one row, and the row is the control: the trigger is the
+        // pointer target and this box is the focus stop, the role and the name.
+        h_flex()
             .id("cluster-selector-control")
             .flex_none()
             .min_w(px(0.0))
             .max_w(px(max_width))
             .flex_shrink_1()
+            .items_center()
+            .gap(design::space::XS)
             .track_focus(&self.top_bar_cluster_focus)
             .role(Role::ComboBox)
             .aria_label(format!("Context: {current}, {status}"))
             .aria_description(tooltip)
+            // The two switchers were the only controls in the bar that tracked a shell focus
+            // handle and drew no ring for it, so Tab stopped on them and nothing said so. The
+            // ring hangs on the box that owns the handle, which is the same answer
+            // `top_bar_action` gives the six controls beside them.
+            .rounded_md()
+            .focus_visible(common::focus_ring(cx))
             .debug_selector(|| "cluster-selector".to_owned())
+            .child(top_bar_eyebrow("Context", cx))
             .child(menu)
             .into_any_element()
     }
@@ -1948,17 +2236,26 @@ impl Shell {
     /// keeps the connection there for that reason: an Alt-Tab switcher and a dock preview both
     /// show it, so "which of my four clusters is this" is answerable without focusing the window.
     ///
-    /// `Live` is drawn in `fg.tertiary` and its dot in the same ink, because D5 makes a healthy
-    /// cluster the quiet state: a green dot in the corner of every window is a status light that
-    /// never changes, and a status light that never changes is wallpaper. A reconnecting or failed
+    /// **It is a chip, and it is the only status *word* in the bar.** It used to be a bare `Live`
+    /// in the mark's own ink: the dot and the word both read `severity.marker(cx)`, which is a
+    /// token solved for a 6px dot, so an 11px word wore the ink of the thing it was describing and
+    /// a reader could not tell whether the grey meant *reaching the API server* or *nothing at
+    /// all*. The mark takes `role::status_for` and the word takes `role::status_word_for`, which
+    /// is the whole reason the product keeps two.
+    ///
+    /// `Live` is still drawn in the quiet ink, and that is D5 rather than an oversight: a healthy
+    /// cluster is the absence of a status channel, and a green dot in the corner of every window
+    /// is a status light that never changes, which is wallpaper. A reconnecting or failed
     /// connection is the case that earns the colour, and it earns all of it.
+    ///
+    /// The boundary is a hairline rather than a fill. A fill would have to be either the plane
+    /// above it — a 1px bar on a title bar reads as an input — or the plane below it, and
+    /// `role::surface_inset` is the editor's darkest step, which on this band is a hole rather
+    /// than a pill. A hairline gives the group a silhouette at the bar's own weight and leaves
+    /// the state legible in greyscale.
     fn render_connection_point(&self, cx: &Context<Self>) -> AnyElement {
         let severity = self.connection.severity();
         let word = self.connection.label();
-        let ink = match severity {
-            design::Severity::Muted => design::role::fg_tertiary(cx),
-            _ => severity.marker(cx),
-        };
         let reason = self.connection.detail().unwrap_or_default();
         let cluster = self
             .clusters
@@ -1969,59 +2266,114 @@ impl Shell {
         } else {
             format!("Connected to {cluster}. {reason}")
         };
-        let mut item = h_flex()
+        let plane = design::role::surface_chrome(cx);
+        let mut chip = h_flex()
             .id("top-bar-connection")
             .debug_selector(|| "top-bar-connection".to_owned())
             .flex_none()
-            .h_full()
+            // The same square target as the icon actions beside it, so the group reads as one row
+            // of controls rather than as a pill floating among five unrelated glyphs.
+            .h(design::size::ICON_BUTTON)
+            .px(design::space::XS)
             .gap(design::space::XS)
             .items_center()
+            .rounded(design::radius::SM)
+            .border_1()
+            .border_color(chrome_hairline(plane, design::colors(cx).border))
             .role(Role::Status)
             .aria_label(format!("Connection: {word}"))
-            .child(div().flex_none().size(px(6.0)).rounded_full().bg(ink))
+            .child(
+                div()
+                    .flex_none()
+                    .size(design::size::STATUS_DOT)
+                    .rounded_full()
+                    .bg(design::role::status_for(severity, cx)),
+            )
             .child(
                 Label::new(word)
+                    // The line height is stated with the size: gpui-kit's `Label` hard-codes a
+                    // 1.25rem line box, so a caption that carried only its size sat 20px tall in
+                    // a 24px chip and the word drifted off the dot's centre line.
                     .text_size(design::text::CAPTION)
-                    .text_color(ink),
+                    .line_height(design::text::CAPTION_LINE_HEIGHT)
+                    .font_weight(design::text::MEDIUM)
+                    .text_color(design::role::status_word_for(severity, cx)),
             );
-        item.interactivity().tooltip(common::hover_hint(hint));
-        item.into_any_element()
+        chip.interactivity().tooltip(common::hover_hint(hint));
+        chip.into_any_element()
     }
 
-    fn render_namespace_selector(&self, window: &Window, _cx: &Context<Self>) -> AnyElement {
+    fn render_namespace_selector(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         let current = self.namespace.clone();
         let options = namespace_picker_options(&self.namespace_state, &current);
         let state_label = match &self.namespace_state {
-            NamespaceState::Loading => "Loading Namespaces",
-            NamespaceState::Ready(names) if names.is_empty() => "No Namespaces Found",
+            NamespaceState::Loading => "Loading namespaces…",
+            NamespaceState::Ready(names) if names.is_empty() => "No namespaces found",
             NamespaceState::Ready(_) => "Loaded",
-            NamespaceState::Failed(_) => "Namespace List Unavailable",
+            NamespaceState::Failed(_) => "Namespace list unavailable",
         };
-        let tooltip = match &self.namespace_state {
-            NamespaceState::Failed(_) => {
-                "Namespace List Unavailable. Refresh the list, then try again.".to_owned()
-            }
-            _ => format!("Switch Namespace: {current}"),
-        };
+        let tooltip = with_chord(
+            match &self.namespace_state {
+                NamespaceState::Failed(_) => {
+                    "Namespace List Unavailable. Refresh the list, then try again.".to_owned()
+                }
+                _ => format!("Switch Namespace: {current}"),
+            },
+            "k8s_shell::OpenNamespaceSwitcher",
+            cx,
+        );
         let aria_label = format!("Namespace: {current}, {state_label}");
+        // The budget the name gets, and it is the BUDGET, not the control's width:
+        // `SIDEBAR_MIN` plus a step was a number chosen before the control carried
+        // an eyebrow, a mark, a caret and a keycap, and every one of those took its
+        // share out of the name. `All namespaces` arrived as `All na…`, which is
+        // the one value on this control a reader cannot guess - it is the literal
+        // string in every kubeconfig, and the one whose truncation hides the fact
+        // that no namespace is selected at all.
+        //
+        // So the budget now names what it has to hold: the widest namespace name a
+        // cluster actually has, the eyebrow, the mark, the keycap and the caret.
+        // The bar has a flexible spacer in the middle, so this costs nothing until
+        // the window is too narrow to have it, which is the breakpoint below.
         let max_width =
             if f32::from(window.viewport_size().width) < super::INSPECTOR_LAYOUT_BREAKPOINT {
-                f32::from(design::size::SIDEBAR_MIN) + f32::from(design::space::SM)
+                f32::from(design::size::SIDEBAR_MIN) + f32::from(design::space::LG)
             } else {
-                f32::from(design::size::SIDEBAR_MIN) + f32::from(design::space::XL)
+                // What the control has to HOLD, on the normal window: the widest
+                // namespace a cluster actually has, plus the eyebrow, the mark, the
+                // keycap and the caret that share the row with it.
+                //
+                // `SIDEBAR_MIN + a step` was a number chosen when the control carried
+                // a mark and a caret, and it was already tight; the eyebrow and the
+                // keycap then took their shares out of the NAME, so `All namespaces`
+                // arrived as `All na…` - which is the one value here a reader cannot
+                // guess, because it is the literal string in every kubeconfig and
+                // its truncation hides that no namespace is selected at all.
+                //
+                // The context control beside it already takes `SIDEBAR_MAX`, and the
+                // two together fit: the bar has a flexible spacer between them and
+                // its own cluster, so this only costs room on the narrow breakpoint,
+                // where the name truncates - which is the correct place for it.
+                f32::from(design::size::SIDEBAR_MAX)
             };
         let failed = matches!(self.namespace_state, NamespaceState::Failed(_));
-        let status = design::status_colors(_cx);
+        // The folder names the kind of thing and takes the control's own state ink, on the same
+        // argument as the cluster's server mark: a healthy namespace faded to `fg_tertiary` beside
+        // an `fg_secondary` name, which is the shape a disabled control makes. A failed namespace
+        // list is a different statement, so the mark becomes the health channel's shape and
+        // carries that channel's mark ink — severity on a mark, never on the glyph that names the
+        // kind of thing.
         let icon = Icon::new(if failed {
             IconName::TriangleAlert
         } else {
             IconName::Folder
         })
-        .with_size(Size::Size(design::size::NAV_MARK))
         .text_color(if failed {
-            status.warning
+            design::icon::status(cx, design::Severity::Warning)
+        } else if self.namespace_menu_open {
+            design::icon::active(cx)
         } else {
-            design::role::fg_tertiary(_cx)
+            design::icon::resting(cx)
         });
         let menu = self.picker_menu(
             "namespace-menu",
@@ -2029,21 +2381,47 @@ impl Shell {
             options,
             // The trigger is the popover's, so the control `top_bar_action` would have
             // wrapped is this box, and the button inside it is presentational.
-            top_bar_selector_button("namespace-selector", current, icon, tooltip.clone())
-                .w(px(max_width))
+            //
+            // The cap is a `max_w` the button can shrink inside rather than a `w` that forces
+            // it wide. gpui-kit gives a button with a dropdown caret `justify_between` inside
+            // its content row, so a button forced wider than its own content spends the slack
+            // on the two gaps and opens both of them, while the same button at its natural
+            // width gets only `gap_2`. Measured on the title bar, the context field's mark sat
+            // 8px from its name and 11px from its caret; the namespace field's sat 18px and
+            // 21px — the same builder, the same lane, laid out by two rules, which is what
+            // made the pair read as two kinds of field rather than as one sentence.
+            top_bar_selector_button(
+                "namespace-selector",
+                current,
+                icon,
+                tooltip.clone(),
+                switcher_chord("k8s_shell::OpenNamespaceSwitcher", cx),
+            )
+                .max_w(px(max_width))
+                .min_w(px(0.0))
+                .flex_shrink_1()
                 .tab_index(3isize),
         );
-        div()
+        // See `render_cluster_selector`: the eyebrow and the trigger are one row, and the row is
+        // the control.
+        h_flex()
             .id("namespace-selector-control")
             .flex_none()
             .min_w(px(0.0))
             .max_w(px(max_width))
             .flex_shrink_1()
+            .items_center()
+            .gap(design::space::XS)
             .track_focus(&self.top_bar_namespace_focus)
             .role(Role::ComboBox)
             .aria_label(aria_label)
             .aria_description(tooltip)
+            // See `render_cluster_selector`: both switchers take the one focus treatment the
+            // window has, and both wear it on the box that owns the handle.
+            .rounded_md()
+            .focus_visible(common::focus_ring(cx))
             .debug_selector(|| "namespace-selector".to_owned())
+            .child(top_bar_eyebrow("Namespace", cx))
             .child(menu)
             .into_any_element()
     }
@@ -2068,7 +2446,11 @@ impl Shell {
                     if api_groups_row == Some(index) {
                         // A container child that carries no icon of its own is
                         // the only reliable group boundary, so the rule is the
-                        // structure and the container row stays quiet.
+                        // structure and the container row stays quiet. Solved
+                        // against the sidebar's own plane, like every other rule in
+                        // the window: this one separates the pinned core Kinds from
+                        // the 69 API groups below, and it has to be findable at a
+                        // glance for that to be worth drawing at all.
                         children.push(
                             div()
                                 .w_full()
@@ -2076,7 +2458,7 @@ impl Shell {
                                 .child(
                                     Separator::horizontal()
                                         .w_full()
-                                        .color(colors.border_variant),
+                                        .color(chrome_hairline(surface, colors.border_variant)),
                                 )
                                 .into_any_element(),
                         );
@@ -2148,17 +2530,34 @@ impl Shell {
                     // else. Four pixels of air above and below the head is also what separates it
                     // from the filter field's band, which is the only reason that seam stopped
                     // reading as one block.
-                    .h(design::size::GROUP_HEAD)
-                    .px(design::space::SM)
-                    .gap(design::space::XS)
+                    .h(super::tree::SIDEBAR_GROUP_HEAD_HEIGHT)
+                    // The head's *label* shares the rows' label column. A row spends its inset,
+                    // its depth indent, a disclosure lane, a [`SIDEBAR_MARK_LANE`] and two
+                    // [`SIDEBAR_LANE_GAP`]s before its text starts, and the head spent only the
+                    // inset and its own mark — so "Resources" sat 24px left of every label in the
+                    // column it heads, which is the reason the head and the rows never read as one
+                    // list. The lane is reserved here rather than dropped, so the head keeps a mark
+                    // of its own *and* lines up.
+                    .px(super::tree::SIDEBAR_INSET)
+                    .pl(super::tree::SIDEBAR_INSET
+                        + super::tree::SIDEBAR_DISCLOSURE_LANE
+                        + super::tree::SIDEBAR_LANE_GAP)
+                    // The same lane gap the rows spend between their own fixed lanes: one number
+                    // for the gap inside a sidebar band, so a head and the row under it cannot
+                    // disagree about it.
+                    .gap(super::tree::SIDEBAR_LANE_GAP)
                     .items_center()
+                    // The rule under the head is solved against the plane it lands on, like every
+                    // other structural rule in the window: `colors.border_variant` is solved for
+                    // the table, and on the sidebar it could sit under the floor and leave the
+                    // head welded to the first row.
                     .border_b_1()
-                    .border_color(colors.border_variant)
+                    .border_color(chrome_hairline(surface, colors.border_variant))
                     // The head's mark and its rows' marks share one lane and one optical size, so
                     // the head's label starts on the same vertical line as the column it heads.
                     .child(
                         Icon::new(IconName::ListTree)
-                            .with_size(Size::Size(design::size::KIND_ICON))
+                            .with_size(Size::Size(super::tree::SIDEBAR_MARK_LANE))
                             .flex_none()
                             .text_color(design::role::fg_tertiary(cx)),
                     )
@@ -2170,10 +2569,15 @@ impl Shell {
                     // height when the measure function reports none, so `items_baseline()` on text
                     // is bottom alignment wearing a baseline's name. The fix is structural — one
                     // line box for both — and the count stays quiet through ink, not through size.
+                    //
+                    // `text::LABEL` and not `text::TITLE`. At 15px semibold the head was the
+                    // loudest line in the window's left third and outranked the resource header,
+                    // which is the one band whose whole job is to name the object being looked at.
+                    // The sidebar's head is a section label; the scale gives that role `LABEL`.
                     .child(
                         Label::new("Resources")
-                            .text_size(design::text::TITLE)
-                            .line_height(design::text::TITLE_LINE_HEIGHT)
+                            .text_size(design::text::LABEL)
+                            .line_height(design::text::LABEL_LINE_HEIGHT)
                             .font_weight(design::text::MEDIUM)
                             .text_color(design::role::fg_secondary(cx)),
                     )
@@ -2197,19 +2601,26 @@ impl Shell {
                             chip.child(Badge::new().dot().xsmall().color(severity.marker(cx)))
                                 .child(
                                     Label::new(label)
-                                        .text_size(design::text::TITLE)
-                                        .line_height(design::text::TITLE_LINE_HEIGHT)
+                                        .text_size(design::text::LABEL)
+                                        .line_height(design::text::LABEL_LINE_HEIGHT)
                                         .text_color(design::role::fg_tertiary(cx)),
                                 ),
                         )
                     })
                     // The count rides the same line box as the label, and it is quiet because it is
-                    // tertiary ink at regular weight rather than because it is smaller.
+                    // tertiary ink at regular weight rather than because it is smaller. It takes the
+                    // same tabular figures the table's own number columns take, so a count that
+                    // grows a digit does not reflow the head beside it.
                     .child(
-                        Label::new(kind_label)
-                            .text_size(design::text::TITLE)
-                            .line_height(design::text::TITLE_LINE_HEIGHT)
-                            .text_color(design::role::fg_tertiary(cx)),
+                        div()
+                            .flex_none()
+                            .font_features(crate::settings::data_typography(cx).features)
+                            .child(
+                                Label::new(kind_label)
+                                    .text_size(design::text::LABEL)
+                                    .line_height(design::text::LABEL_LINE_HEIGHT)
+                                    .text_color(design::role::fg_tertiary(cx)),
+                            ),
                     ),
             )
             .child(
@@ -2225,6 +2636,22 @@ impl Shell {
                     .overflow_y_scroll()
                     .track_scroll(&self.tree_scroll)
                     .py(design::space::XS)
+                    // The scrollbar's lane, RESERVED.
+                    //
+                    // gpui-kit draws the scrollbar as an absolutely-positioned
+                    // overlay and renders it after the rows, so the thumb is on top
+                    // and a row's wash cannot hide it outright. That is not the same
+                    // as the scrollbar having a place: the hover and selection
+                    // washes still ran to the scroller's trailing edge underneath
+                    // the track, so the thumb sat on a stripe of row colour and the
+                    // panel read as though the list extended past its own frame.
+                    //
+                    // Reserving the lane is the same answer the rest of this
+                    // product already gives every other trailing element - the
+                    // sidebar's count lane, the status bar's forward lane, a table's
+                    // trailing numeric lane - and it is the only one that costs
+                    // nothing when the list is short enough not to scroll.
+                    .pr(SIDEBAR_SCROLL_GUTTER)
                     .vertical_scrollbar(&self.tree_scroll)
                     .child(body),
             )
@@ -2261,15 +2688,20 @@ impl Shell {
                 .text_color(colors.text_muted),
             )
             .child(
-                Button::new("tree-retry")
-                    .label("Retry")
-                    .primary()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .w(px(ACTION_BUTTON_WIDTH))
-                    .tab_index(0isize)
-                    .tooltip("Retry Loading Resources")
-                    .accessibility_label("Retry Loading Resources")
-                    .on_click(cx.listener(|this, _, _, cx| this.retry_catalog(cx))),
+                common::labelled(
+                    Button::new("tree-retry")
+                        .primary()
+                        .with_size(Size::Size(design::size::CONTROL))
+                        .w(px(ACTION_BUTTON_WIDTH))
+                        .tab_index(0isize)
+                        .tooltip("Retry Loading Resources")
+                        .on_click(cx.listener(|this, _, _, cx| this.retry_catalog(cx))),
+                    "Retry",
+                )
+                // The two words differ on purpose: the panel above this control names the
+                // failure as the *resource tree*, and the announced name carries that over
+                // for a reader who is not looking at the panel.
+                .accessibility_label("Retry Loading Resources"),
             )
             .into_any_element()
     }
@@ -2298,13 +2730,20 @@ impl Shell {
         tree_focused: bool,
         cx: &Context<Self>,
     ) -> impl IntoElement {
-        let colors = design::colors(cx);
+        // The plane every wash on this row is read against. It is named, not inherited: the
+        // sidebar paints `role::surface_chrome`, and the shared row tokens are solved against the
+        // table's `role::surface_raised`, which is a perceptible step away. `design.rs` says so
+        // itself about the pickers — "using it there put the selection in the same bind the
+        // sidebar rail was in: legible on paper, far too quiet on the surface it actually lands
+        // on" — so the selection goes through the `_on` form and the hover through `state`.
+        let surface = design::role::surface_chrome(cx);
         let expandable = row.expandable();
-        // Two clones of the same row, for two different closures: the click handler owns one and
-        // the hint owns the other. One clone cannot serve both, because each closure takes it by
-        // value and the row is what both of them are about.
+        // The click handler owns a clone of the row, because the closure takes it by value and the
+        // row is what the handler is about. The hint is a string rather than a second clone: it is
+        // read once here and moved into the two consumers that want it, and `TreeRow::hint` is
+        // where the model's own disambiguation rule now lives.
         let click_row = row.clone();
-        let hint_row = row.clone();
+        let row_hint = row.hint();
         let TreeRow {
             id,
             label,
@@ -2342,19 +2781,50 @@ impl Shell {
             // cluster: `kind_icon` covers resources, and its fallback is a file.
             TreeRowKind::Cluster => IconName::Server,
             TreeRowKind::Overview => IconName::Monitor,
-            TreeRowKind::Group if expanded => IconName::FolderOpen,
-            TreeRowKind::Group => IconName::Folder,
+            // ONE shape for the group, at both states. The chevron beside it is
+            // the disclosure and it already says open or closed; a folder that
+            // also swapped said the same thing twice, in two shapes.
+            TreeRowKind::Group => design::glyph::object::group(),
             TreeRowKind::Kind => click_row
                 .resource_kind
                 .as_deref()
                 .map_or(IconName::File, super::tree::sidebar_kind_mark),
         };
-        // One ink for the whole column: `fg_secondary` at rest, `fg_primary` when the row is the
-        // selected one, and never a third colour "to make it lively". Colour on this column would
-        // encode something the row does not know — a kind's health is not in `TreeRow`, and the
-        // twelve bespoke marks are one hue precisely so that a reader cannot read a status into a
-        // shape.
+        // One ink for the whole column, and never a third colour "to make it lively". Colour on
+        // this column would encode something the row does not know — a kind's health is not in
+        // `TreeRow`, and the twelve bespoke marks are one hue precisely so that a reader cannot
+        // read a status into a shape.
+        //
+        // What the column *does* encode is hierarchy, and it used to encode none of it: every one
+        // of the 71 rows drew `fg.primary`, so the 69 API groups and the Kinds under them were one
+        // wall of identical weight and a reader had to read all of them to find `Deployments`.
+        // Three steps instead of one, so the wall becomes a set:
+        //
+        // - the selected row steps up, whatever it is;
+        // - a *leaf* — a Kind, and the pinned `Overview` row, which is also a destination rather
+        //   than a heading — is `fg_primary`, the ink for the identity of a thing. There is no
+        //   bolder ink, so nothing in the column can out-shout it. `Overview` is grouped with the
+        //   Kinds deliberately: it opens the dashboard, and a row you click should not read as a
+        //   folder.
+        // - a *container* — the `All API groups` row and the 69 API groups under it — is
+        //   `fg_secondary` and semibold. A container is a heading for a set, and weight is what
+        //   separates a heading from the items it names in greyscale.
+        let leaf = matches!(kind, TreeRowKind::Kind | TreeRowKind::Overview);
+        let emphasis = if selected {
+            design::text::SEMIBOLD
+        } else if leaf {
+            design::text::REGULAR
+        } else {
+            design::text::MEDIUM
+        };
         let mark_ink = if selected {
+            design::role::fg_primary(cx)
+        } else if leaf {
+            design::role::fg_secondary(cx)
+        } else {
+            design::role::fg_tertiary(cx)
+        };
+        let label_ink = if selected || leaf {
             design::role::fg_primary(cx)
         } else {
             design::role::fg_secondary(cx)
@@ -2367,85 +2837,97 @@ impl Shell {
         // The indent is padding on the row, not a margin on the list item: a
         // margin would push a full-width row past the sidebar by the indent.
         //
-        // One step per level is `space::SM`, not `space::MD`. A three-level sidebar indented at 12
-        // pushed its deepest labels 24px right of the group head, and the two rows the design cares
-        // about most — `Validating Admission Policies` and `Validating Admission Policy Bindings`
-        // under `admissionregistration.k8s.io` — were already cut to the same `Validating
-        // Admission P…` at 236px. Eight buys those labels eight more pixels at the level where the
-        // truncation happens, and the hierarchy still reads: the depth step is half the label's own
-        // cap height and the disclosure lane sits between the levels, so no two labels in the
-        // column collide.
-        //
-        // `tree::SidebarRow::indent` says `space::MD` for the same step. That model is not wired —
-        // the whole three-layers section is `#[allow(dead_code)]` — and its own test pins 12, so the
-        // two cannot be reconciled without editing a test. The step wants to be one number in
-        // `design`; it is two here and the divergence is reported rather than hidden.
-        let indent = f32::from(design::space::SM) * f32::from(depth);
+        // The step is `tree::SIDEBAR_DEPTH_STEP`, the constant the sidebar's own model was sized
+        // against, so the label budget in `tree.rs` and the indent on screen are the same number.
+        // A three-level sidebar indented at 12 pushed its deepest labels 24px right of the group
+        // head, and the two rows the design cares about most — `Validating Admission Policies` and
+        // `Validating Admission Policy Bindings` under `admissionregistration.k8s.io` — were
+        // already cut to the same `Validating Admission P…` at 236px. Eight buys those labels eight
+        // more pixels at the level where the truncation happens, and the hierarchy still reads:
+        // the depth step is half the label's own cap height and the disclosure lane sits between
+        // the levels, so no two labels in the column collide.
+        let indent = f32::from(super::tree::SIDEBAR_DEPTH_STEP) * f32::from(depth);
         // Every row reserves the disclosure column, and a leaf leaves it empty.
-        // The row draws the column itself: a fixed slot for every row keeps the
-        // icon column on one left edge and the depth step at `space::MD`.
         let disclosure_label = if expanded {
             format!("Collapse {label}")
         } else {
             format!("Expand {label}")
         };
         let disclosure_id = id.clone();
-        let disclosure = h_flex()
-            .flex_none()
-            .w(design::size::HIT_MIN)
-            .h(design::size::TREE_ROW)
+        // The disclosure control's own plane, for the same reason the row names one: a control
+        // that takes its hover from whatever it happens to be sitting on changes appearance when a
+        // container moves. It is the same value as the row's — the control is on the row.
+        let disclosure_surface = surface;
+        let disclosure_control = div()
+            .id(("tree-disclosure", index))
+            .debug_selector(move || format!("tree-disclosure-{index}"))
+            .size_full()
+            .flex()
             .justify_center()
             .items_center()
-            .when(expandable, |this| {
-                this.child(
-                    div()
-                        .id(("tree-disclosure", index))
-                        .debug_selector(move || format!("tree-disclosure-{index}"))
-                        .size_full()
-                        .flex()
-                        .justify_center()
-                        .items_center()
-                        // No hand cursor: `UI-SPEC` §9.3 and `PROMPT.md` §3 both
-                        // list it. A native disclosure keeps the arrow.
-                        .role(Role::Button)
-                        // The tree is one Tab stop with a roving cursor, so the triangle stays
-                        // out of the Tab order; Arrow keys, Enter and Space already reach it
-                        // through the row.
-                        .tab_index(-1isize)
-                        .aria_label(disclosure_label)
-                        // The row below is also clickable, and it toggles the same row, so the
-                        // control has to keep its own click to itself or one press toggles twice.
-                        .on_mouse_down(MouseButton::Left, |_, _, cx| {
-                            cx.stop_propagation();
-                        })
-                        .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
-                            cx.stop_propagation();
-                            if event.click_count() > 1 {
-                                return;
-                            }
-                            this.toggle_row(disclosure_id.clone(), cx);
-                            cx.notify();
-                        }))
-                        // `disclosure-controls.md` asks the control to point inward while the
-                        // content is hidden and down while it is shown, so the shape carries the
-                        // state as well as the ink.
-                        .child(
-                            Icon::new(if expanded {
-                                IconName::ChevronDown
-                            } else {
-                                IconName::ChevronRight
-                            })
-                            .xsmall()
-                            .text_color(colors.text_muted),
-                        ),
-                )
-            });
+            .rounded(design::radius::XS)
+            // No hand cursor: `UI-SPEC` §9.3 and `PROMPT.md` §3 both
+            // list it. A native disclosure keeps the arrow.
+            .role(Role::Button)
+            // The tree is one Tab stop with a roving cursor, so the triangle stays
+            // out of the Tab order; Arrow keys, Enter and Space already reach it
+            // through the row.
+            .tab_index(-1isize)
+            .aria_label(disclosure_label.clone())
+            // The row below is also clickable, and it toggles the same row, so the
+            // control has to keep its own click to itself or one press toggles twice.
+            .on_mouse_down(MouseButton::Left, |_, _, cx| {
+                cx.stop_propagation();
+            })
+            .on_click(cx.listener(move |this, event: &ClickEvent, _, cx| {
+                cx.stop_propagation();
+                if event.click_count() > 1 {
+                    return;
+                }
+                this.toggle_row(disclosure_id.clone(), cx);
+                cx.notify();
+            }))
+            // The control has a hover and a press of its own. It is 20px of the 24px row, so it is
+            // the first thing a pointer lands on when a reader reaches for a group, and it answered
+            // with nothing — the row's own hover ran under it, which reads as a dead strip.
+            .hover(|this| this.bg(design::state::hover(cx, disclosure_surface)))
+            .active(|this| this.bg(design::state::press(cx, disclosure_surface)))
+            // The control names what it does to the row it belongs to, so a pointer resting on 20
+            // pixels of glyph says so. It sits outside the Tab order and outside the row's own
+            // name, so this is the one place the verb "Expand" is available at all.
+            .tooltip(common::hover_hint(disclosure_label))
+            // `disclosure-controls.md` asks the control to point inward while the
+            // content is hidden and down while it is shown, so the shape carries the
+            // state as well as the ink.
+            .child(
+                Icon::new(if expanded {
+                    IconName::ChevronDown
+                } else {
+                    IconName::ChevronRight
+                })
+                // `design::icon::NAV` and not `Icon::xsmall()`'s 12px: this is a
+                // mark in the sidebar's navigation column and the column has one
+                // mark size. The top bar made the same call on its error chip —
+                // a raw component preset is a third lane, and a 12px triangle
+                // beside a 14px folder reads as a smaller kind of thing rather
+                // than as a disclosure. The *ink* stays incidental, which is what
+                // `design::icon::incidental` lists a disclosure triangle under.
+                .with_size(Size::Size(design::icon::NAV))
+                .text_color(design::role::fg_tertiary(cx)),
+            );
+        let disclosure = h_flex()
+            .flex_none()
+            .w(super::tree::SIDEBAR_DISCLOSURE_LANE)
+            .h(super::tree::SIDEBAR_ROW_HEIGHT)
+            .justify_center()
+            .items_center()
+            .when(expandable, |this| this.child(disclosure_control));
         div()
             .id(("tree-row", index))
             .w_full()
             .pl(px(indent))
             .relative()
-            .h(design::size::TREE_ROW)
+            .h(super::tree::SIDEBAR_ROW_HEIGHT)
             .role(Role::TreeItem)
             .accessibility_id(format!("tree-row-{id}"))
             .aria_level(usize::from(depth) + 1)
@@ -2457,9 +2939,45 @@ impl Shell {
             // the row is one hit target from the leading rail to the sidebar
             // edge, so a click on the label, the icon or the empty space past
             // the count is the same gesture. The inner line below only draws.
-            .hover(|this| this.bg(design::row_hover_bg(cx)))
-            .active(|this| this.bg(colors.element_active))
-            .when(selected, |this| this.bg(design::row_selected_bg(cx)))
+            //
+            // Three states, solved against the sidebar's own plane and in increasing weight, so
+            // the order survives with every colour removed: hover is a wash of the bar's own ink,
+            // the keyboard cursor is the same wash one step further in the *accent* channel, and
+            // the selection is the accent wash `design::row_selected_bg_on` has already lifted to
+            // the floor a row state has to clear. All three used to come from tokens solved for
+            // the table, which is one step away from this plane.
+            //
+            // The cursor sits between hover and selection because it *is* between them: the tree
+            // only paints it while it holds the keyboard, and the panel's own focus border has
+            // already said so. Before it existed, a keyboard reader had no way to tell which of
+            // 71 rows the arrows were on.
+            // Hover and press composite over the row's current state, so a
+            // pointer arriving on the selected row strengthens its fill rather
+            // than replacing it — the forwards list and the picker already do
+            // this, and a selection that vanishes under the pointer reads as
+            // flicker.
+            .hover(|this| {
+                this.bg(if selected {
+                    design::state::hover_on(design::row_selected_bg_on(cx, surface), design::role::accent(cx))
+                } else if cursor {
+                    design::state::hover_on(tree_cursor_bg(surface, cx), design::role::fg_primary(cx))
+                } else {
+                    design::state::hover(cx, surface)
+                })
+            })
+            .active(|this| {
+                this.bg(if selected {
+                    design::state::press_on(design::row_selected_bg_on(cx, surface), design::role::accent(cx))
+                } else if cursor {
+                    design::state::press_on(tree_cursor_bg(surface, cx), design::role::fg_primary(cx))
+                } else {
+                    design::state::press(cx, surface)
+                })
+            })
+            .when(cursor, |this| this.bg(tree_cursor_bg(surface, cx)))
+            .when(selected, |this| {
+                this.bg(design::row_selected_bg_on(cx, surface))
+            })
             .on_click(cx.listener(move |this, event: &ClickEvent, window, cx| {
                 if event.click_count() > 1 {
                     return;
@@ -2477,8 +2995,8 @@ impl Shell {
                     cx.stop_propagation();
                 }),
             )
-            .tooltip(common::hover_hint(tree_row_hint(&hint_row)))
-            .aria_description(tree_row_hint(&hint_row))
+            .tooltip(common::hover_hint(row_hint.clone()))
+            .aria_description(row_hint)
             // No selection rail. The guide is explicit that a selected navigation
             // item shows itself through "a selected fill, stronger foreground, or
             // heavier weight" and that a leading-edge bar is a web template habit:
@@ -2493,9 +3011,9 @@ impl Shell {
                 h_flex()
                     .flex_1()
                     .min_w(px(0.0))
-                    .h(design::size::TREE_ROW)
-                    .px(design::space::SM)
-                    .gap(design::space::XS)
+                    .h(super::tree::SIDEBAR_ROW_HEIGHT)
+                    .px(super::tree::SIDEBAR_INSET)
+                    .gap(super::tree::SIDEBAR_LANE_GAP)
                     .items_center()
                     .id(("tree-item", index))
                     .role(Role::ListItem)
@@ -2507,10 +3025,10 @@ impl Shell {
                     .child(disclosure)
                     .child(
                         Icon::new(icon)
-                            // `size::KIND_ICON` and not `Icon::xsmall()`'s 12px: the token is the
-                            // size the kind marks are drawn and judged at, and every mark in this
-                            // lane is that size.
-                            .with_size(Size::Size(design::size::KIND_ICON))
+                            // `tree::SIDEBAR_MARK_LANE` and not `Icon::xsmall()`'s 12px: the lane is
+                            // the size the kind marks are drawn and judged at, and every mark in
+                            // this column is that size — including the group head's.
+                            .with_size(Size::Size(super::tree::SIDEBAR_MARK_LANE))
                             .flex_none()
                             .text_color(mark_ink),
                     )
@@ -2520,14 +3038,32 @@ impl Shell {
                             .min_w(px(0.0))
                             .overflow_hidden()
                             .text_ellipsis()
-                            .child(text(label)),
+                            // Stated, not inherited, for the same reason the tab strip states its
+                            // ink: gpui-kit's `Label` re-applies `theme().foreground` after it
+                            // takes the caller's style, so an ink set on the row never reached the
+                            // glyph — every row drew `fg.primary` whatever this said.
+                            .child(
+                                Label::new(label)
+                                    .text_size(design::text::BODY)
+                                    .line_height(design::text::BODY_LINE_HEIGHT)
+                                    .font_weight(emphasis)
+                                    .text_color(label_ink),
+                            ),
                     )
                     .when_some(detail, |this, detail| {
-                        // The count sits in its own lane at a fixed size, so a row that gains or
-                        // loses a count moves nothing else on the column.
+                        // The count sits in its own lane at a fixed width, so a row that gains or
+                        // loses a count moves nothing else on the column: the label's *start* is
+                        // pinned by the three fixed lanes to the left of it, and the lane is
+                        // reserved whether or not there is anything to print in it. It takes the
+                        // same tabular figures the table's own number columns take, for the same
+                        // reason — a proportional `1` is narrower than a proportional `8` and the
+                        // counts staircase.
                         this.child(
                             div()
                                 .flex_none()
+                                .w(super::tree::SIDEBAR_COUNT_LANE)
+                                .text_right()
+                                .font_features(crate::settings::data_typography(cx).features)
                                 .child(text_small(detail).text_color(detail_color)),
                         )
                     })
@@ -2573,12 +3109,20 @@ impl Shell {
         // It is the one place the reader learns what they are looking at and how
         // much of it there is, so it is mounted with the table it describes and
         // not with the window.
+        //
+        // Its *slot* is not conditional, though. A tab that is not a resource table has no
+        // header to draw, and the slot still spends `size::RESOURCE_HEADER` — see
+        // [`resource_header_band`]. Dropping it moved the open-view strip, and every band below
+        // it, up 40px and back down again.
         let header = match (connection_failure.is_some(), active, active_view.as_ref()) {
             (false, Some(_), Some(TabView::Resource(view))) => {
                 let view = view.clone();
                 self.render_resource_header(view, cx)
             }
-            _ => div().into_any_element(),
+            _ => resource_header_band(cx)
+                .id("resource-header-reserved")
+                .debug_selector(|| "resource-header-reserved".to_owned())
+                .into_any_element(),
         };
         let content = if let Some(failure) = connection_failure {
             failure
@@ -2704,19 +3248,20 @@ impl Shell {
             "Browse this view",
             resource_catalog_missing_message(&tab.title),
             Some(
-                Button::new("placeholder-show-pods")
-                    .label("Show Pods")
-                    .ghost()
-                    .with_size(Size::Size(design::size::CONTROL))
-                    .w(px(ACTION_BUTTON_WIDTH))
-                    .tab_index(0isize)
-                    .tooltip("Show Pods")
-                    .accessibility_label("Show Pods")
-                    .on_click(cx.listener(|this, _, _, cx| {
-                        this.activate_tab(0, cx);
-                        cx.notify();
-                    }))
-                    .into_any_element(),
+                common::labelled(
+                    Button::new("placeholder-show-pods")
+                        .ghost()
+                        .with_size(Size::Size(design::size::CONTROL))
+                        .w(px(ACTION_BUTTON_WIDTH))
+                        .tab_index(0isize)
+                        .tooltip("Show Pods")
+                        .on_click(cx.listener(|this, _, _, cx| {
+                            this.activate_tab(0, cx);
+                            cx.notify();
+                        })),
+                    "Show Pods",
+                )
+                .into_any_element(),
             ),
         )
     }
@@ -2764,18 +3309,25 @@ impl Shell {
             .h(CENTER_TAB_HEIGHT)
             .flex_none()
             .rounded(design::radius::SM)
-            // Symmetric padding at `space::SM`, so the middot, the icon, the title and the close
-            // control all sit on one horizontal spine. It used to be `space::MD` on the leading
-            // edge and `space::SM` on the trailing one, and the only reason for the asymmetry was
-            // the 2px rail that used to stand in the leading padding.
+            // Symmetric padding at `space::SM`, with the trailing edge one step wider so the close
+            // control is a control with air around it rather than a glyph parked against the
+            // edge of the strip. It used to be `space::MD` on the leading edge and `space::SM` on
+            // the trailing one, and the only reason for that asymmetry was the 2px rail that used
+            // to stand in the leading padding.
             .px(design::space::SM)
+            .pr(design::space::MD)
             .gap(design::space::XS)
             .items_center()
             // `UI-SPEC.md` §4.3: a middot 12px from each neighbour. It sits inside this item's
             // own left padding so the row keeps one child per tab, and it scrolls with the tab it
             // introduces rather than staying behind at the strip's edge.
+            //
+            // Both sides are `space::MD`, and the left one used to be `px(0.0)`: measured on the
+            // open-view strip the middot landed 2px from the selected tab's trailing edge and 18px
+            // from the next tab's leading glyph, so the mark that exists to say "these are two
+            // things" was touching one of them and floating away from the other.
             .when(separated, |this| {
-                this.pl(px(0.0)).child(
+                this.pl(design::space::MD).child(
                     div()
                         .flex_none()
                         .h_full()
@@ -2818,10 +3370,10 @@ impl Shell {
             // - fill: `role::accent_wash` — the same 12% of the accent `panels/dock.rs` paints —
             //   on the whole pill at `design::radius::SM`, so the tint follows the rounded
             //   silhouette instead of filling the whole 28px band behind the tab.
-            // - ink: `role::fg_primary` at `design::text::MEDIUM` when selected against
-            //   `role::fg_tertiary` at `design::text::REGULAR` when not. The weight is the channel
-            //   that replaces the marker: a `13/500` word beside a `13/400` one separates in
-            //   greyscale, where a 12%-accent wash does not.
+            // - ink: `role::fg_primary` at `design::text::SEMIBOLD` when selected against
+            //   `role::fg_secondary` at `design::text::REGULAR` when not. The weight is the
+            //   channel that replaces the marker: a `13/600` word beside a `13/400` one separates
+            //   in greyscale, where a 12%-accent wash does not.
             //
             // Nothing is reserved for a marker. The 2px accent bar that used to run along the
             // bottom of the open tab is gone with the bar above the item, for the reason the guide
@@ -2923,20 +3475,29 @@ impl Shell {
                     this.reorder_center_tab(drag.index, window, cx);
                 },
             ))
-            .child(Icon::new(icon).xsmall().text_color(if is_active {
-                design::role::fg_primary(cx)
-            } else {
-                design::role::fg_tertiary(cx)
-            }))
+            .child(
+                Icon::new(icon)
+                    // The kind glyph's ink is the tab's own state, for the same reason the
+                    // tab title's is: the label below was lifted out of `fg_tertiary` because the
+                    // strip read as disabled, and the glyph that names the tab was left behind in
+                    // it — one identity mark a step under its own label, in the row that was
+                    // already saying "this view is open".
+                    .xsmall()
+                    .text_color(if is_active {
+                        design::icon::active(cx)
+                    } else {
+                        design::icon::resting(cx)
+                    }),
+            )
             // The pin mark is a *state*, so it is reserved on every tab whether or not it has
             // one — the same argument `panels/dock.rs` makes for its status dot, and the reason
             // an unpinned tab's title does not move when it is pinned. It is a mark about the
             // tab, not a selection marker, so it does not count against the "nothing reserved for
             // the selection" rule.
             .child(Icon::new(IconName::Pin).xsmall().text_color(if pinned {
-                design::role::fg_primary(cx)
+                design::icon::active(cx)
             } else {
-                design::role::fg_tertiary(cx).alpha(0.0)
+                design::icon::incidental(cx).alpha(0.0)
             }))
             .child(
                 // The label's ink and its weight are the tab's whole selected treatment, and both
@@ -2944,6 +3505,17 @@ impl Shell {
                 // `theme().foreground` after it takes the caller's style, so a `fg.tertiary` set
                 // on the pill two children up never reached the glyph. `panels/dock.rs` hit the
                 // same wall and says so at length.
+                //
+                // An inactive tab is `fg_secondary`, not `fg_tertiary`. A tab title is a
+                // destination the reader has to be able to *read* to do the job, and
+                // `DESIGN.md` §1.4 reserves the quietest ink for placeholders, column headers and
+                // help text. At `fg_tertiary` the strip read as disabled: a row of words a reader
+                // could not make out, one of which was the view they were already in.
+                //
+                // The weight carries the selection where the wash cannot. `SEMIBOLD` against
+                // `REGULAR` is two rungs of the scale at one size, so the open tab is
+                // unmistakable with every colour removed, and nothing about it rests on the accent
+                // being legible.
                 div()
                     .debug_selector(move || format!("center-tab-label-{index}"))
                     .flex_none()
@@ -2952,14 +3524,14 @@ impl Shell {
                             .text_size(design::text::BODY)
                             .line_height(design::text::BODY_LINE_HEIGHT)
                             .font_weight(if is_active {
-                                design::text::MEDIUM
+                                design::text::SEMIBOLD
                             } else {
                                 design::text::REGULAR
                             })
                             .text_color(if is_active {
                                 design::role::fg_primary(cx)
                             } else {
-                                design::role::fg_tertiary(cx)
+                                design::role::fg_secondary(cx)
                             }),
                     ),
             )
@@ -3019,7 +3591,7 @@ impl Shell {
             .into_any_element()
     }
 
-    /// The 44px resource header, and the five pills it replaces.
+    /// The `size::RESOURCE_HEADER` resource header, and the five pills it replaces.
     ///
     /// `UI-REDESIGN` D16 deleted a toolbar of eleven chrome elements — a status
     /// chip, a cache chip, a count chip, a sort chip, an RTT chip, a filtering
@@ -3037,7 +3609,7 @@ impl Shell {
         view: Entity<crate::table_view::PodsView>,
         cx: &Context<Self>,
     ) -> AnyElement {
-        use design::{radius, role, space, state, text};
+        use design::{role, space, text};
 
         let spec = view.read(cx).resource_spec();
         let rows = view.read(cx).row_count(cx);
@@ -3057,7 +3629,9 @@ impl Shell {
             gpui_kit::svg()
                 .path(design::kind_icon_path(spec.kind.as_ref()))
                 .size(design::size::KIND_ICON_TITLE)
-                .text_color(role::accent(cx)),
+                // An identity mark is quiet: accent is the product's scarce
+                // resource, spent on selection and focus, not decoration.
+                .text_color(design::icon::resting(cx)),
         );
 
         let title = div()
@@ -3068,21 +3642,23 @@ impl Shell {
             .text_color(role::fg_primary(cx))
             .child(spec.label.clone());
 
-        // A count, not a control. `UI-SPEC` §4.2 calls it a badge on a wash at
-        // the caption size, and it answers "how much am I looking at" — which
-        // the table body deliberately does not repeat on every row.
+        // A count, not a control, and not a chip. It answers "how much am I looking
+        // at" — which the table body deliberately does not repeat on every row — and
+        // the header's whole job is to make the reader's eye land on the *title*.
+        //
+        // It used to be `text::LABEL` at `MEDIUM` in `fg_secondary` on a 4%-ink wash
+        // pill, which is a badge: the second-loudest thing in the band, sitting one
+        // step to the right of the word it belongs to. A count next to a title is
+        // `text::CAPTION` in `fg_tertiary` — the scale's own answer for a figure beside
+        // a name — and it takes the same tabular figures the table's number columns
+        // take, so a count that grows a digit does not reflow the title beside it.
         let count = div()
             .flex_none()
-            .px(space::XS)
-            .rounded(radius::SM)
-            .bg(state::hover_on(
-                role::surface_content(cx),
-                role::fg_primary(cx),
-            ))
-            .text_size(text::LABEL)
-            .line_height(text::LABEL_LINE_HEIGHT)
-            .font_weight(text::MEDIUM)
-            .text_color(role::fg_secondary(cx))
+            .font_features(crate::settings::data_typography(cx).features)
+            .text_size(text::CAPTION)
+            .line_height(text::CAPTION_LINE_HEIGHT)
+            .font_weight(text::REGULAR)
+            .text_color(role::fg_tertiary(cx))
             .child(design::format::count(rows));
 
         // When a filter is narrowing the view the count says so, because a count
@@ -3099,7 +3675,9 @@ impl Shell {
                         .text_size(text::CAPTION)
                         .line_height(text::CAPTION_LINE_HEIGHT)
                         .font_weight(text::SEMIBOLD)
-                        .text_color(role::warning(cx))
+                        // A narrowed view the reader asked for is not a warning:
+                        // the same state in the forwards list wears tertiary ink.
+                        .text_color(role::fg_tertiary(cx))
                         .child("filtered"),
                 )
                 .into_any_element()
@@ -3179,15 +3757,18 @@ impl Shell {
             });
 
         let view_for_filter = view.clone();
-        h_flex()
+        // The spine. `space::LG` put this band's content 8px right of every other band on the
+        // window — the title bar, the open-view strip, the sidebar's filter box all start at
+        // `space::SM` — so the band that names the object you are looking at was the one band
+        // whose text did not line up with anything else. It keeps its hierarchy through what is
+        // actually in it: the only accent mark in the centre column, a `TITLE` semibold label, and
+        // a count. An inset is not hierarchy.
+        resource_header_band(cx)
             .id("resource-header")
             .debug_selector(|| "resource-header".to_owned())
-            .flex_none()
-            .h(design::size::RESOURCE_HEADER)
-            .px(design::space::LG)
+            .px(design::space::SM)
             .gap(space::SM)
             .items_center()
-            .bg(role::surface_content(cx))
             .child(kind_icon)
             .child(title)
             .child(count)
@@ -3343,8 +3924,15 @@ impl Shell {
             .tab_group()
             .track_focus(&self.center_tabs_focus)
             .on_key_down(cx.listener(Self::on_center_tabs_key_down))
+            // The strip's own edge against the table below it, solved against the plane it lands
+            // on. It was the theme's `border` field, which is a control boundary, so the one line
+            // that says "the navigation ends here" was the line the window was least likely to
+            // draw.
             .border_b_1()
-            .border_color(colors.border)
+            .border_color(chrome_hairline(
+                design::role::surface_chrome(cx),
+                colors.border,
+            ))
             .when(has_pinned, |this| this.child(pinned_section))
             .child(ordinary_section)
     }
@@ -3374,7 +3962,7 @@ impl Shell {
                 },
             ))
             .item(
-                PopupMenuItem::new("Close Other Tabs")
+                PopupMenuItem::new("Close other tabs")
                     .icon(IconName::ListCollapse)
                     .on_click(move |_, window, cx| {
                         if let Some(shell) = others_shell.upgrade() {
@@ -3385,7 +3973,7 @@ impl Shell {
                     }),
             )
             .item(
-                PopupMenuItem::new("Close All Tabs")
+                PopupMenuItem::new("Close all tabs")
                     .icon(IconName::X)
                     .on_click(move |_, window, cx| {
                         if let Some(all_shell) = all_shell.upgrade() {
@@ -3537,7 +4125,7 @@ impl Shell {
                 );
             }
             menu.separator().item(
-                PopupMenuItem::new("Copy Name")
+                PopupMenuItem::new("Copy name")
                     .icon(IconName::Copy)
                     .on_click(move |_, _, cx| {
                         if let Some(shell) = copy_shell.upgrade() {
@@ -3751,13 +4339,11 @@ impl Shell {
                 .id("toast-action")
                 .debug_selector(|| "shell-toast-action".to_owned())
                 .flex_none()
-                .child(
+                .child(common::labelled(
                     Button::new("toast-action-button")
-                        .label(label)
                         .ghost()
                         .with_size(Size::Size(design::size::CONTROL))
                         .tab_index(0isize)
-                        .accessibility_label(label)
                         .on_click(cx.listener(|shell, _, window, cx| {
                             // The toast goes first, so the recovery runs against a shell with no
                             // toast on it.
@@ -3767,7 +4353,8 @@ impl Shell {
                             }
                             cx.notify();
                         })),
-                )
+                    label,
+                ))
         });
         let mut card = h_flex()
             .id("shell-toast")
@@ -3849,7 +4436,6 @@ impl Shell {
 
     /// Render the modal command palette.
     pub(super) fn render_command_palette(&self, cx: &Context<Self>) -> impl IntoElement {
-        let colors = design::colors(cx);
         let matches = super::commands::filter_commands_for_scope(
             &self.commands,
             &self.palette_query,
@@ -3944,11 +4530,23 @@ impl Shell {
                     .h(px(card_height))
                     .max_h(DefiniteLength::Fraction(PALETTE_VIEWPORT_SHARE))
                     .flex_none()
-                    .rounded_lg()
-                    // One border only: the field below draws its own, and the surface already
-                    // separates the card from the dimmed window behind it.
-                    .bg(colors.elevated_surface_background.alpha(1.0))
-                    .shadow(cx.theme().shadow_tokens().lg)
+                    // `radius::XL`, not `radius::LG`. The shape rule gives a palette and a
+                    // dialog the product's largest radius, and `panels::search` — the sibling
+                    // window-wide overlay this file already claims to be one component family
+                    // with — takes it. `radius::LG` is the popover's radius: this card owns the
+                    // whole window, so it floats a step further from it than a popover over a
+                    // control does, and a card on the same radius as a menu above the title bar
+                    // is one card at two altitudes.
+                    .rounded(design::radius::XL)
+                    // One hairline, one surface, one shadow — the three values
+                    // `panels::search` puts on its own card, so the two overlays cannot drift
+                    // apart. It used to take the theme's `shadow_tokens().lg` and a theme
+                    // background field, and the surface the rows' washes below are solved
+                    // against was therefore named by something other than the role it is.
+                    .border_1()
+                    .border_color(design::role::border_base(cx))
+                    .bg(design::role::surface_raised(cx).alpha(1.0))
+                    .shadow(design::shadow::overlay(cx))
                     .overflow_hidden()
                     // The card is its chrome plus a flexible list, so the chrome is what the
                     // list does not get: everything above it and everything below it. Child order
@@ -3982,56 +4580,22 @@ impl Shell {
                                     .debug_selector(|| "command-palette-title".to_owned())
                                     .w_full()
                                     .min_w(px(0.0))
-                                    .gap(design::space::MD)
                                     .items_center()
-                                    // A modal title is a title, not a count: `DESIGN.md` §3.1
-                                    // gives `panel_title` to the names of panels and surfaces
-                                    // and the caption roles to counts and notes. Two full-screen
-                                    // modals whose titles differed by 30% because they shared a
-                                    // token with their own subtitles is the same collapse the
-                                    // Describe panel had.
+                                    // A modal title is a title and nothing else. The count used to
+                                    // sit in a trailing lane on this baseline, and at `text::LABEL`
+                                    // in the tertiary ink beside a 15px name
+                                    // `Command palette155 results` was one run-on string with no
+                                    // hierarchy in it: the reader had to work out which half was
+                                    // the name of the surface. It is on the scope line below
+                                    // instead, which is the band that already says what the card
+                                    // is pointed at — and the band the two switchers put their
+                                    // own count on.
                                     .child(
                                         div().min_w(px(0.0)).flex_shrink_1().child(
                                             label_panel_title(title)
                                                 .text_color(design::role::fg_primary(cx))
                                                 .truncate(),
                                         ),
-                                    )
-                                    // The count is a trailing lane of its own, not a second word
-                                    // on the title's baseline. At `text::LABEL` in the tertiary ink
-                                    // beside a 15px title, `Command palette155 results` was one
-                                    // run-on string with no hierarchy in it: the reader had to work
-                                    // out which half was the name of the surface. The spacer is
-                                    // what separates them, and putting the count on the trailing
-                                    // edge aligns it in every card width rather than at the width of
-                                    // the sentence beside it.
-                                    .child(h_flex().flex_1().min_w(design::space::MD))
-                                    .child(
-                                        h_flex()
-                                            .id("command-palette-result-count")
-                                            .debug_selector(|| {
-                                                "command-palette-result-count".to_owned()
-                                            })
-                                            .flex_none()
-                                            .justify_end()
-                                            .role(Role::Status)
-                                            .aria_label(result_label.clone())
-                                            .child(
-                                                div().min_w(px(0.0)).child(
-                                                    Label::new(result_label)
-                                                        .text_size(design::text::LABEL)
-                                                        .line_height(
-                                                            design::text::LABEL_LINE_HEIGHT,
-                                                        )
-                                                        .font_weight(design::text::REGULAR)
-                                                        // Stated, not inherited: gpui-kit's
-                                                        // `Label` re-applies
-                                                        // `theme().foreground` after it takes
-                                                        // the caller's style, so a wrapper's ink
-                                                        // never reaches the glyph.
-                                                        .text_color(design::role::fg_tertiary(cx)),
-                                                ),
-                                            ),
                                     ),
                             ),
                     )
@@ -4065,8 +4629,14 @@ impl Shell {
                     // `DESIGN.md` §4 asks for and the shape the resource search already has.
                     // Between the title and the field it read as part of the title, and for the
                     // context switcher it named the answer to the question the card asks.
+                    //
+                    // The count shares this band rather than the title's. Both are metadata
+                    // about what the card is looking at — where it is pointed and how much is
+                    // there — and the switchers put their count and their current value on one
+                    // band for the same reason. The count sits in a trailing lane so the scope
+                    // sentence truncates against the card's edge instead of pushing it out.
                     .child(
-                        div()
+                        h_flex()
                             .id("command-palette-scope-line")
                             .debug_selector(|| "command-palette-scope-line".to_owned())
                             .flex_none()
@@ -4080,13 +4650,37 @@ impl Shell {
                             // line and the first group head adds `space::SM` above itself, and at
                             // eight the context sentence sat on the group head's shoulder.
                             .pb(design::space::MD)
+                            .gap(design::space::SM)
+                            .items_center()
                             .aria_label(format!("Current scope: {scope}"))
                             .child(
-                                Label::new(scope)
-                                    .text_size(design::text::LABEL)
-                                    .line_height(design::text::LABEL_LINE_HEIGHT)
-                                    // Stated, not inherited — see the count in the title row.
-                                    .text_color(design::role::fg_secondary(cx)),
+                                h_flex().min_w(px(0.0)).flex_shrink_1().child(
+                                    Label::new(scope.clone())
+                                        .text_size(design::text::LABEL)
+                                        .line_height(design::text::LABEL_LINE_HEIGHT)
+                                        // Stated, not inherited: gpui-kit's `Label` re-applies
+                                        // `theme().foreground` after it takes the caller's
+                                        // style, so a wrapper's ink never reaches the glyph.
+                                        .text_color(design::role::fg_tertiary(cx))
+                                        .truncate(),
+                                ),
+                            )
+                            .child(
+                                h_flex()
+                                    .id("command-palette-result-count")
+                                    .debug_selector(|| {
+                                        "command-palette-result-count".to_owned()
+                                    })
+                                    .flex_none()
+                                    .justify_end()
+                                    .role(Role::Status)
+                                    .aria_label(result_label.clone())
+                                    .child(
+                                        Label::new(result_label)
+                                            .text_size(design::text::LABEL)
+                                            .line_height(design::text::LABEL_LINE_HEIGHT)
+                                            .text_color(design::role::fg_tertiary(cx)),
+                                    ),
                             ),
                     )
                     .child(
@@ -4115,59 +4709,77 @@ impl Shell {
                                     .py(design::space::XS)
                                     .vertical_scrollbar(&self.palette_scroll)
                                     .when(empty, |this| {
+                                        // The app's one empty state, asked for by name rather
+                                        // than rebuilt. The palette was the last surface still
+                                        // drawing its own sentence-plus-control, so two overlays
+                                        // in the same window said the same thing two ways — and
+                                        // the pair of them is how the resource search and both
+                                        // switchers already say it. The wrapper carries the
+                                        // card's inset and takes the list's height, because the
+                                        // shared state is `flex_1` and a percentage height in a
+                                        // scrolling column has nothing definite to resolve
+                                        // against: without this box the state collapsed to
+                                        // nothing under the field.
                                         this.child(
-                                            v_flex()
+                                            div()
+                                                .id("command-palette-empty")
+                                                .debug_selector(|| {
+                                                    "command-palette-empty".to_owned()
+                                                })
+                                                .w_full()
+                                                .flex_1()
+                                                .min_h(px(0.0))
                                                 .px(PALETTE_LANE_PAD)
-                                                .py(design::space::SM)
-                                                .gap(design::space::SM)
-                                                .child(
-                                                    text_small(
-                                                        "No matching commands. Clear the search or try another term.",
-                                                    )
-                                                    .text_color(design::role::fg_tertiary(cx)),
-                                                )
-                                                // `DESIGN.md` §9 promises a control here, and
-                                                // the sibling picker has had one all along: a
-                                                // sentence that tells the reader to clear the
-                                                // search is not a way to clear it. The wrapper
-                                                // carries the selector because the shared
-                                                // `Button` does not expose one.
-                                                .child(
-                                                    div()
-                                                        .id("command-palette-clear-search")
-                                                        .debug_selector(|| {
-                                                            "command-palette-clear-button"
-                                                                .to_owned()
-                                                        })
-                                                        .child(
-                                                            Button::new(
-                                                                "command-palette-clear-button",
-                                                            )
-                                                            .label("Clear search")
-                                                            .outline()
-                                                            .ghost()
-                                                            .with_size(Size::Size(
-                                                                design::size::CONTROL,
+                                                .child(common::empty_state_with_action(
+                                                    IconName::Search,
+                                                    "No matching commands",
+                                                    "Clear the search, or try another term.",
+                                                    // `DESIGN.md` §9 promises a control here: a
+                                                    // sentence that tells the reader to clear
+                                                    // the search is not a way to clear it. Ghost
+                                                    // rather than outlined, because that is the
+                                                    // control the switchers' own empty states
+                                                    // offer, and a ring round it would make the
+                                                    // palette's clear the one bordered button in
+                                                    // a window that has no other. The wrapper
+                                                    // carries the selector because the shared
+                                                    // `Button` does not expose one.
+                                                    Some(
+                                                        div()
+                                                            .id("command-palette-clear-search")
+                                                            .debug_selector(|| {
+                                                                "command-palette-clear-button"
+                                                                    .to_owned()
+                                                            })
+                                                            .child(common::labelled(
+                                                                Button::new(
+                                                                    "command-palette-clear-button",
+                                                                )
+                                                                .ghost()
+                                                                .with_size(Size::Size(
+                                                                    design::size::CONTROL,
+                                                                ))
+                                                                .tab_index(0isize)
+                                                                .on_click(cx.listener(
+                                                                    |shell, _, window, cx| {
+                                                                        shell.palette_query.clear();
+                                                                        shell.palette_input.update(
+                                                                            cx,
+                                                                            |input, cx| {
+                                                                                input.set_text("", window, cx)
+                                                                            },
+                                                                        );
+                                                                        shell.palette_note = None;
+                                                                        shell.sync_palette_selection();
+                                                                        shell.reveal_palette_selection();
+                                                                        cx.notify();
+                                                                    },
+                                                                )),
+                                                                "Clear search",
                                                             ))
-                                                            .tab_index(0isize)
-                                                            .accessibility_label("Clear search")
-                                                            .on_click(cx.listener(
-                                                                |shell, _, window, cx| {
-                                                                    shell.palette_query.clear();
-                                                                    shell.palette_input.update(
-                                                                        cx,
-                                                                        |input, cx| {
-                                                                            input.set_text("", window, cx)
-                                                                        },
-                                                                    );
-                                                                    shell.palette_note = None;
-                                                                    shell.sync_palette_selection();
-                                                                    shell.reveal_palette_selection();
-                                                                    cx.notify();
-                                                                },
-                                                            )),
-                                                        ),
-                                                ),
+                                                            .into_any_element(),
+                                                    ),
+                                                )),
                                         )
                                     })
                                     .children(self.render_command_rows(&matches, selected, cx)),
@@ -4221,10 +4833,10 @@ impl Shell {
                             })
                             .when(self.palette_note.is_none(), |this| {
                                 this.when_some(keystroke("up"), |this, kb| {
-                                    this.child(footer_hint("Move Selection", &kb, cx))
+                                    this.child(footer_hint("Move selection", &kb, cx))
                                 })
                                 .when_some(keystroke("enter"), |this, kb| {
-                                    this.child(footer_hint("Run Command", &kb, cx))
+                                    this.child(footer_hint("Run command", &kb, cx))
                                 })
                                 .when_some(keystroke("escape"), |this, kb| {
                                     this.child(footer_hint("Dismiss", &kb, cx))
@@ -4338,7 +4950,10 @@ impl Shell {
                 - f32::from(design::space::XXL))
             .max(0.0)))
             .overflow_y_scroll()
-            .rounded_lg()
+            // `radius::XL` for the reason `render_command_palette` gives it: this is a dialog,
+            // the largest silhouette in the window, and the sibling resource search takes the
+            // same one. `radius::LG` belongs to a popover over a control.
+            .rounded(design::radius::XL)
             .border_1()
             // The same resolved boundary the toast and the popovers use. `colors.border` on
             // `raised` is 1.37:1 in dark and 2.67:1 in light, and the dialog carried it as its
@@ -4409,6 +5024,12 @@ impl Shell {
     pub(super) fn render_dialog(&self, window: &Window, cx: &Context<Self>) -> AnyElement {
         let colors = design::colors(cx);
         let error_ink = design::status_colors(cx).error;
+        // The plane every choice row inside a dialog card is read against. The card paints the
+        // theme's elevated surface, so the two option lists below — a container to open a shell
+        // in, a port to forward — take their selection from `design::row_selected_bg_on` solved
+        // against it. They used to take `colors.element_selected`, a filled slab the theme solves
+        // for a web list, which is the one web-shaped fill a desktop dialog must not have.
+        let card_surface = colors.elevated_surface_background;
         let Some(dialog) = self.dialog.as_ref() else {
             return div().into_any_element();
         };
@@ -4418,15 +5039,15 @@ impl Shell {
             Dialog::ConfirmTabClose { request } => {
                 let (title, detail) = match request {
                     super::TabCloseRequest::One(_) => (
-                        "Close Tab?",
+                        "Close tab?",
                         "Unsaved YAML changes in this tab will be permanently discarded.",
                     ),
                     super::TabCloseRequest::Others(_) => (
-                        "Close Other Tabs?",
+                        "Close other tabs?",
                         "Unsaved YAML changes in these tabs will be permanently discarded. You cannot undo this.",
                     ),
                     super::TabCloseRequest::All => (
-                        "Close All Tabs?",
+                        "Close all tabs?",
                         "Unsaved YAML changes in every tab will be permanently discarded. You cannot undo this.",
                     ),
                 };
@@ -4513,7 +5134,7 @@ impl Shell {
                 card = self.dialog_shell(Role::AlertDialog, title, text(detail), window, cx);
                 if let Some(field) = field {
                     card = card
-                        .child(text_small("Chart Reference").text_color(colors.text_muted))
+                        .child(text_small("Chart reference").text_color(colors.text_muted))
                         .child(field)
                         .when_some(error.clone(), |this, message| {
                             this.child(text_small(message).text_color(error_ink))
@@ -4550,7 +5171,7 @@ impl Shell {
                     ));
             }
             Dialog::Exec { target, selected } => {
-                let title = format!("Open Shell in {}", target.name);
+                let title = format!("Open shell in {}", target.name);
                 let containers = target.containers.clone();
                 card = self
                     .dialog_shell(
@@ -4577,9 +5198,31 @@ impl Shell {
                             .aria_label(container.clone())
                             .aria_selected(active)
                             .when(active && focused, |this| this.aria_active_descendant())
-                            .when(active, |this| this.bg(colors.element_selected))
-                            .hover(|this| this.bg(colors.element_hover))
-                            .active(|this| this.bg(colors.element_active))
+                            .when(active, |this| {
+                                this.bg(design::row_selected_bg_on(cx, card_surface))
+                            })
+                            // Hover and press strengthen the active row's fill
+                            // instead of replacing it.
+                            .hover(|this| {
+                                this.bg(if active {
+                                    design::state::hover_on(
+                                        design::row_selected_bg_on(cx, card_surface),
+                                        design::role::accent(cx),
+                                    )
+                                } else {
+                                    design::state::hover(cx, card_surface)
+                                })
+                            })
+                            .active(|this| {
+                                this.bg(if active {
+                                    design::state::press_on(
+                                        design::row_selected_bg_on(cx, card_surface),
+                                        design::role::accent(cx),
+                                    )
+                                } else {
+                                    design::state::press(cx, card_surface)
+                                })
+                            })
                             .when(focused, |this| {
                                 this.child(
                                     div()
@@ -4638,7 +5281,7 @@ impl Shell {
                     }
                     None => "For the context, choose or enter the container port.".to_owned(),
                 };
-                let title = format!("Port Forward to {}", target.name);
+                let title = format!("Port forward to {}", target.name);
                 let field = self.render_dialog_input("dialog-port-forward-input", input, 0, cx);
                 let local_field = self.render_dialog_input(
                     "dialog-port-forward-local-input",
@@ -4672,9 +5315,29 @@ impl Shell {
                             .role(Role::Button)
                             .aria_label(format!("Remote port {label}"))
                             .aria_selected(active)
-                            .when(active, |this| this.bg(colors.element_selected))
-                            .hover(|this| this.bg(colors.element_hover))
-                            .active(|this| this.bg(colors.element_active))
+                            .when(active, |this| {
+                                this.bg(design::row_selected_bg_on(cx, card_surface))
+                            })
+                            .hover(|this| {
+                                this.bg(if active {
+                                    design::state::hover_on(
+                                        design::row_selected_bg_on(cx, card_surface),
+                                        design::role::accent(cx),
+                                    )
+                                } else {
+                                    design::state::hover(cx, card_surface)
+                                })
+                            })
+                            .active(|this| {
+                                this.bg(if active {
+                                    design::state::press_on(
+                                        design::row_selected_bg_on(cx, card_surface),
+                                        design::role::accent(cx),
+                                    )
+                                } else {
+                                    design::state::press(cx, card_surface)
+                                })
+                            })
                             .on_click(cx.listener(move |this, _, window, cx| {
                                 this.select_remote_port(port_number, window, cx);
                                 this.focus_dialog_index(0, window, cx);
@@ -4804,70 +5467,6 @@ impl Shell {
                         ),
                     ));
             }
-            Dialog::HotbarBankName {
-                index,
-                input,
-                error,
-            } => {
-                let editing = index.is_some();
-                let title = if editing {
-                    "Rename Bank"
-                } else {
-                    "Create Bank"
-                };
-                let confirm = if editing { "Rename" } else { "Create" };
-                let field = self.render_dialog_input("dialog-bank-input", input, 0, cx);
-                card = self
-                    .dialog_shell(
-                        Role::Dialog,
-                        title,
-                        text_small("Use Alt+1 through Alt+9 to switch contexts in this bank."),
-                        window,
-                        cx,
-                    )
-                    .child(field)
-                    .when_some(error.clone(), |this, message| {
-                        this.child(text_small(message).text_color(error_ink))
-                    })
-                    .child(Self::dialog_actions(
-                        self.dialog_cancel_button("dialog-bank-cancel", 1, cx),
-                        self.dialog_button(
-                            "dialog-bank-confirm",
-                            confirm,
-                            2,
-                            ButtonVariant::Primary,
-                            cx.listener(|this, _, window, cx| {
-                                this.confirm_hotbar_bank_name(window, cx)
-                            }),
-                            cx,
-                        ),
-                    ));
-            }
-            Dialog::HotbarRemove { name, .. } => {
-                let title = format!("Remove Bank \"{name}\"?");
-                card = self
-                    .dialog_shell(
-                        Role::AlertDialog,
-                        title,
-                        text("This removes the bank and its slots. It does not remove contexts from your kubeconfig."),
-                        window,
-                        cx,
-                    )
-                    .aria_label(format!("Remove Bank {name}?"))
-                    .child(Self::dialog_actions(
-                        self.dialog_cancel_button("dialog-bank-remove-cancel", 0, cx),
-                        self.dialog_button(
-                            "dialog-bank-remove-confirm",
-                            "Remove",
-                            1,
-                            ButtonVariant::Danger,
-                            cx.listener(|this, _, window, cx| {
-                                this.confirm_hotbar_remove(window, cx)
-                            }),
-                            cx,
-                        ),
-                    ));
-            }
         }
 
         div()
@@ -4901,7 +5500,9 @@ impl Shell {
             return Vec::new();
         }
         let scrolled = (-f32::from(scroll.offset().y) / max_offset).clamp(0.0, 1.0);
-        let surface = design::colors(cx).elevated_surface_background;
+        // The card's own plane, by the same role the rows' washes are solved against. Naming
+        // the theme field here instead put the fade on a value nothing else in the list reads.
+        let surface = design::role::surface_raised(cx);
         let mut edges = Vec::new();
         if scrolled > 0.0 {
             edges.push(Self::palette_edge_fade(surface, true));
@@ -4954,6 +5555,10 @@ impl Shell {
                 // said which kind of line it was belonged to a screen reader. It goes through the
                 // same lane builder as its rows, so its label starts on their spine rather than
                 // two columns to their left.
+                //
+                // The accessible name stays in the case the group is written in. The uppercase
+                // is a visual treatment for a short set heading and shouting the name of the
+                // set at a screen reader as well buys nothing.
                 let heading = command.group.clone();
                 rows.push(
                     h_flex()
@@ -4976,15 +5581,23 @@ impl Shell {
                             // `section_text` is the one heading label this file owns; the size is
                             // restated, because `panels::search` draws its group head at
                             // `text::CAPTION` and the two overlays have to read as one component
-                            // family rather than as two palettes with different headings. What
-                            // separates a head from a row is the caption at semibold in the
-                            // tertiary ink — a set's name, quieter than every item in it — and
-                            // not a bigger number.
-                            section_text(command.group.clone())
+                            // family rather than as two palettes with different headings.
+                            //
+                            // Uppercase because this is the one line on the card that is allowed
+                            // it: a short set heading, which is exactly what `DESIGN.md` §2.3
+                            // reserves it for. Without it the head is an 11px semibold grey line
+                            // sitting two pixels above a 13px row, and it reads as an ordinary
+                            // row with nothing in it — the exact failure the eight pixels above
+                            // it and the `Role::Group` were there to prevent. The `+0.06em`
+                            // tracking §2.3 pairs with the uppercase has no API in this text
+                            // stack, the same gap `table_view/view.rs` reports for column headers,
+                            // so the case carries the separation by itself.
+                            section_text(command.group.to_uppercase())
                                 .text_size(design::text::CAPTION)
                                 .line_height(design::text::CAPTION_LINE_HEIGHT)
                                 .font_weight(design::text::SEMIBOLD)
-                                // Stated, not inherited — see the title row's count.
+                                // Stated, not inherited, for the reason the title row's
+                                // label states it.
                                 .text_color(design::role::fg_tertiary(cx))
                                 .into_any_element(),
                             None,
@@ -5095,9 +5708,19 @@ impl Shell {
                                 Some(
                                     Icon::new(command_icon)
                                         .xsmall()
-                                        // The mark is `fg.tertiary` on every row, selected or not: a
-                                        // command's glyph is its category, not its state.
-                                        .text_color(design::role::fg_tertiary(cx))
+                                        // The resting ink, on every row, selected or not.
+                                        //
+                                        // It was `fg_tertiary`, argued as "a command's glyph is
+                                        // its category, not its state". The observation is right
+                                        // and the conclusion is not: `fg.tertiary` is the PLACEHOLDER
+                                        // and count tier, so a mark at it beside an `fg.secondary`
+                                        // label reads as a disabled control - which is the same
+                                        // failure the title bar's cluster mark was, and the same one
+                                        // the sibling switcher card had already been corrected for.
+                                        // A category is not a reason to be quieter than the words
+                                        // beside it; it is the reason the mark does not change with
+                                        // selection, which is what this keeps.
+                                        .text_color(design::icon::resting(cx))
                                         .into_any_element(),
                                 ),
                                 Label::new(command_label)
@@ -5813,8 +6436,13 @@ mod tests {
             .split("fn render_command_rows")
             .nth(1)
             .expect("the command row renderer");
+        // The needle is the group name reaching the heading helper, not the case it is written
+        // in: the palette head wears the uppercase set-heading treatment `DESIGN.md` §2.3
+        // reserves for section heads, and that is a decision about case, while the decision this
+        // test holds is about role — a head built by `text_small` or `text_body` would satisfy
+        // an uppercase check and still be body text.
         assert!(
-            rows.contains("section_text(command.group.clone())"),
+            rows.contains("section_text(command.group.to_uppercase())"),
             "the group header takes the section role"
         );
     }

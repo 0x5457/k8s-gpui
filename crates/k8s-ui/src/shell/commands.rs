@@ -3,6 +3,29 @@
 //! Each command uses [`CommandRun`] to define how it runs. Action commands dispatch after the
 //! palette closes. Unavailable commands remain searchable and show why they cannot run.
 //!
+//! # What earns a row
+//!
+//! A row is for a command a person has a reason to reach for through the palette: a jump somewhere,
+//! an action on the object they picked, or a state they think in. A control that is already on
+//! screen under its own name does not get a second name here. The tab strip's menu says "Close All
+//! Tabs", the row's own menu is a button on the row, and the settings window has the button that
+//! opens the keymap file. Where such a
+//! control also owns a chord, the chord stays in the keymap and the surface keeps the name; a
+//! second label for it in the palette is how one command ends up under two names in two places.
+//!
+//! # Grouping
+//!
+//! Every row is grouped by the thing it acts on — the cluster, the resource the reader picked, the
+//! tab strip, the panels around them, a Helm release, the text being edited, the keymap
+//! file, the application — and the group is named after that thing, so a person who knows what they
+//! want to act on can predict where it is before they type a word. The blocks run in browse order
+//! and each is written once, so a row cannot end up outside its block.
+//!
+//! Ids are the internal namespace and are not part of this: they predate the grouping and several
+//! of them still say `pod.` for a command that acts on the whole resource view. They stay as they
+//! are because the shell's own tests name them, and renaming them is a mechanical follow-up that
+//! needs those tests updated with them.
+//!
 //! Icons follow one rule: the icon names the object a command acts on, and no two commands
 //! share one. A command that changes meaning must change icon, or two rows read as the same
 //! action. Glyphs come from the shared `gpui_kit::assets::IconName` set.
@@ -13,15 +36,14 @@ use gpui_kit::assets::IconName;
 use gpui_kit::{Action, Context, Entity, SharedString, Window};
 
 use super::{
-    ApplyYaml, CheckForUpdates, CloseAllTabs, CloseOtherTabs, CloseTab, CopySelectedPodName, Cut,
-    DescribeSelection, ExecSelection, FocusYaml, MoveTabLeft, MoveTabRight, NextTab,
-    OpenContextSwitcher, OpenEvents, OpenForwards, OpenLogs, OpenNamespaceSwitcher, OpenOverview,
-    OpenResourceKindSwitcher, OpenServiceAccount, PaletteScope, Paste, PauseUpdates,
-    PortForwardSelection, PreviousTab, Redo, RefreshView, ReloadKeymap, ReloadKubeconfigs,
-    RestartSelection, RestartToUpdate, ResumeUpdates, ScaleSelection, SearchResources, SelectAll,
-    Shell, TabView, ToggleCommandPalette, ToggleDock, ToggleHotbar, ToggleLeftPanel,
-    ToggleNotifications, TogglePinTab, ToggleRightPanel, ToggleTheme, Undo, UseDarkTheme,
-    UseKeymapPreset, UseLightTheme, UseSystemTheme,
+    ApplyYaml, CheckForUpdates, CloseTab, CopySelectedPodName, Cut, DescribeSelection,
+    ExecSelection, FocusYaml, MoveTabLeft, MoveTabRight, NextTab, OpenContextSwitcher, OpenEvents,
+    OpenForwards, OpenLogs, OpenNamespaceSwitcher, OpenOverview, OpenResourceKindSwitcher,
+    OpenServiceAccount, PaletteScope, Paste, PauseUpdates, PortForwardSelection, PreviousTab, Redo,
+    RefreshView, ReloadKeymap, ReloadKubeconfigs, RestartSelection, RestartToUpdate, ResumeUpdates,
+    ScaleSelection, SearchResources, SelectAll, Shell, TabView, ToggleDock, ToggleLeftPanel,
+    ToggleNotifications, ToggleRightPanel, ToggleTheme, Undo, UseDarkTheme, UseKeymapPreset,
+    UseLightTheme, UseSystemTheme,
 };
 use crate::design::Severity;
 use crate::panels::helm::{HELM_COMMAND_FAILED, HelmCapability, HelmReleaseAction, HelmView};
@@ -34,7 +56,7 @@ use crate::settings::OpenSettings;
 
 /// Reason shown when no updater capability is available.
 pub const UPDATER_UNAVAILABLE_REASON: &str =
-    "This build does not support application updates. Use a build with updater support.";
+    "This build cannot update itself. Download a newer k8s-gpui release and replace it.";
 pub const CHECK_FOR_UPDATES_COMMAND_ID: &str = "update.check";
 pub const RESTART_TO_UPDATE_COMMAND_ID: &str = "update.restart";
 
@@ -100,7 +122,7 @@ impl Command {
     /// True when the command starts something that removes state, so it must not
     /// own a bare key.
     pub fn is_destructive(&self) -> bool {
-        self.id.starts_with("helm.uninstall") || self.id.starts_with("hotbar.remove")
+        self.id.starts_with("helm.uninstall")
     }
 }
 
@@ -122,16 +144,16 @@ fn with_action_binding(mut command: Command) -> Command {
 pub const NATIVE_MENU_TITLES: &[(&str, &str)] = &[
     // App menu.
     ("Settings\u{2026}", "k8s_app::OpenSettings"),
-    ("Toggle Light/Dark Theme", "k8s_shell::ToggleTheme"),
-    ("Use Light Theme", "k8s_shell::UseLightTheme"),
-    ("Use Dark Theme", "k8s_shell::UseDarkTheme"),
+    ("Toggle light/dark theme", "k8s_shell::ToggleTheme"),
+    ("Use light theme", "k8s_shell::UseLightTheme"),
+    ("Use dark theme", "k8s_shell::UseDarkTheme"),
+    ("Use Lens keymap", "k8s_shell::UseKeymapPreset"),
+    ("Use VS Code keymap", "k8s_shell::UseKeymapPreset"),
     // File menu.
-    ("Refresh View", "k8s_shell::RefreshView"),
-    ("Reload Kubeconfigs", "k8s_shell::ReloadKubeconfigs"),
-    ("Reload Keymap", "k8s_shell::ReloadKeymap"),
-    ("Close Tab", "k8s_shell::CloseTab"),
-    ("Close Other Tabs", "k8s_shell::CloseOtherTabs"),
-    ("Close All Tabs", "k8s_shell::CloseAllTabs"),
+    ("Refresh view", "k8s_shell::RefreshView"),
+    ("Reload kubeconfigs", "k8s_shell::ReloadKubeconfigs"),
+    ("Reload keymap", "k8s_shell::ReloadKeymap"),
+    ("Close tab", "k8s_shell::CloseTab"),
     // Edit menu. The standard editing commands are menu entries, so they are
     // palette rows too.
     ("Undo", "k8s_shell::Undo"),
@@ -141,58 +163,64 @@ pub const NATIVE_MENU_TITLES: &[(&str, &str)] = &[
     ("Paste", "k8s_shell::Paste"),
     ("Select All", "k8s_shell::SelectAll"),
     ("Focus YAML", "k8s_shell::FocusYaml"),
-    ("Apply YAML Changes", "k8s_shell::ApplyYaml"),
-    ("Describe Selected Resource", "k8s_shell::DescribeSelection"),
+    ("Apply YAML changes…", "k8s_shell::ApplyYaml"),
+    ("Describe selected resource", "k8s_shell::DescribeSelection"),
     (
-        "Open Service Account for Selected Pod",
+        "Open Service Account for selected Pod",
         "k8s_shell::OpenServiceAccount",
     ),
-    ("Show Logs for Selected Pod", "k8s_shell::OpenLogs"),
-    ("Show Events for Selected Pod", "k8s_shell::OpenEvents"),
-    ("Exec in Selected Pod", "k8s_shell::ExecSelection"),
+    ("Show logs for selected Pod", "k8s_shell::OpenLogs"),
+    ("Show events for selected Pod", "k8s_shell::OpenEvents"),
+    ("Exec in selected Pod", "k8s_shell::ExecSelection"),
     (
-        "Start Port Forward for Selected Pod",
+        "Start port forward for selected Pod…",
         "k8s_shell::PortForwardSelection",
     ),
-    ("Restart Selected Resource", "k8s_shell::RestartSelection"),
-    ("Scale Selected Resource", "k8s_shell::ScaleSelection"),
+    ("Restart selected resource", "k8s_shell::RestartSelection"),
+    ("Scale selected resource…", "k8s_shell::ScaleSelection"),
     // The menu title is corrected to name every resource view, not only Pods.
     (
-        "Copy Selected Resource Name",
+        "Copy selected resource name",
         "k8s_shell::CopySelectedPodName",
     ),
-    // View menu.
-    ("Command Palette", "k8s_shell::ToggleCommandPalette"),
-    ("Switch Context", "k8s_shell::OpenContextSwitcher"),
-    ("Switch Namespace", "k8s_shell::OpenNamespaceSwitcher"),
+    // View menu. The command that opens the palette is a menu entry on macOS and nowhere else:
+    // a row for it inside the palette can only close the list the reader is looking at.
+    ("Switch context…", "k8s_shell::OpenContextSwitcher"),
+    ("Switch namespace…", "k8s_shell::OpenNamespaceSwitcher"),
     (
-        "Choose Resource Kind",
+        "Choose resource kind…",
         "k8s_shell::OpenResourceKindSwitcher",
     ),
-    ("Open Cluster Overview", "k8s_shell::OpenOverview"),
-    ("Open Port Forwards", "k8s_shell::OpenForwards"),
-    ("Search Cluster Resources", "k8s_shell::SearchResources"),
-    ("Toggle Sidebar", "k8s_shell::ToggleLeftPanel"),
-    ("Toggle Inspector", "k8s_shell::ToggleRightPanel"),
-    ("Toggle Dock", "k8s_shell::ToggleDock"),
-    ("Toggle Notifications", "k8s_shell::ToggleNotifications"),
+    ("Open cluster overview", "k8s_shell::OpenOverview"),
+    ("Open port forwards", "k8s_shell::OpenForwards"),
+    ("Search cluster resources…", "k8s_shell::SearchResources"),
+    ("Toggle sidebar", "k8s_shell::ToggleLeftPanel"),
+    ("Toggle inspector", "k8s_shell::ToggleRightPanel"),
+    ("Toggle dock", "k8s_shell::ToggleDock"),
+    ("Toggle notifications", "k8s_shell::ToggleNotifications"),
     // Window menu.
-    ("Previous Tab", "k8s_shell::PreviousTab"),
-    ("Next Tab", "k8s_shell::NextTab"),
-    ("Move Tab Left", "k8s_shell::MoveTabLeft"),
-    ("Move Tab Right", "k8s_shell::MoveTabRight"),
-    ("Toggle Pin Tab", "k8s_shell::TogglePinTab"),
+    ("Previous tab", "k8s_shell::PreviousTab"),
+    ("Next tab", "k8s_shell::NextTab"),
+    ("Move tab left", "k8s_shell::MoveTabLeft"),
+    ("Move tab right", "k8s_shell::MoveTabRight"),
 ];
 
 /// Menu entries with no palette row, and why.
 ///
-/// * The keymap preset is one action with one entry per preset, so the menu has
-///   two titles for it and the palette keeps the matching two.
+/// * The tab strip owns three of the commands the menu bar offers: its own menu says "Close Other
+///   Tabs", "Close All Tabs" and "Pin" under the words the reader is already choosing between, and
+///   Shift+F10 opens that menu from the keyboard, so a palette row repeated the same words in a
+///   second list a person has to search.
+/// * `ToggleCommandPalette` is the command that opens the palette. A row for it inside the palette
+///   can only close the list the reader is looking at, which is what Escape already does.
 /// * `Hide Others`, `Show All` and `Enter or Exit Full Screen` are dispatched by
 ///   the macOS-only menu bootstrap. On Linux and Windows a palette row would be a
 ///   no-op, so they stay menu-only.
 pub const MENU_ONLY_ACTIONS: &[&str] = &[
-    "k8s_shell::UseKeymapPreset",
+    "k8s_shell::CloseOtherTabs",
+    "k8s_shell::CloseAllTabs",
+    "k8s_shell::TogglePinTab",
+    "k8s_shell::ToggleCommandPalette",
     "k8s_app::HideOthers",
     "k8s_app::ShowAll",
     "k8s_app::ToggleFullScreen",
@@ -211,17 +239,10 @@ pub const PALETTE_ONLY_ACTIONS: &[&str] = &[
     // The resource table toolbar owns pause and resume.
     "k8s_shell::PauseUpdates",
     "k8s_shell::ResumeUpdates",
-    // The Hotbar rail owns its own toggle.
-    "k8s_hotbar::ToggleHotbar",
-    // The resource table owns refresh, its row menu, and its column sort: each acts on the
-    // table the reader is looking at, and the table already offers all three as toolbar
-    // controls with their chords beside them.
-    "k8s_ops::Refresh",
-    "k8s_table::OpenRowActions",
+    // The column header popover owns its sort and its "only problems" filter, and prints the
+    // chord beside both. An action that prints a key is a command, so it is a palette row too —
+    // otherwise the key is discoverable only by finding the popover.
     "k8s_table::SortSelectedColumn",
-    // prints a chord beside "Only problems" in the column-header popover.
-    // An action that prints a key is a command, so it is a palette row too — otherwise the
-    // key is discoverable only by finding the popover.
     "k8s_table::ToggleProblemsOnly",
     // Settings owns the theme choice, and the keymap owns the system theme.
     "k8s_shell::UseSystemTheme",
@@ -263,18 +284,6 @@ fn describe_action() -> Box<dyn Action> {
 
 fn close_tab_action() -> Box<dyn Action> {
     Box::new(CloseTab)
-}
-
-fn close_other_tabs_action() -> Box<dyn Action> {
-    Box::new(CloseOtherTabs)
-}
-
-fn close_all_tabs_action() -> Box<dyn Action> {
-    Box::new(CloseAllTabs)
-}
-
-fn toggle_pin_tab_action() -> Box<dyn Action> {
-    Box::new(TogglePinTab)
 }
 
 fn move_tab_left_action() -> Box<dyn Action> {
@@ -393,14 +402,6 @@ fn copy_selected_name_action() -> Box<dyn Action> {
     Box::new(CopySelectedPodName)
 }
 
-fn refresh_action() -> Box<dyn Action> {
-    Box::new(crate::table_view::Refresh)
-}
-
-fn open_row_actions_action() -> Box<dyn Action> {
-    Box::new(crate::table_view::OpenRowActions)
-}
-
 fn sort_selected_column_action() -> Box<dyn Action> {
     Box::new(crate::table_view::SortSelectedColumn)
 }
@@ -433,10 +434,6 @@ fn toggle_notifications_action() -> Box<dyn Action> {
     Box::new(ToggleNotifications)
 }
 
-fn toggle_command_palette_action() -> Box<dyn Action> {
-    Box::new(ToggleCommandPalette)
-}
-
 fn use_system_theme_action() -> Box<dyn Action> {
     Box::new(UseSystemTheme)
 }
@@ -463,10 +460,6 @@ fn paste_action() -> Box<dyn Action> {
 
 fn select_all_action() -> Box<dyn Action> {
     Box::new(SelectAll)
-}
-
-fn toggle_hotbar_action() -> Box<dyn Action> {
-    Box::new(ToggleHotbar)
 }
 
 fn reload_active_tab_action() -> Box<dyn Action> {
@@ -525,53 +518,28 @@ fn next_problem_action() -> Box<dyn Action> {
     Box::new(NextProblem)
 }
 
-/// Build the Hotbar commands.
-fn hotbar_commands() -> Vec<Command> {
-    use CommandRun as Run;
-    [
-        (
-            "hotbar.add_cluster",
-            "Add Current Context to Hotbar",
-            IconName::Plus,
-            Run::Shell(Shell::command_hotbar_add_cluster),
-        ),
-        (
-            "hotbar.create_bank",
-            "Create Hotbar Bank",
-            IconName::SquarePlus,
-            Run::Shell(Shell::command_hotbar_create_bank),
-        ),
-        (
-            "hotbar.rename_bank",
-            "Rename Hotbar Bank",
-            IconName::Pencil,
-            Run::Shell(Shell::command_hotbar_rename_bank),
-        ),
-        (
-            "hotbar.remove_bank",
-            "Remove Hotbar Bank",
-            IconName::Trash,
-            Run::Shell(Shell::command_hotbar_remove_bank),
-        ),
-        (
-            "hotbar.toggle",
-            "Toggle Hotbar",
-            IconName::PanelLeftClose,
-            Run::Action(toggle_hotbar_action as fn() -> Box<dyn Action>),
-        ),
-    ]
-    .into_iter()
-    .map(|(id, label, icon, run)| {
-        with_action_binding(Command {
-            id: SharedString::from(id),
-            label: SharedString::from(label),
-            group: SharedString::from("Hotbar"),
-            icon,
-            run,
-            binding: None,
+/// One command row as a group writes it: the id, the label a person reads, the icon, and how it
+/// runs.
+///
+/// The group is deliberately not part of the row. [`group`] names it once per block, so a
+/// command's category is decided where the block starts instead of being restated on every row,
+/// and a row cannot drift out of its block because it was pasted in the wrong place.
+type Row = (&'static str, &'static str, IconName, CommandRun);
+
+/// The commands that act on one target, under the name of that target.
+fn group(name: &'static str, rows: impl IntoIterator<Item = Row>) -> Vec<Command> {
+    rows.into_iter()
+        .map(|(id, label, icon, run)| {
+            with_action_binding(Command {
+                id: SharedString::from(id),
+                label: SharedString::from(label),
+                group: SharedString::from(name),
+                icon,
+                run,
+                binding: None,
+            })
         })
-    })
-    .collect()
+        .collect()
 }
 
 /// Build the command list from the available capabilities.
@@ -590,618 +558,548 @@ pub fn demo_commands_with_updater(helm_available: bool, updater_available: bool)
     )
 }
 
+/// Every product command, in the order a reader browses them.
+///
+/// The blocks are the information architecture: each one is a target a person already has in mind
+/// — the cluster they are pointed at, the resource they picked, the tabs they opened, the panels
+/// around them — and the block's name is that target. The palette is the app's only labelled
+/// surface, so where a command sits in this list is most of how a person learns that the command
+/// exists.
 pub fn demo_commands_with_capabilities(
     helm: HelmCapability,
     updater_available: bool,
 ) -> Vec<Command> {
     use CommandRun as Run;
-    let helm_run = if helm == HelmCapability::Available {
-        Run::Shell(Shell::command_open_helm)
-    } else {
-        Run::Unavailable {
-            badge: helm.label(),
-            reason: helm.reason().unwrap_or(HELM_COMMAND_FAILED),
-        }
-    };
-    let mut helm_commands = vec![(
-        "helm.open",
-        "Open Helm Releases",
+    let mut commands: Vec<Command> = Vec::new();
+
+    commands.extend(group(
+        "Cluster",
+        [
+            (
+                "navigation.context",
+                "Switch context…",
+                IconName::Server,
+                Run::Action(open_context_switcher_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "navigation.namespace",
+                "Switch namespace…",
+                IconName::Folder,
+                Run::Action(open_namespace_switcher_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "navigation.kind",
+                "Choose resource kind…",
+                IconName::ListTree,
+                Run::Action(open_resource_kind_switcher_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "view.overview",
+                "Open cluster overview",
+                IconName::Monitor,
+                Run::Action(open_overview_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "view.search_resources",
+                "Search cluster resources…",
+                IconName::Search,
+                Run::Action(search_resources_action as fn() -> Box<dyn Action>),
+            ),
+            // Reloads the active view and the catalog behind the sidebar, so it is the cluster's
+            // reload and not the table's: F5 already refreshes the table the reader is looking at,
+            // and the palette used to offer a second row for that under the name "Refresh
+            // Resources".
+            (
+                "view.refresh",
+                "Refresh view",
+                IconName::RefreshCw,
+                Run::Action(refresh_view_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "cluster.reload_kubeconfigs",
+                "Reload kubeconfigs",
+                IconName::FolderSync,
+                Run::Action(reload_kubeconfigs_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
+    // Everything a person does to the row they picked, and to the document that row opens. It is
+    // one block because it is one question — what can I do to this thing — and because the rows
+    // that used to answer it were spread across three blocks named after surfaces (`View`,
+    // `Actions`, `Inspector`), so "restart", "logs" and "copy yaml" never appeared together.
+    //
+    // Every row here dispatches an action that is also a control inside the panel, which is the
+    // point: the palette is the only way to run it when the reader is looking somewhere else, and
+    // the panel keeps the direct route. Two neighbours of the block are deliberately absent.
+    // `CancelApplyReview` is Escape inside the review strip, where the strip's own button reads
+    // "Keep editing", so a row named after cancelling a review would be ambiguous in a list with
+    // no review open. The port forward panel's Copy URL and Open in Browser are not actions at
+    // all: that panel answers Control+c and Control+o on its own selected row.
+    commands.extend(group(
+        "Resources",
+        [
+            (
+                "pod.describe",
+                "Describe selected resource",
+                IconName::Info,
+                Run::Action(describe_action),
+            ),
+            (
+                "pod.logs",
+                "Show logs for selected Pod",
+                IconName::BookOpen,
+                Run::Action(open_logs_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "pod.events",
+                "Show events for selected Pod",
+                IconName::Bell,
+                Run::Action(open_events_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "pod.exec",
+                "Exec in selected Pod",
+                IconName::Terminal,
+                Run::Action(exec_selection_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "pod.forward_port",
+                "Start port forward for selected Pod…",
+                IconName::Link,
+                Run::Action(port_forward_selection_action as fn() -> Box<dyn Action>),
+            ),
+            // Next to the command that starts one: a forward is only useful if the list of them is
+            // one keystroke away, and two rows in different blocks is how a person searches for
+            // "forward" twice.
+            (
+                "view.forwards",
+                "Open port forwards",
+                IconName::Table,
+                Run::Action(open_forwards_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "pod.service_account",
+                "Open Service Account for selected Pod",
+                IconName::UserCheck,
+                Run::Action(open_service_account_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "resource.restart",
+                "Restart selected resource",
+                IconName::RotateCw,
+                Run::Action(restart_selection_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "resource.scale",
+                "Scale selected resource…",
+                IconName::Replace,
+                Run::Action(scale_selection_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "pod.copy_name",
+                "Copy selected resource name",
+                IconName::Copy,
+                Run::Action(copy_selected_name_action),
+            ),
+            (
+                "yaml.focus",
+                "Focus YAML",
+                IconName::FileCode,
+                Run::Action(focus_yaml_action),
+            ),
+            (
+                "yaml.apply",
+                "Apply YAML changes…",
+                IconName::Check,
+                Run::Action(apply_yaml_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.confirm_apply",
+                "Confirm and apply changes",
+                IconName::CheckCheck,
+                Run::Action(confirm_apply_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.revert_yaml",
+                "Revert YAML",
+                IconName::ReplaceAll,
+                Run::Action(revert_yaml_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.copy_yaml",
+                "Copy YAML",
+                IconName::FileText,
+                Run::Action(copy_yaml_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.next_problem",
+                "Next YAML problem",
+                IconName::TriangleAlert,
+                Run::Action(next_problem_action as fn() -> Box<dyn Action>),
+            ),
+            // "Reload Active Tab" read as the centre tab strip, which has its own tabs and its own
+            // F5 meaning. The Inspector's reload is the panel's, and says so.
+            (
+                "inspector.reload_tab",
+                "Reload inspector tab",
+                IconName::PanelTop,
+                Run::Action(reload_active_tab_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.retry_metrics",
+                "Retry metrics",
+                IconName::Timer,
+                Run::Action(retry_metrics_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_1m",
+                "Metrics: last minute",
+                IconName::SignalLow,
+                Run::Action(metrics_range_1m_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_15m",
+                "Metrics: last 15 minutes",
+                IconName::SignalMedium,
+                Run::Action(metrics_range_15m_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_1h",
+                "Metrics: last hour",
+                IconName::SignalHigh,
+                Run::Action(metrics_range_1h_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_6h",
+                "Metrics: last 6 hours",
+                IconName::Signal,
+                Run::Action(metrics_range_6h_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_24h",
+                "Metrics: last 24 hours",
+                IconName::CalendarClock,
+                Run::Action(metrics_range_24h_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.metrics_7d",
+                "Metrics: last 7 days",
+                IconName::CalendarDays,
+                Run::Action(metrics_range_7d_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.toggle_value",
+                "Expand or collapse value",
+                IconName::TextWrap,
+                Run::Action(toggle_value_expansion_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.copy_value",
+                "Copy value",
+                IconName::Quote,
+                Run::Action(copy_value_action as fn() -> Box<dyn Action>),
+            ),
+            // These two answer to a chord inside the table, and a chord is not a command list.
+            // Someone who learns the app from the palette, or who wants to see what a key does,
+            // needs them here too. What did not need a row was the row's own `⋯` menu, which is a
+            // button on the row carrying Shift+F10 in its accessible name.
+            (
+                "table.sort_column",
+                "Sort selected column",
+                IconName::ListTodo,
+                Run::Action(sort_selected_column_action),
+            ),
+            (
+                "table.only_problems",
+                "Show only problems",
+                // The funnel, not the warning triangle. This command narrows the table, and
+                // The design's D5 gives the amber channel to rows that are actually in
+                // trouble — a warning glyph on a control that is merely on or off spends
+                // the reader's attention before they have read the label. The triangle
+                // stays on `inspector.next_problem`, which does point at a real defect.
+                IconName::ListFilter,
+                Run::Action(toggle_problems_only_action),
+            ),
+            // One row per state, not a toggle: a person who wants to stop a streaming table and a
+            // person who wants it streaming again are in the same place, and neither of them wants
+            // to discover which way round the state currently is before they can ask.
+            (
+                "pod.pause",
+                "Pause updates",
+                IconName::Pause,
+                Run::Action(pause_updates_action),
+            ),
+            (
+                "pod.resume",
+                "Resume updates",
+                IconName::Play,
+                Run::Action(resume_updates_action),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
+        "Tabs",
+        [
+            (
+                "tab.close",
+                "Close tab",
+                IconName::Close,
+                Run::Action(close_tab_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "tab.previous",
+                "Previous tab",
+                IconName::ChevronLeft,
+                Run::Action(previous_tab_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "tab.next",
+                "Next tab",
+                IconName::ChevronRight,
+                Run::Action(next_tab_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "tab.move_left",
+                "Move tab left",
+                IconName::ArrowLeft,
+                Run::Action(move_tab_left_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "tab.move_right",
+                "Move tab right",
+                IconName::ArrowRight,
+                Run::Action(move_tab_right_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
+        "Layout",
+        [
+            (
+                "sidebar.toggle",
+                "Toggle sidebar",
+                IconName::PanelLeftOpen,
+                Run::Action(toggle_left_panel_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "inspector.toggle",
+                "Toggle inspector",
+                IconName::PanelRightOpen,
+                Run::Action(toggle_right_panel_action),
+            ),
+            (
+                // The dock is the third panel of one group, and the other two name their edge
+                // in the `Panel*Open` family. A bare disclosure chevron is the language of a
+                // section header, so beside two panel glyphs it read as a fourth kind of row
+                // rather than as the bottom edge of the window.
+                "dock.toggle",
+                "Toggle dock",
+                IconName::PanelBottomOpen,
+                Run::Action(toggle_dock_action),
+            ),
+            (
+                "view.notifications",
+                "Toggle notifications",
+                IconName::BellRing,
+                Run::Action(toggle_notifications_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
         "Helm",
-        IconName::Archive,
-        helm_run,
-    )];
-    for (id, action, icon) in [
-        (
-            "helm.upgrade",
-            HelmReleaseAction::Upgrade,
-            IconName::ArrowUp,
-        ),
-        (
-            "helm.rollback",
-            HelmReleaseAction::Rollback,
-            IconName::Clock,
-        ),
-        (
-            "helm.uninstall",
-            HelmReleaseAction::Uninstall,
-            IconName::FileX,
-        ),
-    ] {
-        // A destructive action never owns a key: it is reachable from the palette,
-        // from the detail action bar, and from the release menu, and every one of
-        // them opens the confirmation dialog first.
-        helm_commands.push((
-            id,
-            action.command_label(),
-            "Helm",
-            icon,
-            if helm == HelmCapability::Available {
-                Run::ShellFn(helm_release_action_handler(action))
-            } else {
-                Run::Unavailable {
-                    badge: helm.label(),
-                    reason: helm.reason().unwrap_or(HELM_COMMAND_FAILED),
-                }
-            },
-        ));
-    }
-    let mut commands: Vec<Command> = [
-        (
-            "navigation.context",
-            "Switch Context",
-            "Navigation",
-            IconName::Server,
-            Run::Action(open_context_switcher_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "navigation.namespace",
-            "Switch Namespace",
-            "Navigation",
-            IconName::Folder,
-            Run::Action(open_namespace_switcher_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "navigation.kind",
-            "Choose Resource Kind",
-            "Navigation",
-            IconName::ListTree,
-            Run::Action(open_resource_kind_switcher_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.close",
-            "Close Tab",
-            "Tabs",
-            IconName::Close,
-            Run::Action(close_tab_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.close_others",
-            "Close Other Tabs",
-            "Tabs",
-            IconName::ListCollapse,
-            Run::Action(close_other_tabs_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.close_all",
-            "Close All Tabs",
-            "Tabs",
-            IconName::ListX,
-            Run::Action(close_all_tabs_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.toggle_pin",
-            // The native menu title, so the palette row and the menu entry name one action once.
-            "Toggle Pin Tab",
-            "Tabs",
-            IconName::Pin,
-            Run::Action(toggle_pin_tab_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.move_left",
-            "Move Tab Left",
-            "Tabs",
-            IconName::ArrowLeft,
-            Run::Action(move_tab_left_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.move_right",
-            "Move Tab Right",
-            "Tabs",
-            IconName::ArrowRight,
-            Run::Action(move_tab_right_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.previous",
-            "Previous Tab",
-            "Tabs",
-            IconName::ChevronLeft,
-            Run::Action(previous_tab_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "tab.next",
-            "Next Tab",
-            "Tabs",
-            IconName::ChevronRight,
-            Run::Action(next_tab_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.refresh",
-            "Refresh View",
-            "View",
-            IconName::RefreshCw,
-            Run::Action(refresh_view_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.overview",
-            "Open Cluster Overview",
-            "View",
-            IconName::Monitor,
-            Run::Action(open_overview_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.forwards",
-            "Open Port Forwards",
-            "View",
-            IconName::Table,
-            Run::Action(open_forwards_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.search_resources",
-            "Search Cluster Resources",
-            "View",
-            IconName::Search,
-            Run::Action(search_resources_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.command_palette",
-            "Command Palette",
-            "View",
-            IconName::Command,
-            Run::Action(toggle_command_palette_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "view.notifications",
-            "Toggle Notifications",
-            "View",
-            IconName::BellRing,
-            Run::Action(toggle_notifications_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.describe",
-            "Describe Selected Resource",
-            "View",
-            IconName::Info,
-            Run::Action(describe_action),
-        ),
-        (
-            "yaml.focus",
-            "Focus YAML",
-            "View",
-            IconName::FileCode,
-            Run::Action(focus_yaml_action),
-        ),
-        (
-            "yaml.apply",
-            "Apply YAML Changes",
-            "View",
-            IconName::Check,
-            Run::Action(apply_yaml_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.logs",
-            "Show Logs for Selected Pod",
-            "View",
-            IconName::BookOpen,
-            Run::Action(open_logs_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.events",
-            "Show Events for Selected Pod",
-            "View",
-            IconName::Bell,
-            Run::Action(open_events_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.pause",
-            "Pause Updates",
-            "View",
-            IconName::Pause,
-            Run::Action(pause_updates_action),
-        ),
-        (
-            "pod.resume",
-            "Resume Updates",
-            "View",
-            IconName::Play,
-            Run::Action(resume_updates_action),
-        ),
-        (
-            "pod.copy_name",
-            "Copy Selected Resource Name",
-            "View",
-            IconName::Copy,
-            Run::Action(copy_selected_name_action),
-        ),
-        // These four answer to a chord inside the table, but a chord is not a command list.
-        // Someone who learns the app from the palette, or who wants to see what a key does,
-        // needs them here too; requires every product command to be reachable.
-        (
-            "table.refresh",
-            "Refresh Resources",
-            "View",
-            IconName::CircleArrowRight,
-            Run::Action(refresh_action),
-        ),
-        (
-            "table.row_actions",
-            "Open Row Actions",
-            "View",
-            IconName::Ellipsis,
-            Run::Action(open_row_actions_action),
-        ),
-        (
-            "table.sort_column",
-            "Sort Selected Column",
-            "View",
-            IconName::ListTodo,
-            Run::Action(sort_selected_column_action),
-        ),
-        (
-            "table.only_problems",
-            "Show Only Problems",
-            "View",
-            // The funnel, not the warning triangle. This command narrows the table, and
-            // The design's D5 gives the amber channel to rows that are actually in
-            // trouble — a warning glyph on a control that is merely on or off spends
-            // the reader's attention before they have read the label. The triangle
-            // stays on `inspector.next_problem`, which does point at a real defect.
-            IconName::ListFilter,
-            Run::Action(toggle_problems_only_action),
-        ),
-        (
-            "edit.undo",
-            "Undo",
-            "Edit",
-            IconName::Undo,
-            Run::Action(undo_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "edit.redo",
-            "Redo",
-            "Edit",
-            IconName::Redo,
-            Run::Action(redo_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "edit.cut",
-            "Cut",
-            "Edit",
-            IconName::Scissors,
-            Run::Action(cut_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "edit.copy",
-            "Copy",
-            "Edit",
-            IconName::ClipboardCopy,
-            Run::Action(copy_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "edit.paste",
-            "Paste",
-            "Edit",
-            IconName::NotepadText,
-            Run::Action(paste_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "edit.select_all",
-            "Select All",
-            "Edit",
-            IconName::SquareDashedMousePointer,
-            Run::Action(select_all_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.exec",
-            "Exec in Selected Pod",
-            "Actions",
-            IconName::Terminal,
-            Run::Action(exec_selection_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.forward_port",
-            "Start Port Forward for Selected Pod",
-            "Actions",
-            IconName::Link,
-            Run::Action(port_forward_selection_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "pod.service_account",
-            "Open Service Account for Selected Pod",
-            "Actions",
-            IconName::UserCheck,
-            Run::Action(open_service_account_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "resource.restart",
-            "Restart Selected Resource",
-            "Actions",
-            IconName::RotateCw,
-            Run::Action(restart_selection_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "resource.scale",
-            "Scale Selected Resource",
-            "Actions",
-            IconName::Replace,
-            Run::Action(scale_selection_action as fn() -> Box<dyn Action>),
-        ),
-        // The Inspector group. Every row here dispatches an action the panel answers to, and every
-        // one of them is also a control inside the panel with its chord drawn beside it, so the
-        // palette is the searchable way in and the panel keeps the direct route. The keymap binds
-        // them in the `Inspector` context, which the palette is not, so a row draws no keycap
-        // instead of advertising a chord the palette cannot fire.
-        //
-        // A label here is also the label the Settings keyboard list shows, because that list reads
-        // these rows, so a rename touches one name and both surfaces keep it.
-        //
-        // Two neighbours of this group are deliberately absent. `CancelApplyReview` is Escape
-        // inside the review strip, where the strip's own button says "Keep editing": a global row
-        // named after cancelling a review would be ambiguous in a list that has no review open.
-        // The port forward panel's Copy URL and Open in Browser are not actions at all: that panel
-        // answers Control+c and Control+o on its selected row itself, so it has no action to
-        // dispatch and no row to advertise.
-        (
-            "inspector.reload_tab",
-            "Reload Active Tab",
-            "Inspector",
-            IconName::PanelTop,
-            Run::Action(reload_active_tab_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.retry_metrics",
-            "Retry Metrics",
-            "Inspector",
-            IconName::Timer,
-            Run::Action(retry_metrics_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_1m",
-            "Metrics: Last Minute",
-            "Inspector",
-            IconName::SignalLow,
-            Run::Action(metrics_range_1m_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_6h",
-            "Metrics: Last 6 Hours",
-            "Inspector",
-            IconName::Signal,
-            Run::Action(metrics_range_6h_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_24h",
-            "Metrics: Last 24 Hours",
-            "Inspector",
-            IconName::CalendarClock,
-            Run::Action(metrics_range_24h_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_7d",
-            "Metrics: Last 7 Days",
-            "Inspector",
-            IconName::CalendarDays,
-            Run::Action(metrics_range_7d_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_15m",
-            "Metrics: Last 15 Minutes",
-            "Inspector",
-            IconName::SignalMedium,
-            Run::Action(metrics_range_15m_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.metrics_1h",
-            "Metrics: Last Hour",
-            "Inspector",
-            IconName::SignalHigh,
-            Run::Action(metrics_range_1h_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.confirm_apply",
-            "Confirm and Apply Changes",
-            "Inspector",
-            IconName::CheckCheck,
-            Run::Action(confirm_apply_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.revert_yaml",
-            "Revert YAML",
-            "Inspector",
-            IconName::ReplaceAll,
-            Run::Action(revert_yaml_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.copy_yaml",
-            "Copy YAML",
-            "Inspector",
-            IconName::FileText,
-            Run::Action(copy_yaml_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.toggle_value",
-            "Expand or Collapse Value",
-            "Inspector",
-            IconName::TextWrap,
-            Run::Action(toggle_value_expansion_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.copy_value",
-            "Copy Value",
-            "Inspector",
-            IconName::Quote,
-            Run::Action(copy_value_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.next_problem",
-            "Next YAML Problem",
-            "Inspector",
-            IconName::TriangleAlert,
-            Run::Action(next_problem_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "keymap.create_or_show",
-            "Create or Open Keymap File",
-            "Keymap",
-            IconName::Braces,
-            Run::Shell(Shell::command_create_or_show_keymap),
-        ),
-        (
-            "keymap.reload",
-            "Reload Keymap",
-            "Keymap",
-            IconName::Keyboard,
-            Run::Action(reload_keymap_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "keymap.preset.lens",
-            "Use Lens Keymap",
-            "Keymap",
-            IconName::Star,
-            Run::Action(use_lens_keymap_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "keymap.preset.vscode",
-            "Use VS Code Keymap",
-            "Keymap",
-            IconName::Code,
-            Run::Action(use_vscode_keymap_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "sidebar.toggle",
-            "Toggle Sidebar",
-            "Panels",
-            IconName::PanelLeftOpen,
-            Run::Action(toggle_left_panel_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "inspector.toggle",
-            "Toggle Inspector",
-            "Panels",
-            IconName::PanelRightOpen,
-            Run::Action(toggle_right_panel_action),
-        ),
-        (
-            "dock.toggle",
-            "Toggle Dock",
-            "Panels",
-            IconName::ChevronUp,
-            Run::Action(toggle_dock_action),
-        ),
-        (
-            "theme.toggle",
-            "Toggle Light/Dark Theme",
-            "Application",
-            IconName::ArrowRightLeft,
-            Run::Action(toggle_theme_action),
-        ),
-        (
-            "theme.light",
-            "Use Light Theme",
-            "Application",
-            IconName::Eye,
-            Run::Action(light_theme_action),
-        ),
-        (
-            "theme.dark",
-            "Use Dark Theme",
-            "Application",
-            IconName::EyeOff,
-            Run::Action(dark_theme_action),
-        ),
-        (
-            "theme.system",
-            "Use System Theme",
-            "Application",
-            IconName::AppWindow,
-            Run::Action(use_system_theme_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            "cluster.reload_kubeconfigs",
-            "Reload Kubeconfigs",
-            "Application",
-            IconName::FolderSync,
-            Run::Action(reload_kubeconfigs_action as fn() -> Box<dyn Action>),
-        ),
-        (
-            CHECK_FOR_UPDATES_COMMAND_ID,
-            "Check for Updates",
-            "Application",
-            IconName::CloudDownload,
-            if updater_available {
-                Run::Action(check_for_updates_action as fn() -> Box<dyn Action>)
-            } else {
-                Run::Unavailable {
-                    badge: "Unavailable",
-                    reason: UPDATER_UNAVAILABLE_REASON,
-                }
-            },
-        ),
-        (
-            RESTART_TO_UPDATE_COMMAND_ID,
-            "Restart to Update",
-            "Application",
-            IconName::Power,
-            if updater_available {
-                Run::Action(restart_to_update_action as fn() -> Box<dyn Action>)
-            } else {
-                Run::Unavailable {
-                    badge: "Unavailable",
-                    reason: UPDATER_UNAVAILABLE_REASON,
-                }
-            },
-        ),
-        (
-            "settings.open",
-            "Settings\u{2026}",
-            "Application",
-            IconName::Settings,
-            Run::Action(open_settings_action as fn() -> Box<dyn Action>),
-        ),
-    ]
-    .into_iter()
-    .map(|(id, label, group, icon, run)| {
-        with_action_binding(Command {
-            id: SharedString::from(id),
-            label: SharedString::from(label),
-            group: SharedString::from(group),
-            icon,
-            run,
-            binding: None,
-        })
-    })
-    .collect::<Vec<_>>();
-    // The Helm group is built apart from the static list: its run depends on the
-    // detected client, and it must stay contiguous next to `helm.open`.
-    let helm_at = commands
-        .iter()
-        .position(|command| command.group.as_ref() == "Actions")
-        .unwrap_or(commands.len());
-    let helm_block = helm_commands
-        .into_iter()
-        .map(|(id, label, group, icon, run)| Command {
-            id: SharedString::from(id),
-            label: SharedString::from(label),
-            group: SharedString::from(group),
-            icon,
-            run,
-            binding: None,
-        })
-        .collect::<Vec<_>>();
-    for (offset, command) in helm_block.into_iter().enumerate() {
-        commands.insert(helm_at + offset, command);
-    }
-    commands.extend(hotbar_commands());
+        vec![
+            (
+                "helm.open",
+                "Open Helm releases",
+                IconName::Archive,
+                if helm == HelmCapability::Available {
+                    Run::Shell(Shell::command_open_helm)
+                } else {
+                    helm_missing_run(helm)
+                },
+            ),
+            // A release operation never owns a key: it opens the same confirmation dialog as the
+            // detail buttons and the release menu, and the destructive one must never be one
+            // keystroke away.
+            (
+                "helm.upgrade",
+                HelmReleaseAction::Upgrade.command_label(),
+                IconName::ArrowUp,
+                helm_release_run(helm, HelmReleaseAction::Upgrade),
+            ),
+            (
+                "helm.rollback",
+                HelmReleaseAction::Rollback.command_label(),
+                IconName::Clock,
+                helm_release_run(helm, HelmReleaseAction::Rollback),
+            ),
+            (
+                "helm.uninstall",
+                HelmReleaseAction::Uninstall.command_label(),
+                IconName::FileX,
+                helm_release_run(helm, HelmReleaseAction::Uninstall),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
+        "Edit",
+        [
+            (
+                "edit.undo",
+                "Undo",
+                IconName::Undo,
+                Run::Action(undo_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "edit.redo",
+                "Redo",
+                IconName::Redo,
+                Run::Action(redo_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "edit.cut",
+                "Cut",
+                IconName::Scissors,
+                Run::Action(cut_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "edit.copy",
+                "Copy",
+                IconName::ClipboardCopy,
+                Run::Action(copy_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "edit.paste",
+                "Paste",
+                IconName::NotepadText,
+                Run::Action(paste_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "edit.select_all",
+                "Select All",
+                IconName::SquareDashedMousePointer,
+                Run::Action(select_all_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
+        "Keymap",
+        [
+            (
+                "keymap.reload",
+                "Reload keymap",
+                IconName::Keyboard,
+                Run::Action(reload_keymap_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "keymap.preset.lens",
+                "Use Lens keymap",
+                IconName::Star,
+                Run::Action(use_lens_keymap_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                "keymap.preset.vscode",
+                "Use VS Code keymap",
+                IconName::Code,
+                Run::Action(use_vscode_keymap_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
+    commands.extend(group(
+        "Application",
+        [
+            (
+                "theme.toggle",
+                "Toggle light/dark theme",
+                IconName::ArrowRightLeft,
+                Run::Action(toggle_theme_action),
+            ),
+            // The theme is three values and the shell draws no control for any of them, so each
+            // value is a row: a keyboard user must be able to reach the one they want without
+            // opening Settings to find an Appearance page. Settings owns the setting; these are
+            // the fast path to it, not a second copy of it.
+            (
+                "theme.light",
+                "Use light theme",
+                IconName::Eye,
+                Run::Action(light_theme_action),
+            ),
+            (
+                "theme.dark",
+                "Use dark theme",
+                IconName::EyeOff,
+                Run::Action(dark_theme_action),
+            ),
+            (
+                "theme.system",
+                "Use system theme",
+                IconName::AppWindow,
+                Run::Action(use_system_theme_action as fn() -> Box<dyn Action>),
+            ),
+            (
+                CHECK_FOR_UPDATES_COMMAND_ID,
+                "Check for updates",
+                IconName::CloudDownload,
+                if updater_available {
+                    Run::Action(check_for_updates_action as fn() -> Box<dyn Action>)
+                } else {
+                    Run::Unavailable {
+                        badge: "Unavailable",
+                        reason: UPDATER_UNAVAILABLE_REASON,
+                    }
+                },
+            ),
+            (
+                RESTART_TO_UPDATE_COMMAND_ID,
+                "Restart to update",
+                IconName::Power,
+                if updater_available {
+                    Run::Action(restart_to_update_action as fn() -> Box<dyn Action>)
+                } else {
+                    Run::Unavailable {
+                        badge: "Unavailable",
+                        reason: UPDATER_UNAVAILABLE_REASON,
+                    }
+                },
+            ),
+            (
+                "settings.open",
+                "Settings\u{2026}",
+                IconName::Settings,
+                Run::Action(open_settings_action as fn() -> Box<dyn Action>),
+            ),
+        ],
+    ));
+
     commands
+}
+
+/// How a Helm release command runs.
+///
+/// It goes through the panel's own request path, so it opens the same confirmation dialog as the
+/// detail buttons and is refused for a release Helm is already working on.
+fn helm_release_run(helm: HelmCapability, action: HelmReleaseAction) -> CommandRun {
+    if helm == HelmCapability::Available {
+        CommandRun::ShellFn(helm_release_action_handler(action))
+    } else {
+        helm_missing_run(helm)
+    }
+}
+
+/// The run a Helm command gets when there is no client to run it with. The row stays searchable
+/// and says what the probe found and what to do about it.
+fn helm_missing_run(helm: HelmCapability) -> CommandRun {
+    CommandRun::Unavailable {
+        badge: helm.label(),
+        reason: helm.reason().unwrap_or(HELM_COMMAND_FAILED),
+    }
 }
 
 /// Starts a Helm release operation from the palette.
@@ -1502,7 +1400,8 @@ mod tests {
         }
     }
 
-    /// Close Tab and Close All Tabs used the same `x`; the whole-Tabs command needs its own glyph.
+    /// Two rows with one glyph read as the same action, and the tab rows are the easiest to
+    /// confuse: close, walk and reorder all sit in one strip.
     #[test]
     fn tab_close_commands_use_distinct_icons() {
         let commands = demo_commands(true);
@@ -1513,11 +1412,37 @@ mod tests {
                 .expect("command exists")
                 .icon
         };
-        let one = icon_for("tab.close");
-        assert_ne!(one, icon_for("tab.close_all"));
-        assert_ne!(icon_for("tab.close_others"), one);
-        // Reordering tabs and forwarding a port are different actions.
+        // Closing the tab the reader is on, walking the strip, and reordering are four different
+        // actions, and reordering a tab is not forwarding a port.
+        assert_ne!(icon_for("tab.close"), icon_for("tab.move_right"));
+        assert_ne!(icon_for("tab.move_right"), icon_for("tab.move_left"));
+        assert_ne!(icon_for("tab.next"), icon_for("tab.previous"));
         assert_ne!(icon_for("pod.forward_port"), icon_for("tab.move_right"));
+    }
+
+    /// A control that is already on screen under its own name does not get a palette row.
+    ///
+    /// These eight were each a second name for something else: three tab commands the tab strip's
+    /// own menu already offers, the table's row menu and the table's own refresh, the keymap file
+    /// button in Settings, and the palette opener itself. Every one of them
+    /// still runs from its chord or its control; what is gone is the second name.
+    #[test]
+    fn a_surface_that_already_names_the_command_owns_it() {
+        let commands = demo_commands(true);
+        for id in [
+            "tab.close_others",
+            "tab.close_all",
+            "tab.toggle_pin",
+            "table.refresh",
+            "table.row_actions",
+            "view.command_palette",
+            "keymap.create_or_show",
+        ] {
+            assert!(
+                !commands.iter().any(|command| command.id == id),
+                "{id} is named by the surface that owns it"
+            );
+        }
     }
 
     #[test]
@@ -1530,15 +1455,15 @@ mod tests {
     #[test]
     fn filtering_is_case_insensitive_and_matches_id() {
         let commands = demo_commands(true);
-        // The query is uppercase, and the Inspector group and its rows match it too, so the two
-        // rows that prove case-insensitive matching are named instead of listed in rank order.
+        // The query is uppercase, and the rows it matches span three groups, so the rows that
+        // prove case-insensitive matching are named instead of listed in rank order.
         let labels: Vec<&str> = filter_commands(&commands, "INSPECT")
             .iter()
             .map(|command| command.label.as_ref())
             .collect();
         for label in [
-            "Toggle Inspector",
-            "Open Service Account for Selected Pod",
+            "Toggle inspector",
+            "Open Service Account for selected Pod",
             "Copy YAML",
         ] {
             assert!(
@@ -1551,7 +1476,7 @@ mod tests {
             .iter()
             .map(|command| command.label.as_ref())
             .collect();
-        assert_eq!(labels, vec!["Toggle Dock"]);
+        assert_eq!(labels, vec!["Toggle dock"]);
     }
 
     fn ranked_test_command(id: &str, label: &str, group: &str) -> Command {
@@ -1586,7 +1511,7 @@ mod tests {
             .iter()
             .map(|command| command.label.as_ref())
             .collect();
-        assert!(labels.contains(&"Use Light Theme"));
+        assert!(labels.contains(&"Use light theme"));
         let reversed: Vec<&str> = filter_commands(&commands, "light theme")
             .iter()
             .map(|command| command.label.as_ref())
@@ -1601,7 +1526,7 @@ mod tests {
             .iter()
             .map(|command| command.label.as_ref())
             .collect();
-        assert!(labels.contains(&"Toggle Light/Dark Theme"));
+        assert!(labels.contains(&"Toggle light/dark theme"));
     }
 
     #[test]
@@ -1703,15 +1628,15 @@ mod tests {
     fn these_commands_dispatch_their_shell_action() {
         let commands = demo_commands(true);
         for (id, label, action) in [
-            ("view.refresh", "Refresh View", "k8s_shell::RefreshView"),
+            ("view.refresh", "Refresh view", "k8s_shell::RefreshView"),
             (
                 "view.forwards",
-                "Open Port Forwards",
+                "Open port forwards",
                 "k8s_shell::OpenForwards",
             ),
             (
                 "cluster.reload_kubeconfigs",
-                "Reload Kubeconfigs",
+                "Reload kubeconfigs",
                 "k8s_shell::ReloadKubeconfigs",
             ),
         ] {
@@ -1730,11 +1655,6 @@ mod tests {
     #[test]
     fn settings_commands_use_truthful_names() {
         let commands = demo_commands(true);
-        let keymap = commands
-            .iter()
-            .find(|command| command.id == "keymap.create_or_show")
-            .expect("keymap command exists");
-        assert_eq!(keymap.label, "Create or Open Keymap File");
         let settings = commands
             .iter()
             .find(|command| command.id == "settings.open")
@@ -1749,22 +1669,13 @@ mod tests {
     fn tab_and_yaml_commands_use_action_paths() {
         let commands = demo_commands(true);
         for (id, label, action_name) in [
-            ("tab.close", "Close Tab", "k8s_shell::CloseTab"),
-            (
-                "tab.close_others",
-                "Close Other Tabs",
-                "k8s_shell::CloseOtherTabs",
-            ),
-            ("tab.close_all", "Close All Tabs", "k8s_shell::CloseAllTabs"),
-            (
-                "tab.toggle_pin",
-                "Toggle Pin Tab",
-                "k8s_shell::TogglePinTab",
-            ),
-            ("tab.move_left", "Move Tab Left", "k8s_shell::MoveTabLeft"),
+            ("tab.close", "Close tab", "k8s_shell::CloseTab"),
+            ("tab.previous", "Previous tab", "k8s_shell::PreviousTab"),
+            ("tab.next", "Next tab", "k8s_shell::NextTab"),
+            ("tab.move_left", "Move tab left", "k8s_shell::MoveTabLeft"),
             (
                 "tab.move_right",
-                "Move Tab Right",
+                "Move tab right",
                 "k8s_shell::MoveTabRight",
             ),
             ("yaml.focus", "Focus YAML", "k8s_shell::FocusYaml"),
@@ -1803,7 +1714,7 @@ mod tests {
             .into_iter()
             .find(|command| command.id == "pod.forward_port")
             .expect("port forward command exists");
-        assert_eq!(command.label, "Start Port Forward for Selected Pod");
+        assert_eq!(command.label, "Start port forward for selected Pod…");
     }
 
     /// Labels must name what the command does in every resource view, not only Pods.
@@ -1811,21 +1722,21 @@ mod tests {
     fn labels_match_the_native_menu_and_the_resource_view() {
         let commands = demo_commands(true);
         for (id, label) in [
-            ("navigation.kind", "Choose Resource Kind"),
-            ("pod.copy_name", "Copy Selected Resource Name"),
+            ("navigation.kind", "Choose resource kind…"),
+            ("pod.copy_name", "Copy selected resource name"),
             (
                 "pod.service_account",
-                "Open Service Account for Selected Pod",
+                "Open Service Account for selected Pod",
             ),
-            ("hotbar.add_cluster", "Add Current Context to Hotbar"),
             ("settings.open", "Settings\u{2026}"),
-            ("theme.toggle", "Toggle Light/Dark Theme"),
-            ("keymap.preset.lens", "Use Lens Keymap"),
-            ("tab.next", "Next Tab"),
-            ("tab.previous", "Previous Tab"),
-            ("view.notifications", "Toggle Notifications"),
-            ("theme.system", "Use System Theme"),
-            ("view.command_palette", "Command Palette"),
+            ("theme.toggle", "Toggle light/dark theme"),
+            ("keymap.preset.lens", "Use Lens keymap"),
+            ("tab.next", "Next tab"),
+            ("tab.previous", "Previous tab"),
+            ("view.notifications", "Toggle notifications"),
+            ("theme.system", "Use system theme"),
+            // The panel's reload read as the centre tab strip's F5; it is the Inspector's.
+            ("inspector.reload_tab", "Reload inspector tab"),
         ] {
             let command = commands
                 .iter()
@@ -1858,16 +1769,6 @@ mod tests {
                     "{title} ({action}) needs exactly one palette row with the same title"
                 );
             }
-            for title in ["Use Lens Keymap", "Use VS Code Keymap"] {
-                assert!(
-                    commands.iter().any(|command| {
-                        command.label.as_ref() == title
-                            && command.action_name().as_deref()
-                                == Some("k8s_shell::UseKeymapPreset")
-                    }),
-                    "{title} needs a palette row with the same title"
-                );
-            }
             for command in &commands {
                 let Some(action) = command.action_name() else {
                     continue;
@@ -1885,30 +1786,31 @@ mod tests {
         }
     }
 
-    /// The Inspector group: one label per action, one row per action, and the Settings
-    /// keyboard list reads the same rows.
+    /// The panel's own commands: one label per action, one row per action, under the target they
+    /// act on rather than under the surface they happen to be drawn in, and the Settings keyboard
+    /// list reads the same rows.
     #[test]
-    fn inspector_commands_are_grouped_and_dispatch_inspector_actions() {
+    fn inspector_commands_dispatch_inspector_actions_and_are_grouped_by_target() {
         let commands = demo_commands(true);
         for (id, label) in [
-            ("inspector.reload_tab", "Reload Active Tab"),
-            ("inspector.retry_metrics", "Retry Metrics"),
-            ("inspector.metrics_1m", "Metrics: Last Minute"),
-            ("inspector.metrics_15m", "Metrics: Last 15 Minutes"),
-            ("inspector.metrics_1h", "Metrics: Last Hour"),
-            ("inspector.confirm_apply", "Confirm and Apply Changes"),
+            ("inspector.reload_tab", "Reload inspector tab"),
+            ("inspector.retry_metrics", "Retry metrics"),
+            ("inspector.metrics_1m", "Metrics: last minute"),
+            ("inspector.metrics_15m", "Metrics: last 15 minutes"),
+            ("inspector.metrics_1h", "Metrics: last hour"),
+            ("inspector.confirm_apply", "Confirm and apply changes"),
             ("inspector.revert_yaml", "Revert YAML"),
             ("inspector.copy_yaml", "Copy YAML"),
-            ("inspector.toggle_value", "Expand or Collapse Value"),
-            ("inspector.copy_value", "Copy Value"),
-            ("inspector.next_problem", "Next YAML Problem"),
+            ("inspector.toggle_value", "Expand or collapse value"),
+            ("inspector.copy_value", "Copy value"),
+            ("inspector.next_problem", "Next YAML problem"),
         ] {
             let command = commands
                 .iter()
                 .find(|command| command.id == id)
                 .unwrap_or_else(|| panic!("{id} is in the command palette"));
             assert_eq!(command.label, label);
-            assert_eq!(command.group, "Inspector");
+            assert_eq!(command.group, "Resources");
             let CommandRun::Action(make_action) = command.run else {
                 panic!("{id} dispatches the Inspector action");
             };
@@ -1995,17 +1897,17 @@ mod tests {
         for (id, label, icon) in [
             (
                 "helm.upgrade",
-                "Upgrade Selected Release",
+                "Upgrade selected release…",
                 IconName::ArrowUp,
             ),
             (
                 "helm.rollback",
-                "Roll Back Selected Release",
+                "Roll back selected release…",
                 IconName::Clock,
             ),
             (
                 "helm.uninstall",
-                "Uninstall Selected Release",
+                "Uninstall selected release…",
                 IconName::FileX,
             ),
         ] {
@@ -2104,7 +2006,7 @@ mod tests {
             .iter()
             .find(|command| command.id == CHECK_FOR_UPDATES_COMMAND_ID)
             .expect("Check for Updates command exists");
-        assert_eq!(check.label, "Check for Updates");
+        assert_eq!(check.label, "Check for updates");
         let CommandRun::Action(make_check) = check.run else {
             panic!("Check for Updates must dispatch the shell action");
         };
@@ -2114,7 +2016,7 @@ mod tests {
             .iter()
             .find(|command| command.id == RESTART_TO_UPDATE_COMMAND_ID)
             .expect("Restart to Update command exists");
-        assert_eq!(restart.label, "Restart to Update");
+        assert_eq!(restart.label, "Restart to update");
         let CommandRun::Action(make_restart) = restart.run else {
             panic!("Restart to Update must dispatch the shell action");
         };
@@ -2126,9 +2028,9 @@ mod tests {
             .into_iter()
             .find(|command| command.id == "view.forwards")
             .expect("view.forwards command exists");
-        assert_eq!(command.label, "Open Port Forwards");
+        assert_eq!(command.label, "Open port forwards");
         let CommandRun::Action(make_action) = command.run else {
-            panic!("Open Port Forwards must dispatch the shell action");
+            panic!("Open port forwards must dispatch the shell action");
         };
         assert_eq!(make_action().name(), "k8s_shell::OpenForwards");
     }
@@ -2140,7 +2042,7 @@ mod tests {
             .find(|command| command.id == "view.refresh")
             .expect("view.refresh command exists");
         let CommandRun::Action(make_action) = command.run else {
-            panic!("Refresh View must dispatch the shell action");
+            panic!("Refresh view must dispatch the shell action");
         };
         assert_eq!(make_action().name(), "k8s_shell::RefreshView");
     }
@@ -2151,9 +2053,9 @@ mod tests {
             .into_iter()
             .find(|command| command.id == "cluster.reload_kubeconfigs")
             .expect("reload kubeconfigs command exists");
-        assert_eq!(command.label, "Reload Kubeconfigs");
+        assert_eq!(command.label, "Reload kubeconfigs");
         let CommandRun::Action(make_action) = command.run else {
-            panic!("Reload Kubeconfigs must dispatch the shell action");
+            panic!("Reload kubeconfigs must dispatch the shell action");
         };
         assert_eq!(make_action().name(), "k8s_shell::ReloadKubeconfigs");
     }

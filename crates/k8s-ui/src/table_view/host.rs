@@ -176,6 +176,8 @@ pub struct TableHost {
     watch_started_at: Option<Instant>,
     live_initialized: bool,
     stale_reason: Option<String>,
+    /// When the watch that feeds these rows stopped answering.
+    stale_since: Option<Instant>,
     cached: Option<CachedRows>,
     /// Keeps the last rows when a failure cancels the watch.
     keep_rows_on_cancel: bool,
@@ -224,6 +226,7 @@ impl TableHost {
             watch_started_at: None,
             live_initialized: false,
             stale_reason: None,
+            stale_since: None,
             cached: None,
             keep_rows_on_cancel: false,
         }
@@ -415,6 +418,31 @@ impl TableHost {
         self.cached
     }
 
+    /// How long ago the rows on screen were written to disk, and `None` when
+    /// they are live rows.
+    ///
+    /// The cache is cleared the moment the live list lands, so this is the age of
+    /// the *displayed* rows and nothing else — which is the only age a reader who
+    /// is about to act on a row needs.
+    pub fn cache_age(&self) -> Option<Duration> {
+        self.cached.map(|cached| {
+            SystemTime::now()
+                .duration_since(cached.saved_at)
+                .unwrap_or_default()
+        })
+    }
+
+    /// How long the watch has been dead while rows are still on screen.
+    ///
+    /// `TableStatus::Stale` carries a reason and no clock, so without this a
+    /// frozen table and a table that died a second ago are the same word. A reader
+    /// deciding whether to trust the rows needs to know whether the freeze is
+    /// seconds old or an hour.
+    pub fn stale_age(&self) -> Option<Duration> {
+        self.stale_since
+            .map(|since| self.clock.now().saturating_duration_since(since))
+    }
+
     pub fn is_high_latency(&self) -> bool {
         matches!(self.controller_tier, Some(LatencyTier::HighLatency))
     }
@@ -453,6 +481,7 @@ impl TableHost {
     pub fn report_watch_error(&mut self, reason: String, cx: &mut Context<Self>) {
         // A failure next to visible rows degrades to Stale instead of Failed.
         self.stale_reason = self.snapshot().is_some().then(|| reason.clone());
+        self.stale_since = self.stale_reason.is_some().then(|| self.clock.now());
         // CancelWatch must not throw away rows the user can still read.
         self.keep_rows_on_cancel = self.stale_reason.is_some();
         self.dispatch(TableEvent::StoreError { reason }, cx);
@@ -518,6 +547,7 @@ impl TableHost {
         self.cancel_watch(false);
         self.live_initialized = false;
         self.stale_reason = None;
+        self.stale_since = None;
         let epoch = self.epoch.get().wrapping_add(1);
         self.epoch.set(epoch);
 

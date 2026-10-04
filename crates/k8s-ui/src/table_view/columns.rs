@@ -58,14 +58,19 @@ pub enum ColumnClass {
 
 /// Which ink a cell's value draws with, independent of its class.
 ///
-/// `Namespace` and `Node` are both 归属列 and read at the same weight, but the
-/// age in the corner of a row is the quietest thing on it. Colour is a property
-/// of the column's *role in the row*, so it is declared rather than inferred
-/// from "is this the last column".
+/// `Namespace` and `Node` are both 归属列 and read at the same weight, but a
+/// value the reader scans is not a placeholder. Colour is a property of the
+/// column's *role in the row*, so it is declared rather than inferred from
+/// "is this the last column".
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CellInk {
+    /// The row's identity: the name, and nothing else in the row.
     Primary,
+    /// An ordinary value: prose, identifiers, counts, ages. Everything that is
+    /// not the name and not a placeholder.
     Secondary,
+    /// A value that is an *absence* — the dash a projector draws for a field the
+    /// cluster never reported. Never a number, and never a column's own value.
     Tertiary,
 }
 
@@ -78,19 +83,33 @@ impl CellInk {
     /// that knows the mapping is a second place that can disagree about which
     /// level a count is.
     ///
-    /// A selected row steps every cell up one level. The selection is a wash over
-    /// the content surface, so a `fg.secondary` solved against the plain row is
-    /// solved against a surface the value is no longer on — the reader who has
-    /// five rows selected is reading exactly the cells that went quiet.
-    pub fn color(self, selected: bool, cx: &App) -> Hsla {
-        match (self, selected) {
-            (Self::Primary, _) => design::role::fg_primary(cx),
-            (Self::Secondary, false) => design::role::fg_secondary(cx),
-            (Self::Secondary, true) => design::role::fg_primary(cx),
-            (Self::Tertiary, false) => design::role::fg_tertiary(cx),
-            (Self::Tertiary, true) => design::role::fg_secondary(cx),
+    /// A selected row does **not** step a value up a level, which is what it used
+    /// to do, and the reason it was wrong is a solved fact rather than a taste:
+    /// `design::Roles::text_surfaces` solves every ink against the accent washes
+    /// the row states are painted with — the hover, the keyboard cursor and the
+    /// selection are all composites it grades `fg.secondary` and `fg.tertiary` on.
+    /// So the step-up was never buying legibility, and it was costing the one
+    /// thing the table is for: on a selected row every column became
+    /// `fg.primary`, so the name stopped being the only thing in the row that was.
+    pub fn color(self, cx: &App) -> Hsla {
+        match self {
+            Self::Primary => design::role::fg_primary(cx),
+            Self::Secondary => design::role::fg_secondary(cx),
+            Self::Tertiary => design::role::fg_tertiary(cx),
         }
     }
+}
+
+/// Reports whether a cell's value is the placeholder the cluster never reported.
+///
+/// The projectors answer a field they have no value for with [`NOT_REPORTED`]
+/// rather than with an empty cell, because an empty cell reads as a blank value.
+/// That makes the dash a *value* as far as the paint is concerned, and a dash is
+/// the one value in the table that must never wear its column's ink: `fg.tertiary`
+/// is the placeholder rung, and a placeholder in a number column drawn at body
+/// weight is a number the reader stops reading.
+pub fn is_absent(text: &str) -> bool {
+    text.trim() == NOT_REPORTED
 }
 
 /// How wide a column starts, and whether it grows into the room that is left.
@@ -161,7 +180,17 @@ const HEADER_INSET: f32 = 64.0;
 /// constant. Charging every column for it would push the seven-column Pod row from
 /// 1036 to 1144 and move §11.2's "all seven" breakpoint 108px to the right, to pay
 /// for a control four of the seven do not have.
-const HEADER_FILTER_INSET: f32 = HEADER_INSET + 24.0;
+///
+/// The trigger is [`design::size::HIT_MIN`] and the gap in front of it is
+/// [`design::space::XS`], which is what makes this the same control size it is
+/// drawn at everywhere else: a bare 24 here would be a fourth place to keep in
+/// step with a box that already has a token.
+/// A function, not a constant: `Pixels` addition and `f32::from` are not `const`
+/// operations, and the arithmetic is the point - the trigger box plus the gap in
+/// front of it, named rather than written as 24.
+fn header_filter_inset() -> f32 {
+    HEADER_INSET + f32::from(design::size::HIT_MIN) + f32::from(design::space::XS)
+}
 
 /// The columns whose values the filter grammar can enumerate, and which therefore
 /// carry a value-filter trigger in their header.
@@ -235,11 +264,10 @@ impl ResourceColumn {
     /// The narrowest this column is ever drawn, and the narrowest a reader can
     /// drag it to.
     ///
-    /// §10.2's `Ready` is 56 and `Restarts` is 64 because their *values* are
-    /// `1/2` and `3`, and a 56px cell offers a label 8px of type in: `RESTARTS`
-    /// came out as `REST…` and `AGE` as a bare `…`, on a row whose other six
-    /// headers were perfectly readable. Those widths are the width of the data,
-    /// not of the column, and a column has to carry both.
+    /// `max` of the two floors rather than either one: §10.2's numbers are the
+    /// width of the *data*, and a column narrower than its own header stops
+    /// being a word — see [`ResourceColumn::header_min_width`], which is where
+    /// `Ready` 56 and `Restarts` 64 losing that argument is explained.
     pub fn min_width(&self) -> f32 {
         self.default_width().max(self.header_min_width())
     }
@@ -248,7 +276,7 @@ impl ResourceColumn {
     ///
     /// The inset is the cell's own chrome, and a column that carries a
     /// value-filter trigger gives up more of its width to it than one that does
-    /// not — see `HEADER_FILTER_INSET`. §10.2's `Ready` is 56 and `Restarts` is
+    /// not — see `header_filter_inset`. §10.2's `Ready` is 56 and `Restarts` is
     /// 64 because their *values* are `1/2` and `3`, and a 56px cell offers a
     /// label 8px of type in: `RESTARTS` came out as `REST…` and `AGE` as a bare
     /// `…`, on a row whose other six headers were perfectly readable. Those widths
@@ -256,7 +284,7 @@ impl ResourceColumn {
     /// both.
     pub fn header_min_width(&self) -> f32 {
         let inset = if self.has_value_filter() {
-            HEADER_FILTER_INSET
+            header_filter_inset()
         } else {
             HEADER_INSET
         };
@@ -510,15 +538,20 @@ pub fn default_hidden_columns(kind: &str) -> &'static [&'static str] {
 /// Status        148  dot + word                   the grade's own
 /// Ready          56  right · tnum                 secondary
 /// Restarts       64  right · tnum                 secondary
-/// Age            48  right · tnum                 tertiary
+/// Age            48  right · tnum                 secondary
 /// Node          flex  tail ellipsis (min 170)     secondary
 /// ```
 ///
 /// The ink column is the row's hierarchy in one line: exactly one cell is the
-/// identity, the three numbers are data beside it, and the age is the quietest
-/// thing on the row. A column that does not appear in this table with a *new*
-/// ink needs a reason here, because a second place that decides a cell's colour
-/// is a second place that can disagree with this one.
+/// identity and everything else is data beside it. `Age` used to be the third
+/// rung, on the argument that it is the value every row has and the one a reader
+/// reads last — which is an argument about *how often* it is read, not about how
+/// loud it should be, and the two came apart: it is the one number a reader scans
+/// top to bottom to find the row that has been around longest. A dash for a
+/// missing age is still [`CellInk::Tertiary`]; the age itself is not. A column
+/// that does not appear in this table with a *new* ink needs a reason here,
+/// because a second place that decides a cell's colour is a second place that can
+/// disagree with this one.
 ///
 /// The three numbers that are too small for their own headers — `Ready`,
 /// `Restarts` and `Age` — are kept, because §10.2's arithmetic is the spec and
@@ -542,11 +575,16 @@ pub fn pod_columns() -> Vec<ResourceColumn> {
             ColumnPriority::Context,
             namespace_cell
         ),
+        // The status cell never reads this declaration — it draws its word in the
+        // health channel's own ink, solved against the row it is on. Declaring it
+        // `Primary` made the one non-name column in the row *look* like a second
+        // identity to anything that reads the declaration rather than the pixels,
+        // which is how `Secondary` came to be the only honest answer for it.
         column(
             "status",
             "Status",
             ColumnClass::Status,
-            CellInk::Primary,
+            CellInk::Secondary,
             ColumnWidth::Fixed(148.0),
             ColumnPriority::Health,
             status_cell,
@@ -559,13 +597,9 @@ pub fn pod_columns() -> Vec<ResourceColumn> {
             ColumnPriority::Detail,
             restarts_cell
         ),
-        // The one column Pod must not declare for itself. Every other kind takes
-        // its `Age` from [`age_column`], which is tertiary ink because the age is
-        // the quietest value on a row; Pod re-declared it through [`numeric!`],
-        // which is the ink of a comparable number. So the same field was a
-        // secondary cell on a Pod row and a tertiary one everywhere else, and
-        // switching kinds changed the emphasis of the corner of every row. One
-        // declaration, one ink, and the two cannot drift again.
+        // Every other kind takes its `Age` from [`age_column`], and Pod takes it
+        // from there too. Re-declaring it through [`numeric!`] is what let the same
+        // field be a different emphasis on a Pod row than on every other kind's.
         age_column(),
         // The one column that takes what is left. `Image` is 190px and pushes
         // this under 150 — the reason it is not in the default set
@@ -792,7 +826,7 @@ fn node_columns() -> Vec<ResourceColumn> {
             "status",
             "Status",
             ColumnClass::Status,
-            CellInk::Primary,
+            CellInk::Secondary,
             ColumnWidth::Fixed(120.0),
             ColumnPriority::Health,
             node_status_cell,
@@ -859,7 +893,7 @@ fn job_columns(namespaced: bool) -> Vec<ResourceColumn> {
             "status",
             "Status",
             ColumnClass::Status,
-            CellInk::Primary,
+            CellInk::Secondary,
             ColumnWidth::Fixed(120.0),
             ColumnPriority::Health,
             job_status_cell,
@@ -994,7 +1028,7 @@ fn namespace_columns() -> Vec<ResourceColumn> {
             "status",
             "Status",
             ColumnClass::Status,
-            CellInk::Primary,
+            CellInk::Secondary,
             ColumnWidth::Fixed(120.0),
             ColumnPriority::Health,
             namespace_status_cell,
@@ -1043,13 +1077,15 @@ fn namespace_column() -> ResourceColumn {
 }
 
 fn age_column() -> ResourceColumn {
-    // The age is the quietest value on the row: it is the one every row has and
-    // the one a reader reads last.
+    // `secondary`, not `tertiary`: the age is a number a reader scans down the
+    // column, and the quietest rung is reserved for values that are *absences*.
+    // A row with no creation timestamp still gets the dash, and the dash is
+    // still the placeholder's ink — [`is_absent`] is what draws it that way.
     column(
         "age",
         "Age",
         ColumnClass::Numeric,
-        CellInk::Tertiary,
+        CellInk::Secondary,
         ColumnWidth::Fixed(48.0),
         ColumnPriority::Detail,
         age_cell,

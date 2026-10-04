@@ -166,7 +166,14 @@ pub trait LogSubscription: 'static {
 pub type LogFactory = Rc<dyn Fn(LogRequest, LogOptions, LogSink) -> Box<dyn LogSubscription>>;
 
 pub enum InspectorUpdate {
-    Selection(Option<InspectorSelection>),
+    /// What the Inspector shows, and how many rows the table has selected.
+    ///
+    /// The count is here rather than fetched by the panel because the panel cannot
+    /// ask: the table owns the selection, and a push that carries only the anchor
+    /// leaves the Inspector showing one object out of eight with no way to say so —
+    /// which is the exact disagreement this carries. `0` means no selection; the
+    /// panel treats anything below 2 as a single object and stays quiet.
+    Selection(Option<InspectorSelection>, usize),
     Yaml(Option<String>),
 }
 

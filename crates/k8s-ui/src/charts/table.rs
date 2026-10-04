@@ -26,6 +26,8 @@ use super::TableRow;
 const TIME_COLUMNS: f32 = 9.0;
 /// Characters a value cell holds: `1023.00 GiB`.
 const VALUE_COLUMNS: f32 = 12.0;
+/// Height the empty table keeps, so the app's empty state has room to be centred
+/// in rather than hung from the top of a panel-sized box.
 const EMPTY_STATE_HEIGHT: f32 = 120.0;
 /// The time column always comes first and always holds the row order.
 const ORDER_COLUMN: usize = 0;
@@ -344,13 +346,18 @@ impl TableDelegate for ChartTableDelegate {
                     .overflow_hidden()
                     .text_ellipsis()
                     .whitespace_nowrap()
-                    .child(text),
+                    // The resource table's header treatment: CAPTION uppercased.
+                    // The aria label above keeps the spoken sentence case.
+                    .child(text.to_uppercase()),
             );
         if ordered {
             head = head.aria_description(ORDER_DESCRIPTION).child(
                 Icon::new(IconName::ArrowDown)
-                    .with_size(Size::XSmall)
-                    .text_color(design::role::fg_tertiary(cx)),
+                    .with_size(Size::Size(design::icon::IN_ROW))
+                    // Incidental: the marker repeats the order the column's spoken
+                    // label already names, and the table cannot be sorted by a
+                    // click, so it is decoration on the word rather than a control.
+                    .text_color(design::icon::incidental(cx)),
             );
         }
         head.into_any_element()

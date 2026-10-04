@@ -17,6 +17,11 @@ pub(crate) const XDG_RUNTIME_DIR_ENV: &str = "XDG_RUNTIME_DIR";
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpcError {
+    /// The runtime directory could not be resolved at all.
+    ///
+    /// Kept because [`socket_dir_from_env`] still returns a `Result` and a future caller may need
+    /// to fail loudly rather than fall back, but nothing constructs it today: the fallback is the
+    /// answer, and an error here used to mean "the single-instance guard did not run".
     #[error("Runtime directory is unavailable: {0}. Set XDG_RUNTIME_DIR and try again.")]
     RuntimeDir(String),
 
@@ -35,21 +40,45 @@ pub fn socket_dir(runtime_dir: &Path) -> PathBuf {
 }
 
 /// Resolve the runtime directory from the environment.
+///
+/// Falling back rather than erroring is the whole point. `XDG_RUNTIME_DIR` is not set in every
+/// session — an `ssh` command without a login shell, a systemd unit that does not import it, a
+/// container with a bare environment — and the caller maps an error here to "the guard failed",
+/// which means *the guard did not run*: a second launch opened a second window, each with its own
+/// cluster registry, and the reader ended up with two windows disagreeing about which cluster they
+/// are looking at. A private directory under the temp dir is a worse home for a lock file and a
+/// better answer than no lock at all.
 pub fn socket_dir_from_env() -> Result<PathBuf, IpcError> {
     if let Some(dir) = std::env::var_os(IPC_DIR_ENV).filter(|value| !value.is_empty()) {
         return Ok(PathBuf::from(dir));
     }
     #[cfg(target_os = "linux")]
     {
-        let runtime_dir = std::env::var_os(XDG_RUNTIME_DIR_ENV)
-            .filter(|value| !value.is_empty())
-            .ok_or_else(|| IpcError::RuntimeDir(format!("{XDG_RUNTIME_DIR_ENV} is not set")))?;
-        Ok(socket_dir(Path::new(&runtime_dir)))
+        if let Some(runtime_dir) =
+            std::env::var_os(XDG_RUNTIME_DIR_ENV).filter(|value| !value.is_empty())
+        {
+            return Ok(socket_dir(Path::new(&runtime_dir)));
+        }
     }
-    #[cfg(not(target_os = "linux"))]
+    Ok(user_temp_socket_dir())
+}
+
+/// The per-user private directory under the system temp dir.
+///
+/// The uid is in the path because the temp dir is shared: a fixed name would let the first user
+/// to launch own the lock and lock *everybody* else out, which is the same "another instance is
+/// already running" answer sent to a user who has not launched anything.
+#[allow(unsafe_code)]
+fn user_temp_socket_dir() -> PathBuf {
+    #[cfg(unix)]
     {
-        Ok(socket_dir(&std::env::temp_dir()))
+        // SAFETY: `geteuid` reads a process property. It takes no pointer, cannot fail, and cannot
+        // touch memory the caller owns.
+        let uid = unsafe { libc::geteuid() };
+        socket_dir(&std::env::temp_dir().join(format!("{uid}")))
     }
+    #[cfg(not(unix))]
+    socket_dir(&std::env::temp_dir())
 }
 
 #[cfg(unix)]
@@ -134,6 +163,26 @@ mod tests {
             mode_of(&dir),
             SOCKET_DIR_MODE,
             "directory must use mode 0700"
+        );
+    }
+
+    /// The guard must not disappear because the environment is thinner than usual.
+    ///
+    /// `XDG_RUNTIME_DIR` is absent in an `ssh` command without a login shell and in a bare
+    /// container. The old resolver returned an error there, the caller called that "the guard
+    /// failed", and a second launch opened a second window — two registries, two answers about
+    /// which cluster the reader is on. A fallback keeps the lock.
+    #[test]
+    fn the_resolver_always_produces_a_directory() {
+        assert!(
+            socket_dir_from_env().is_ok(),
+            "an unresolvable runtime dir must fall back, not fail the guard open"
+        );
+        let resolved = socket_dir_from_env().expect("a directory");
+        assert_eq!(
+            resolved.file_name().and_then(|name| name.to_str()),
+            Some(IPC_DIR_NAME),
+            "the resolved directory is still the app's own"
         );
     }
 

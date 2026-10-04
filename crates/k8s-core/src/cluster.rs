@@ -15,6 +15,7 @@ use tokio::task::JoinHandle;
 
 use crate::discovery::ResourceEntry;
 use crate::latency::{self, Latency, LatencyTracker};
+use serde::{Deserialize, Serialize};
 
 /// Interval for `/readyz` polling.
 pub(crate) const HEALTH_INTERVAL: Duration = Duration::from_secs(30);
@@ -25,7 +26,7 @@ const FNV_PRIME: u64 = 0x0000_0100_0000_01b3;
 /// Stable cluster ID for persisted preferences.
 ///
 /// The ID stays stable across processes and Rust versions.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct ClusterId(u64);
 
 impl ClusterId {
@@ -90,27 +91,65 @@ impl HealthAggregation {
 
 #[derive(Debug, thiserror::Error)]
 pub enum ClusterError {
-    #[error("Failed to read kubeconfig: {0}. Check the kubeconfig file and try again.")]
-    Kubeconfig(#[from] kube::config::KubeconfigError),
-
+    /// Nothing on this machine names a cluster.
+    ///
+    /// This is the arrival state of a brand new install and it is not a failure
+    /// to read anything, so it does not borrow the read-failure sentence. It
+    /// used to be `Kubeconfig(KubeconfigError::FindPath)` and came out as
+    /// "Failed to read kubeconfig: failed to find the path of kubeconfig. Check
+    /// the kubeconfig file and try again" — three claims, all wrong on a machine
+    /// that has no kubeconfig: nothing was read, there is no file to check, and
+    /// pressing the only offered control re-reads the same empty directory. The
+    /// reader is told where a kubeconfig goes and what to do about it instead.
     #[error(
-        "Failed to read kubeconfig directory {path}: {source}. Check the directory and try again."
+        "No kubeconfig was found. Clusters come from ~/.kube/config or the paths in KUBECONFIG. Create one, then reload kubeconfigs."
     )]
-    KubeconfigDirectory {
-        path: PathBuf,
-        #[source]
-        source: std::io::Error,
-    },
+    NoKubeconfig,
 
     #[error(transparent)]
     KubeconfigSource(#[from] KubeconfigSourceError),
 
+    /// Every path named was unreadable, which is a different problem from
+    /// naming none: the reader has kubeconfigs and they are broken.
+    ///
+    /// The sources are summarised as `path: cause` rather than printed whole,
+    /// because each one already ends in its own advice and the aggregate used to
+    /// append a third copy of it, stranding a full stop between the two.
     #[error(
-        "All kubeconfig sources failed: {}. Check each kubeconfig path and try again.",
-        .source_errors.iter().map(|error| error.to_string()).collect::<Vec<_>>().join(", ")
+        "No kubeconfig could be read: {}. Check the paths above, then reload kubeconfigs.",
+        .source_errors.iter().map(KubeconfigSourceError::summary).collect::<Vec<_>>().join("; ")
     )]
     KubeconfigSources {
         source_errors: Vec<KubeconfigSourceError>,
+    },
+
+    /// A file that was read, and that names no clusters at all.
+    ///
+    /// An empty `~/.kube/config` parses perfectly, so this used to arrive as an
+    /// empty registry and from there as the session's "The selected context is no
+    /// longer available. Reload Kubeconfigs and try again" — a sentence about a
+    /// context that was never selected, pointing at a button that re-reads the
+    /// same empty file and changes nothing. Naming the file is the one thing a
+    /// reader can act on.
+    #[error(
+        "The kubeconfig at {sources} names no contexts, so there is nothing to connect to. A \
+         context is one cluster's address and the credentials to reach it. Add one to the file, \
+         then reload kubeconfigs."
+    )]
+    NoContexts { sources: String },
+
+    /// Contexts the file names, and none of them could be turned into a client.
+    ///
+    /// The same dead end as [`Self::NoContexts`] with one step in front of it, and
+    /// the fix differs: these contexts exist and are wrong rather than absent.
+    #[error(
+        "None of the {count} contexts in {sources} could be used: {contexts}. Fix the context and \
+         cluster entries in kubeconfig, then reload kubeconfigs."
+    )]
+    NoUsableContexts {
+        sources: String,
+        count: usize,
+        contexts: String,
     },
 
     #[error(
@@ -148,11 +187,6 @@ pub enum ClusterError {
 
     #[error("Failed to run kubeconfig loading off the async runtime: {0}")]
     Blocking(#[source] tokio::task::JoinError),
-
-    #[error(
-        "A Tokio runtime is required to start the background task. Run this operation inside a Tokio runtime."
-    )]
-    NoRuntime,
 }
 
 /// A context that failed to load. Other contexts remain available.
@@ -170,6 +204,17 @@ pub struct KubeconfigSourceError {
     pub path: PathBuf,
     #[source]
     pub source: kube::config::KubeconfigError,
+}
+
+impl KubeconfigSourceError {
+    /// Where the file is and what went wrong, without this type's own advice.
+    ///
+    /// [`ClusterError::KubeconfigSources`] prints every source it could not
+    /// read and then says what to do about all of them, so quoting this type's
+    /// own sentence inside that one printed the same instruction once per file.
+    pub fn summary(&self) -> String {
+        format!("{}: {}", self.path.display(), self.source)
+    }
 }
 
 /// A connected cluster with a built client. Connections remain lazy.
@@ -328,34 +373,6 @@ impl Cluster {
             })
             .await
     }
-
-    /// Start the background health and latency monitor.
-    pub fn spawn_health_monitor(&self) -> Result<JoinHandle<()>, ClusterError> {
-        let cluster = self.clone();
-        let task = tokio::runtime::Handle::try_current()
-            .map_err(|_| ClusterError::NoRuntime)?
-            .spawn(async move {
-                let mut health_ticker = tokio::time::interval(HEALTH_INTERVAL);
-                let mut latency_ticker = tokio::time::interval(latency::PROBE_INTERVAL);
-                loop {
-                    tokio::select! {
-                        _ = health_ticker.tick() => {
-                            let Ok(_permit) = cluster.background_limiter().acquire_owned().await else {
-                                return;
-                            };
-                            cluster.refresh_health().await;
-                        }
-                        _ = latency_ticker.tick() => {
-                            let Ok(_permit) = cluster.background_limiter().acquire_owned().await else {
-                                return;
-                            };
-                            cluster.probe_latency().await;
-                        }
-                    }
-                }
-            });
-        Ok(task)
-    }
 }
 
 impl fmt::Debug for Cluster {
@@ -482,9 +499,7 @@ type LoadedKubeconfigSources = (
 
 fn load_sources_blocking(paths: Vec<PathBuf>) -> Result<LoadedKubeconfigSources, ClusterError> {
     if paths.is_empty() {
-        return Err(ClusterError::Kubeconfig(
-            kube::config::KubeconfigError::FindPath,
-        ));
+        return Err(ClusterError::NoKubeconfig);
     }
 
     let mut merged = Kubeconfig::default();
@@ -553,19 +568,61 @@ impl ClusterRegistry {
         .await)
     }
 
-    /// Load from `$KUBECONFIG` or `~/.kube/config`.
+    /// Load from `$KUBECONFIG` or `~/.kube/config`, and refuse an answer that
+    /// names nothing to connect to.
+    ///
+    /// Only this entry point does that, and it is the one the app reaches for
+    /// when it asks the machine what it has. [`Self::load`] and
+    /// [`Self::load_sources`] stay what they say on the tin — a registry of
+    /// whatever the named files contain, empty included — because a caller that
+    /// names its own file is reading that file and can see what it got.
     pub async fn load_default() -> Result<Self, ClusterError> {
-        let kube_dir = crate::paths::home_dir()
-            .map(|home| home.join(".kube"))
-            .unwrap_or_else(|| PathBuf::from(".kube"));
         let paths = tokio::task::spawn_blocking(crate::paths::default_kubeconfig_paths)
             .await
-            .map_err(ClusterError::Blocking)?
-            .map_err(|source| ClusterError::KubeconfigDirectory {
-                path: kube_dir,
-                source,
-            })?;
-        Self::load_sources(paths).await
+            .map_err(ClusterError::Blocking)?;
+        let registry = Self::load_sources(paths).await?;
+        registry.check_usable()?;
+        Ok(registry)
+    }
+
+    /// Turns "the files were read" into "there is something to connect to".
+    ///
+    /// An empty registry is a perfectly good value for a struct that models a
+    /// file, and a useless one for the answer the app asked for: the shell turns
+    /// it into a session with no cluster, and every surface that has to say why
+    /// then has to invent a reason from an absence. Both of the states below are
+    /// arrival states a new person can hit on a first run — an empty file, or one
+    /// naming only contexts that cannot be built — and each is reported with the
+    /// file and the move, because the move is not the same for both.
+    fn check_usable(&self) -> Result<(), ClusterError> {
+        if !self.clusters.is_empty() {
+            return Ok(());
+        }
+        let sources = if self.sources.is_empty() {
+            "the kubeconfig".to_owned()
+        } else {
+            self.sources
+                .iter()
+                .map(|path| path.display().to_string())
+                .collect::<Vec<_>>()
+                .join(", ")
+        };
+        if self.kubeconfig.contexts.is_empty() {
+            return Err(ClusterError::NoContexts { sources });
+        }
+        // Only the names, because every `ClusterError` here ends in its own
+        // advice and a third copy of it helps nobody. The sidebar already lists
+        // each failing context with its own reason beside it.
+        let contexts = self
+            .context_errors
+            .iter()
+            .map(|error| error.context.as_str())
+            .collect::<Vec<_>>();
+        Err(ClusterError::NoUsableContexts {
+            sources,
+            count: contexts.len(),
+            contexts: contexts.join(", "),
+        })
     }
 
     pub async fn load_sources(paths: Vec<PathBuf>) -> Result<Self, ClusterError> {
@@ -991,7 +1048,7 @@ current-context: alpha-ctx
             ),
         );
         let value = std::env::join_paths([&first, &second]).expect("join KUBECONFIG paths");
-        let paths = crate::paths::kubeconfig_paths(Some(value), None).expect("resolve paths");
+        let paths = crate::paths::kubeconfig_paths(Some(value), None);
 
         let registry = ClusterRegistry::load_sources(paths)
             .await
@@ -1117,7 +1174,7 @@ users:
         );
         let second = write_config(root.path(), "second.yaml", "contexts: [unterminated");
         let value = std::env::join_paths([&first, &second]).expect("join KUBECONFIG paths");
-        let paths = crate::paths::kubeconfig_paths(Some(value), None).expect("resolve paths");
+        let paths = crate::paths::kubeconfig_paths(Some(value), None);
 
         let registry = ClusterRegistry::load_sources(paths)
             .await
@@ -1158,8 +1215,15 @@ users:
         assert_eq!(source_errors.len(), 2);
         assert_eq!(source_errors[0].path, first);
         assert_eq!(source_errors[1].path, second);
-        assert!(error.to_string().contains("first.yaml"));
-        assert!(error.to_string().contains("second.yaml"));
+        let reported = error.to_string();
+        assert!(reported.contains("first.yaml"));
+        assert!(reported.contains("second.yaml"));
+        assert_eq!(
+            reported.matches("reload kubeconfigs").count(),
+            1,
+            "each source used to carry its own advice and the aggregate a third, so one \
+             unopenable path printed the instruction three times: {reported}"
+        );
     }
 
     #[cfg(unix)]
@@ -1242,6 +1306,64 @@ users:
         assert!(registry.current_cluster_id().is_none());
         assert!(snapshot.contexts.is_empty());
         assert!(snapshot.current_context.is_none());
+    }
+
+    /// A file that names no cluster is an arrival state the app can say out
+    /// loud, not an empty value to hand back and make the UI explain.
+    #[tokio::test]
+    async fn a_kubeconfig_naming_no_contexts_is_reported_not_handed_over_empty() {
+        let root = tempfile::tempdir().expect("temp directory");
+        let path = write_config(root.path(), "empty.yaml", "");
+
+        let registry = ClusterRegistry::load_sources(vec![path.clone()])
+            .await
+            .expect("the file itself reads");
+        let error = registry
+            .check_usable()
+            .expect_err("nothing in the file can be connected to");
+
+        assert!(matches!(error, ClusterError::NoContexts { .. }));
+        let reported = error.to_string();
+        assert!(
+            reported.contains("empty.yaml"),
+            "the reader has to be told which file to open: {reported}"
+        );
+    }
+
+    /// Contexts that are all broken is the same dead end with a different fix,
+    /// so the error names them rather than saying nothing is usable.
+    #[tokio::test]
+    async fn contexts_that_all_fail_to_load_are_named_in_the_error() {
+        let contents = r#"
+apiVersion: v1
+kind: Config
+clusters: []
+contexts:
+- name: orphan-ctx
+  context:
+    cluster: nowhere
+    user: nobody
+users: []
+current-context: orphan-ctx
+"#;
+        let path = write_kubeconfig("all-broken", contents);
+
+        let registry = ClusterRegistry::load(&path).await.expect("the file parses");
+        let error = registry
+            .check_usable()
+            .expect_err("no context in the file can be connected to");
+
+        assert!(matches!(error, ClusterError::NoUsableContexts { .. }));
+        let reported = error.to_string();
+        assert!(reported.contains("orphan-ctx"), "{reported}");
+        assert_eq!(
+            reported
+                .matches("Fix the context and cluster entries")
+                .count(),
+            1,
+            "the aggregate says the fix once. It used to be able to repeat one per context \
+             because each context's own sentence was quoted whole: {reported}"
+        );
     }
 
     #[tokio::test]
@@ -1427,26 +1549,6 @@ current-context: good-ctx
         drop(registry);
         tokio::task::yield_now().await;
         assert!(handle.is_finished());
-    }
-
-    #[tokio::test]
-    async fn health_monitor_probes_latency_at_startup() {
-        let cluster = test_cluster().await;
-        let task = cluster
-            .spawn_health_monitor()
-            .expect("runtime is available");
-        tokio::time::timeout(Duration::from_secs(5), async {
-            let mut receiver = cluster.latency();
-            loop {
-                if receiver.borrow_and_update().probes > 0 {
-                    break;
-                }
-                receiver.changed().await.expect("sender remains alive");
-            }
-        })
-        .await
-        .expect("the first RTT probe runs at startup");
-        task.abort();
     }
 
     #[tokio::test]

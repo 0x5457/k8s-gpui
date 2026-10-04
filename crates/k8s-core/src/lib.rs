@@ -9,7 +9,6 @@ pub mod discovery;
 pub mod fuzzy;
 pub mod helm;
 pub mod history;
-pub mod hotbar;
 pub mod ipc;
 pub mod kubectl_shell;
 pub mod latency;

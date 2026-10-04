@@ -3,9 +3,10 @@
 //! The tree uses a discovery catalog or demo data. The caller owns the set of
 //! collapsed row IDs, which keeps catalog data separate from UI state.
 //!
-//! The core API group keeps its own row so its Kinds stay visible. A cluster with
-//! many API groups lists them behind one collapsed container row instead, so the
-//! sidebar does not turn into a wall of group names.
+//! The sidebar's first row is **Workloads**: the kinds you act on, pinned out of the
+//! API groups that happen to hold them. The core group and the API-group container
+//! sit under it, so a cluster with many CRD groups still cannot bury the kinds a
+//! reader opens daily behind a container and a list of group names.
 
 use std::cmp::Reverse;
 use std::collections::{HashMap, HashSet};
@@ -21,6 +22,35 @@ use crate::design;
 
 /// Label of the single container row that holds every non-core API group.
 const API_GROUPS_LABEL: &str = "All API groups";
+
+/// The kinds the pinned **Workloads** row holds, in the order they appear under it.
+///
+/// Grouping the catalog by API group answers an address, and the reader is not looking for an
+/// address. `Pod` is in the core group and eleventh in the order the API server returns core
+/// resources in, `Deployment` is under `apps`, `CronJob` is under `batch`, and reaching any of
+/// them meant opening a container and then reading a list of group names to find which one holds
+/// the thing you can already name. Kubernetes already has the category these seven belong to and
+/// engineers already say the word, so the row says `Workloads` rather than ranking kinds by a
+/// guess about what this reader likes.
+const WORKLOAD_KINDS: &[&str] = &[
+    "Pod",
+    "Deployment",
+    "StatefulSet",
+    "DaemonSet",
+    "ReplicaSet",
+    "Job",
+    "CronJob",
+];
+
+/// The name the pinned group carries in the model.
+///
+/// It is not an API group and must never be mistaken for one, so it is the one identifier no
+/// DNS subdomain — which is what every real group name is — can be. [`is_pinned_group`] reads
+/// this, and the group row's id is derived from it like any other.
+const WORKLOADS_GROUP: &str = "~workloads";
+
+/// What the pinned group row reads.
+const WORKLOADS_LABEL: &str = "Workloads";
 
 /// The glyph a tree row wears for a kind, at sidebar size.
 ///
@@ -43,6 +73,10 @@ const API_GROUPS_LABEL: &str = "All API groups";
 /// A kind outside the twelve falls back to [`design::kind_icon`], which answers "which category",
 /// and to its own documented stand-in — the same contract `kind_icon_path` keeps, with the letter
 /// drawn by the caller.
+///
+/// The glyph is drawn at [`SIDEBAR_MARK_LANE`], and that is the whole of the "one weight, one size"
+/// contract: a caller that reaches for `Icon::xsmall()` puts a 12px mark in a 14px lane and the
+/// column stops lining up optically, which is the one thing a mark column has to do.
 pub fn sidebar_kind_mark(kind: &str) -> IconName {
     // Kubernetes pluralises in a list and a caller may hand over either, and `ConfigMaps` stripping
     // to `ConfigMap` is the same kind rather than a different one. Same normalisation
@@ -57,7 +91,9 @@ pub fn sidebar_kind_mark(kind: &str) -> IconName {
         "deployment" => IconName::Layers,
         "statefulset" => IconName::Database,
         "replicaset" => IconName::Boxes,
-        "daemonset" => IconName::Server,
+        // A machine glyph would be the shape this map now reserves for a kube
+        // context, so a workload in the same column as a Node read as a cluster.
+        "daemonset" => IconName::Infinity,
         "job" => IconName::Play,
         "cronjob" => IconName::Clock,
         "node" => IconName::Cpu,
@@ -92,6 +128,17 @@ pub enum TreeRowKind {
 pub struct TreeRow {
     pub id: SharedString,
     pub label: SharedString,
+    /// The trailing count, already formatted, or `None` where there is no live
+    /// rollup — which is a different thing from zero and reads as nothing rather
+    /// than as `0`.
+    ///
+    /// It is `Option` because the catalog path does not plumb per-kind counts yet
+    /// and a row that said `0` would be claiming a fact nobody measured. The
+    /// renderer draws it in [`SIDEBAR_COUNT_LANE`] at `text::CAPTION` in
+    /// `fg_tertiary`, tabular, right-aligned: it is the one number on the row and
+    /// the reader scans it down the column, so it gets the digits that line up
+    /// and the quietest ink, and never a badge — a badge here would put colour on
+    /// sixty-nine rows to say "there is a number".
     pub detail: Option<SharedString>,
     pub depth: u8,
     pub kind: TreeRowKind,
@@ -110,6 +157,68 @@ pub struct TreeRow {
 impl TreeRow {
     pub fn expandable(&self) -> bool {
         matches!(self.kind, TreeRowKind::Cluster | TreeRowKind::Group)
+    }
+
+    /// The whole of a row's identity, for its hover hint and its accessible
+    /// description.
+    ///
+    /// The visible label is elided, and at 236px a third-level API kind genuinely
+    /// has to be: the catalog holds `ValidatingAdmissionPolicy` and
+    /// `ValidatingAdmissionPolicyBinding` in one group, and after
+    /// [`kind_row_label`] has spent the group's own words on the width those two
+    /// still meet — so the hint has to name what the label had to leave out, or a
+    /// tooltip that repeats the visible label tells the reader nothing they did
+    /// not already have.
+    ///
+    /// It lives here rather than in the renderer for the same reason the row's
+    /// lanes do: the hint is a claim about the *row*, and a row whose label was
+    /// shortened and a hint that does not know about it are two answers to one
+    /// question. The renderer reads this and adds nothing.
+    ///
+    /// Unwired: `shell/panels.rs` still carries its own copy of this string
+    /// beside the row it draws. It is to be deleted in the same edit that calls
+    /// this, and until then the two can disagree — which is the whole reason the
+    /// method moved.
+    #[allow(dead_code)]
+    pub fn hint(&self) -> SharedString {
+        let label = self.label.as_ref();
+        let Some(kind) = self.resource_kind.as_deref() else {
+            return label.into();
+        };
+        let mut hint = String::with_capacity(label.len() + kind.len() + 8);
+        // A label that already ends in its own kind is a disambiguated one
+        // (`Policies · Policy`), so the kind is the part the row is *missing* and
+        // the prefix is what is left to keep.
+        if label.ends_with(kind) {
+            hint.push_str(label.trim_end_matches(kind).trim_end_matches(" · "));
+        } else {
+            hint.push_str(label);
+        }
+        // The group is the other half of a kind's identity and the label has
+        // already spent it: a kind under `storage.k8s.io` and the same kind under
+        // `certificates.k8s.io` are two rows with one name. The core group is
+        // named `core` and reads as a heading rather than as an address, so it
+        // is left off.
+        if let Some(group) = self.resource_gvk.as_ref().map(|gvk| gvk.group.as_str())
+            && !group.is_empty()
+        {
+            hint.push_str(" · ");
+            hint.push_str(group);
+        }
+        hint.into()
+    }
+
+    /// Whether this row is the head of a group, and so draws the sidebar's one
+    /// sticky heading.
+    ///
+    /// A `Cluster` row is not one: the shell's toolbar names the context, so the
+    /// cluster never reaches the sidebar and a head that can be drawn for it is a
+    /// head that will one day be drawn for a row the reader cannot see.
+    ///
+    /// Unwired, like [`TreeRow::hint`].
+    #[allow(dead_code)]
+    pub fn is_group_head(&self) -> bool {
+        matches!(self.kind, TreeRowKind::Group)
     }
 }
 
@@ -145,6 +254,15 @@ fn renumber_siblings(rows: &mut [TreeRow]) {
     }
 }
 
+/// Formats a rollup count for a row's [`TreeRow::detail`].
+///
+/// One function so that every count in the sidebar is grouped the same way and
+/// every `None` stays a `None`: four call sites each reaching for
+/// `design::format::count` is four places for the thousands separator to drift.
+fn count_detail(count: Option<usize>) -> Option<SharedString> {
+    count.map(|count| design::format::count(count).into())
+}
+
 struct KindNode {
     label: SharedString,
     kind: SharedString,
@@ -162,7 +280,7 @@ impl KindNode {
         TreeRow {
             id,
             label: self.label.clone(),
-            detail: self.count.map(|count| design::format::count(count).into()),
+            detail: count_detail(self.count),
             depth,
             kind: TreeRowKind::Kind,
             expanded: false,
@@ -200,6 +318,11 @@ fn is_core_group(group: &GroupNode) -> bool {
     group.name == CORE_GROUP
 }
 
+/// Whether a group is the pinned **Workloads** row rather than one the catalog named.
+fn is_pinned_group(group: &GroupNode) -> bool {
+    group.name == WORKLOADS_GROUP
+}
+
 impl ClusterNode {
     fn count(&self) -> Option<usize> {
         self.groups
@@ -208,8 +331,13 @@ impl ClusterNode {
     }
 
     /// The groups the API-group container holds, in catalog order.
+    ///
+    /// The pinned group is not one of them: it has its own row above the container, and a
+    /// group that is both pinned and folded is the same row drawn twice.
     fn api_groups(&self) -> impl Iterator<Item = &GroupNode> {
-        self.groups.iter().filter(|group| !is_core_group(group))
+        self.groups
+            .iter()
+            .filter(|group| !is_core_group(group) && !is_pinned_group(group))
     }
 
     /// Number of API groups the container would hold.
@@ -231,9 +359,7 @@ impl ClusterNode {
             rows.push(TreeRow {
                 id,
                 label: group.label.clone(),
-                detail: group
-                    .count()
-                    .map(|count| design::format::count(count).into()),
+                detail: count_detail(group.count()),
                 depth,
                 kind: TreeRowKind::Group,
                 expanded,
@@ -283,6 +409,58 @@ fn cluster(name: &str, groups: Vec<GroupNode>) -> ClusterNode {
     ClusterNode {
         name: SharedString::from(name),
         groups,
+    }
+}
+
+/// Moves [`WORKLOAD_KINDS`] out of the API groups that hold them and into one pinned group.
+///
+/// Two things fall out of the move and neither is optional. An API group that held nothing else
+/// is *removed*, because a disclosure row that opens onto nothing is a control that lies and the
+/// catalog has plenty of groups whose only member is a Deployment. And the kinds are put in
+/// [`WORKLOAD_KINDS`] order rather than the order three different groups happened to answer in,
+/// so the row reads the way it is read out loud.
+///
+/// Returns `None` when this cluster offers none of them, and the caller must not pin an empty
+/// group in that case for the same reason.
+fn lift_workloads(groups: &mut [GroupNode]) -> Option<GroupNode> {
+    let mut kinds: Vec<KindNode> = Vec::new();
+    for group in groups.iter_mut() {
+        let mut position = 0;
+        while position < group.kinds.len() {
+            if WORKLOAD_KINDS.contains(&group.kinds[position].kind.as_ref()) {
+                kinds.push(group.kinds.remove(position));
+            } else {
+                position += 1;
+            }
+        }
+    }
+    if kinds.is_empty() {
+        return None;
+    }
+    kinds.sort_by_key(|kind| {
+        WORKLOAD_KINDS
+            .iter()
+            .position(|known| *known == kind.kind.as_ref())
+            .unwrap_or(usize::MAX)
+    });
+    Some(GroupNode {
+        name: SharedString::from(WORKLOADS_GROUP),
+        label: SharedString::from(WORKLOADS_LABEL),
+        kinds,
+    })
+}
+
+/// Lifts the workload kinds into their pinned row and drops the groups they emptied.
+///
+/// One cluster's group list, in place. [`ResourceTree::from_catalog`] and [`ResourceTree::demo`]
+/// both answer with this shape, so a test that reads the demo tree reads the tree a real cluster
+/// builds: a fixture that grew its own group list is a second answer to the same question, and it
+/// is the one every screenshot and every assertion in the test suite is taken against.
+fn pin_workloads(groups: &mut Vec<GroupNode>) {
+    let workloads = lift_workloads(groups);
+    groups.retain(|group| !group.kinds.is_empty());
+    if let Some(workloads) = workloads {
+        groups.insert(0, workloads);
     }
 }
 
@@ -446,9 +624,19 @@ fn display_label(kind: &str, plural: &str) -> SharedString {
 // here, and this module is where the label budget is computed from them — which
 // is the reason they are here and not inline in a renderer: the budget is a
 // claim about what the renderer spends, and a claim whose numbers live in the
-// other file is a claim that goes stale silently. `shell/panels.rs` renders the
-// head and the rows and reads these; if a lane moves, the label column moves
-// with it in the same edit.
+// other file is a claim that goes stale silently. If a lane moves, the label
+// column moves with it in the same edit.
+//
+// **The renderer reads these; it does not restate them.** The head and the rows
+// are drawn in `shell/panels.rs`, and take their inset, their lanes and their
+// heights from this section rather than from a literal beside the call. A sidebar whose group head sits on
+// `space::SM` and whose rows sit on `space::SM` *by two different edits that
+// happened to agree* is a sidebar whose spine is a coincidence, and a
+// coincidence does not survive the next change.
+//
+// Every constant here is `pub` rather than `pub(crate)` because `mod tree` is
+// private, so the two are the same reach and the file would only be carrying two
+// spellings of one intent.
 //
 // One thing is *not* here, and it is a real conflict rather than an oversight:
 // [`SidebarRow::indent`] returns `space::MD` a level (`UI-SPEC` §4.5) while the
@@ -458,16 +646,74 @@ fn display_label(kind: &str, plural: &str) -> SharedString {
 // one on screen, and it is the one every other consumer should read.
 // ════════════════════════════════════════════════════════════════════════
 
-/// The sidebar's leading inset, shared by the filter field, the group head and
-/// every row.
+/// The sidebar's leading inset, shared by the filter field, the group head, every
+/// row and the footer band.
 ///
-/// One inset for three bands, because they are at one level. The bands' own
+/// One inset for four bands, because they are at one level. The bands' own
 /// padding already agreed on `space::SM`; what drifted was the *label* column
-/// inside a row, because a row spends its inset, its indent and three fixed
-/// lanes before the text starts. Naming the inset and the lanes separately is
-/// what lets the two be checked against each other instead of against a
-/// screenshot.
+/// inside a row, because a row spends its inset, its indent and four fixed lanes
+/// before the text starts. Naming the inset and the lanes separately is what lets
+/// the two be checked against each other instead of against a screenshot.
 pub const SIDEBAR_INSET: gpui_kit::Pixels = design::space::SM;
+
+/// One sidebar row's height.
+///
+/// `design::size::TREE_ROW` and not one of the `size::ROW*` steps: those are a
+/// table's rows, and the tree is the compact end of the density scale. Named here
+/// so a renderer cannot answer 24 with a number it picked.
+///
+/// Unwired, like [`SIDEBAR_COUNT_LANE`]: `shell/panels.rs` reads it in the same
+/// series that draws the rows these heights belong to.
+#[allow(dead_code)]
+pub const SIDEBAR_ROW_HEIGHT: gpui_kit::Pixels = design::size::TREE_ROW;
+
+/// The sidebar's group head's height.
+///
+/// `design::size::GROUP_HEAD`, which the token layer already documents as "a
+/// sticky group heading — the sidebar's regions, a list's sections". Re-exported
+/// rather than inlined so the head and the rows it heads are one list of sizes.
+///
+/// Unwired, like [`SIDEBAR_ROW_HEIGHT`].
+#[allow(dead_code)]
+pub const SIDEBAR_GROUP_HEAD_HEIGHT: gpui_kit::Pixels = design::size::GROUP_HEAD;
+
+/// The trailing lane a row's count occupies, reserved whether or not it has one.
+///
+/// **Why `design::` does not carry it.** Every width in `design::size` is a
+/// height, an icon box or a panel edge; there is no lane token because nothing
+/// else in the app reserves a fixed trailing number column — the table sizes its
+/// numeric columns to their content and the Dock's log lanes are timestamps. The
+/// sidebar is the one list whose counts arrive and leave while the reader is
+/// looking at it (a namespace starts listing, a group finishes rolling up), and a
+/// count lane that resized with its content would walk every label in the column
+/// sideways each time it did. This is the token `design::` is missing, and it is
+/// declared here rather than beside the one call site that draws it so the label
+/// budget below can spend it.
+///
+/// **48, from the widest count the sidebar can print.** `design::format::count`
+/// groups its thousands, so a six-digit count is six tabular digits and two
+/// separators. At `text::CAPTION` and Inter's metrics that is about 42.5px, and
+/// 48 is the next step on the `space` grid above it — a lane that was one pixel
+/// under the widest thing it has to hold would clip the one count a reader most
+/// needs to read.
+///
+/// **It is deliberately not subtracted from [`label_column_px`].** The budget
+/// answers one question: how wide may a label be before the renderer elides it.
+/// A kind row in a catalog carries no count of its own — [`KindNode`] is built
+/// with `count: None` and the rollups live on the group and cluster rows above it
+/// — so the row the budget is written for spends no count lane, and subtracting
+/// one would shorten every label in the catalog to pay for a lane that is empty
+/// on the row the shortening happened to. A row that *does* spend the lane gives
+/// the label what is left, because the renderer puts the label in a flexible box
+/// and the count in a `flex_none` one: the count is never the thing that gets
+/// clipped, and a label too wide for the remainder is elided, which is what the
+/// ellipsis is for. The demo tree does print counts on kind rows, and the labels
+/// there are short enough that the remainder is not the binding constraint.
+///
+/// Unwired: the renderer that spends this lane is `shell/panels.rs`, and the
+/// attribute comes off when it reads it. Not a claim that the lane is finished.
+#[allow(dead_code)]
+pub const SIDEBAR_COUNT_LANE: gpui_kit::Pixels = gpui_kit::px(48.);
 
 /// One level of disclosure, in [`SIDEBAR_INSET`] steps.
 ///
@@ -495,12 +741,17 @@ pub const SIDEBAR_DISCLOSURE_LANE: gpui_kit::Pixels = design::size::HIT_MIN;
 /// way. The lane is the size, not a padding around it: a mark centred in a
 /// wider lane moves the label, and the lane's only job is to keep the label
 /// still.
+///
+/// The mark itself is drawn at this size — `SIDEBAR_MARK_LANE` is both the slot
+/// and the glyph's `Size` — because a 14px slot holding a 12px glyph is a column
+/// whose marks do not line up optically however carefully their boxes do.
 pub const SIDEBAR_MARK_LANE: gpui_kit::Pixels = design::size::NAV_MARK;
 
 /// The gap between two lanes inside one row.
 ///
-/// `space::XS`, and it is the *same* gap on both sides of the mark. Two gaps
-/// that differ by a pixel put the label at two x values across the column.
+/// `space::XS`, and it is the *same* gap on both sides of the mark and between
+/// the mark and the trailing count. Two gaps that differ by a pixel put the label
+/// at two x values across the column.
 pub const SIDEBAR_LANE_GAP: gpui_kit::Pixels = design::space::XS;
 
 /// The deepest indent the shipped sidebar draws, in [`SIDEBAR_DEPTH_STEP`] steps.
@@ -519,6 +770,9 @@ const SIDEBAR_LABEL_DEPTH: f32 = 2.0;
 /// fixed lanes. The same arithmetic the renderer does, read from the same
 /// constants, so a change to any one of them moves the budget and the row
 /// together.
+///
+/// [`SIDEBAR_COUNT_LANE`] is deliberately absent; [`SIDEBAR_COUNT_LANE`]'s own
+/// docs are the argument.
 fn label_column_px() -> f32 {
     let indent = f32::from(SIDEBAR_DEPTH_STEP) * SIDEBAR_LABEL_DEPTH;
     let padding = 2.0 * f32::from(SIDEBAR_INSET);
@@ -819,6 +1073,12 @@ impl ResourceTree {
             left_name.cmp(right_name)
         });
 
+        // The workload kinds leave their API groups and take the first row, before the
+        // shorten-and-separate pass below, so the pinned group gets the same label budget as
+        // every other group. `Workloads` supplies none of the words these labels drop, so the
+        // kinds underneath it keep the full names they always had.
+        pin_workloads(&mut groups);
+
         // A kind row says what it can fit and what its group has already said,
         // and no two rows in one group read the same. Both decisions belong here,
         // per group, because both are facts about the *neighbours* — the row above
@@ -922,6 +1182,15 @@ impl ResourceTree {
                 ),
             ],
         }
+        .with_pinned_workloads()
+    }
+
+    /// Pins the workload kinds in every cluster, the way a catalog-built tree does.
+    fn with_pinned_workloads(mut self) -> Self {
+        for cluster in &mut self.clusters {
+            pin_workloads(&mut cluster.groups);
+        }
+        self
     }
 
     pub fn cluster_names(&self) -> Vec<SharedString> {
@@ -940,17 +1209,32 @@ impl ResourceTree {
             .sum()
     }
 
-    /// Expands the first cluster and its first group. Other groups, and the
-    /// API-group container, stay collapsed so a long group list cannot bury the
-    /// Kinds above it.
+    /// Opens the pinned Workloads group and, for the first cluster, its first catalog group.
+    ///
+    /// Everything else — and the API-group container — starts closed, so a long group list cannot
+    /// bury the kinds above it.
+    ///
+    /// The pinned group used to be open by accident: it was whichever group the catalog sorted
+    /// first, which on every real cluster is the core group, and the core group's own first rows
+    /// are `Bindings` and `Component Statuses`. Naming the row that starts open is the whole
+    /// point of pinning it.
     pub fn default_collapsed(&self) -> HashSet<SharedString> {
         let mut collapsed = HashSet::new();
         for (cluster_index, cluster) in self.clusters.iter().enumerate() {
             if cluster.api_group_count() > API_GROUPS_INLINE_LIMIT {
                 collapsed.insert(api_groups_id(&cluster.name));
             }
-            for (group_index, group) in cluster.groups.iter().enumerate() {
-                if cluster_index == 0 && group_index == 0 {
+            // The pinned row is not a group the catalog named, so the group that opens by
+            // default is the first one it did — which the pin has moved to index one.
+            let first_catalog_group = cluster
+                .groups
+                .iter()
+                .find(|group| !is_pinned_group(group))
+                .map(|group| &group.name);
+            for group in &cluster.groups {
+                if is_pinned_group(group)
+                    || (cluster_index == 0 && Some(&group.name) == first_catalog_group)
+                {
                     continue;
                 }
                 collapsed.insert(group_id(&cluster.name, &group.name));
@@ -967,9 +1251,7 @@ impl ResourceTree {
             rows.push(TreeRow {
                 id,
                 label: cluster.name.clone(),
-                detail: cluster
-                    .count()
-                    .map(|count| design::format::count(count).into()),
+                detail: count_detail(cluster.count()),
                 depth: 0,
                 kind: TreeRowKind::Cluster,
                 expanded,
@@ -982,16 +1264,17 @@ impl ResourceTree {
             if !expanded {
                 continue;
             }
-            // The core group keeps its own row, so its Kinds stay visible; the
-            // remaining groups sit behind one container that reports how many
+            // The pinned groups and the core group keep their own rows, so their Kinds stay
+            // visible; the remaining groups sit behind one container that reports how many
             // API groups it holds.
-            let core: Vec<&GroupNode> = cluster
+            let mut top: Vec<&GroupNode> = cluster
                 .groups
                 .iter()
-                .filter(|group| is_core_group(group))
+                .filter(|group| is_pinned_group(group))
                 .collect();
+            top.extend(cluster.groups.iter().filter(|group| is_core_group(group)));
             let api_groups: Vec<&GroupNode> = cluster.api_groups().collect();
-            cluster.push_group_rows(&mut rows, &core, 1, collapsed);
+            cluster.push_group_rows(&mut rows, &top, 1, collapsed);
             if api_groups.is_empty() {
                 continue;
             }
@@ -1001,7 +1284,7 @@ impl ResourceTree {
                 rows.push(TreeRow {
                     id,
                     label: SharedString::from(API_GROUPS_LABEL),
-                    detail: Some(design::format::count(api_groups.len()).into()),
+                    detail: count_detail(Some(api_groups.len())),
                     depth: 1,
                     kind: TreeRowKind::Group,
                     expanded,
@@ -1294,6 +1577,26 @@ impl RowHealth {
     /// accidentally ask for a dot on a healthy row.
     pub fn draws_status_dot(self) -> bool {
         !matches!(self, RowHealth::Healthy)
+    }
+
+    /// The severity a row's status is drawn in.
+    ///
+    /// **One row, one severity, two inks.** The 6px mark is `severity.marker`
+    /// and the word beside it is `severity.word`, and they are different values
+    /// of the same hue because a 6px dot and a 13px word are not the same
+    /// optical problem. Handing the renderer a colour instead of a severity is
+    /// how a mark ends up painted with the ink a word should wear, which reads as
+    /// two severities on one row.
+    ///
+    /// `Healthy` is [`design::Severity::Muted`] and not `Neutral`: it is the
+    /// absence of a signal, and a healthy row is quieter than one reporting
+    /// something nobody asked for.
+    pub fn severity(self) -> design::Severity {
+        match self {
+            RowHealth::Healthy => design::Severity::Muted,
+            RowHealth::Warning => design::Severity::Warning,
+            RowHealth::Error => design::Severity::Error,
+        }
     }
 }
 
@@ -1906,9 +2209,9 @@ impl RailEntry {
     /// Three different silhouettes at one optical size in one colour role, which
     /// is the whole contract [`sidebar_kind_mark`] keeps for the tree's marks.
     ///
-    /// The two marks the render showed are drawn in `shell/hotbar.rs`, which is the
-    /// rail's renderer and not this model; this table is where the answer lives so
-    /// that both lanes read one decision.
+    /// The marks the renderer shows are drawn in `shell/panels.rs`, which is not this
+    /// model; this table is where the answer lives so that every lane reads one
+    /// decision.
     pub fn mark(&self) -> IconName {
         match self.title.as_ref() {
             API_GROUPS_TITLE => IconName::ListTree,
@@ -2362,11 +2665,11 @@ mod tests {
             labels(&rows),
             vec![
                 "kind-k8s-gpui-dev",
-                "core",
+                "Workloads",
                 "Pods",
-                "Nodes",
-                "apps",
                 "Deployments",
+                "core",
+                "Nodes",
                 "networking.k8s.io",
                 "Network Policies",
             ]
@@ -2551,14 +2854,54 @@ mod tests {
         );
     }
 
+    /// The pinned Workloads row is the sidebar's first group, holds the kinds
+    /// three API groups used to scatter, and starts open.
+    ///
+    /// `apps` held only a Deployment, so lifting it leaves nothing behind and the group goes
+    /// with it — a disclosure row that opens onto nothing is a control that lies.
     #[test]
-    fn catalog_default_collapses_every_group_except_core() {
+    fn workloads_are_pinned_above_the_catalog_and_start_open() {
+        let tree = ResourceTree::from_catalog(&sample_catalog(), "c");
+        let rows = tree.rows_for_cluster("c", &tree.default_collapsed());
+        assert_eq!(
+            labels(&rows),
+            vec![
+                "Overview",
+                "Workloads",
+                "Pods",
+                "Deployments",
+                "core",
+                "Nodes",
+                "networking.k8s.io"
+            ]
+        );
+        assert_eq!(
+            tree.kind_count(),
+            4,
+            "pinning moves kinds, it does not add any"
+        );
+        assert!(
+            !rows.iter().any(|row| row.id == group_id("c", "apps")),
+            "the emptied API group is gone, not left as a chevron over nothing"
+        );
+    }
+
+    #[test]
+    fn catalog_default_collapses_every_group_except_the_pinned_one() {
         let tree = ResourceTree::from_catalog(&sample_catalog(), "c");
         let rows = tree.rows(&tree.default_collapsed());
         assert_eq!(
             labels(&rows),
-            vec!["c", "core", "Pods", "Nodes", "apps", "networking.k8s.io"],
-            "only the first group is expanded by default"
+            vec![
+                "c",
+                "Workloads",
+                "Pods",
+                "Deployments",
+                "core",
+                "Nodes",
+                "networking.k8s.io"
+            ],
+            "the pinned group and the first catalog group are open; the rest are not"
         );
     }
 
@@ -2642,7 +2985,7 @@ mod tests {
         );
         assert!(
             rows.iter()
-                .any(|row| row.id == kind_id("prod-eu-1", "core/v1", "Pod"))
+                .any(|row| row.id == kind_id("prod-eu-1", WORKLOADS_GROUP, "Pod"))
         );
     }
 
@@ -2661,11 +3004,15 @@ mod tests {
         let rows = tree.rows(&tree.default_collapsed());
         assert!(rows.iter().any(|row| row.kind == TreeRowKind::Kind));
         assert!(
-            rows.iter().all(|row| row.depth < 2
-                || row
-                    .id
-                    .starts_with("cluster/kind-k8s-gpui-dev/group/core/v1/")),
-            "only the first group of the first cluster expands to Kind rows"
+            rows.iter().all(|row| {
+                row.depth < 2
+                    || row
+                        .id
+                        .starts_with("cluster/kind-k8s-gpui-dev/group/core/v1/")
+                    || row.id.contains("/group/~workloads/")
+            }),
+            "the pinned group of either cluster, and the first catalog group of the first one, \
+             are the groups that expand to Kind rows"
         );
         assert_eq!(rows.iter().filter(|row| row.depth == 0).count(), 2);
     }
@@ -2684,7 +3031,7 @@ mod tests {
             rows.iter()
                 .filter(|row| row.kind == TreeRowKind::Group)
                 .count(),
-            8
+            7
         );
         assert!(
             rows.iter()
@@ -2703,9 +3050,14 @@ mod tests {
                 .and_then(|row| row.detail.clone())
         };
         assert_eq!(
-            detail(group_id("kind-k8s-gpui-dev", "core/v1")),
-            Some(SharedString::from("10,101")),
+            detail(group_id("kind-k8s-gpui-dev", WORKLOADS_GROUP)),
+            Some(SharedString::from("10,472")),
             "counts use the shared thousands separator"
+        );
+        assert_eq!(
+            detail(group_id("kind-k8s-gpui-dev", "core/v1")),
+            Some(SharedString::from("101")),
+            "the pinned row took the kinds it holds out of the group they used to sit in"
         );
         assert_eq!(
             detail(cluster_id("kind-k8s-gpui-dev")),
@@ -2812,7 +3164,7 @@ mod tests {
         let rows = tree.rows_for_cluster("c", &collapsed);
         assert_eq!(
             labels(&rows),
-            vec!["Overview", "core", "Pods", API_GROUPS_LABEL],
+            vec!["Overview", "Workloads", "Pods", API_GROUPS_LABEL],
             "the pinned Kinds stay visible while the API groups hide"
         );
         let container = rows.last().expect("container row");
@@ -2831,8 +3183,8 @@ mod tests {
         assert!(container.resource_gvk.is_none());
         assert!(container.entry.is_none());
 
-        // The core group and the container are siblings, so they report a
-        // two-item set even though the core Kinds sit between the two rows.
+        // The pinned group and the container are siblings, so they report a
+        // two-item set even though the pinned Kinds sit between the two rows.
         let all = tree.rows(&collapsed);
         let set = |id: SharedString| {
             all.iter()
@@ -2840,7 +3192,7 @@ mod tests {
                 .map(|row| (row.pos_in_set, row.set_size))
                 .expect("row")
         };
-        assert_eq!(set(group_id("c", CORE_GROUP)), (1, 2));
+        assert_eq!(set(group_id("c", WORKLOADS_GROUP)), (1, 2));
         assert_eq!(set(api_groups_id("c")), (2, 2));
 
         let mut opened = collapsed.clone();
@@ -2869,16 +3221,10 @@ mod tests {
             rows.iter().all(|row| row.id != api_groups_id("c")),
             "a list that still fits beside the Kinds keeps its own rows"
         );
-        assert_eq!(
-            labels(&rows),
-            vec![
-                "Overview",
-                "core",
-                "Pods",
-                "Nodes",
-                "apps",
-                "networking.k8s.io"
-            ]
+        assert!(
+            rows.iter().any(|row| row.label == "networking.k8s.io"),
+            "pinning a kind does not push the rest of its group behind the container: {labels:?}",
+            labels = labels(&rows)
         );
     }
 
@@ -2978,7 +3324,11 @@ mod tests {
         assert_eq!(titles, ["Saved views", "Namespaces", "API groups"]);
         let api = &regions[2];
         assert!(!api.expanded, "the 71 kinds start folded away");
-        assert_eq!(api.count, Some(2), "apps + networking.k8s.io");
+        assert_eq!(
+            api.count,
+            Some(1),
+            "networking.k8s.io; `apps` held only a Deployment, which the pinned row took"
+        );
         assert!(api.rows.is_empty(), "a closed region holds no rows yet");
         // A closed region still has to look openable, and the chevron decision
         // cannot be inferred from an empty row list.
@@ -3001,6 +3351,11 @@ mod tests {
     /// A cluster with one API group folds the same way a cluster with thirty
     /// does. The old tree had a special case for that and a cluster's
     /// navigation used to change shape with its CRD count.
+    ///
+    /// It is also the assertion that the folded region holds neither of the two groups the
+    /// sidebar has already drawn above it: the core group, and the pinned one. `apps` used to
+    /// prove the first half — it held only a Deployment and lifting that Deployment empties the
+    /// group, so there is nothing left of it to fold.
     #[test]
     fn a_short_api_group_list_folds_exactly_the_same_way() {
         let tree = ResourceTree::from_catalog(&sample_catalog(), "c");
@@ -3011,13 +3366,17 @@ mod tests {
         let rows: Vec<&str> = region.rows.iter().map(|row| row.label.as_ref()).collect();
         assert_eq!(
             rows,
-            [
-                "apps",
-                "Deployments",
-                "networking.k8s.io",
-                "Network Policies"
-            ],
+            ["networking.k8s.io", "Network Policies"],
             "a group opens on its own, so its kinds come with it"
+        );
+        assert!(
+            rows.iter().all(|label| *label != CORE_GROUP),
+            "core is a group, not an API group, and folding it would hide Nodes behind a \
+             chevron a reader has to guess at"
+        );
+        assert!(
+            rows.iter().all(|label| *label != WORKLOADS_LABEL),
+            "the pinned group has its own row above this one"
         );
         // Groups are disclosures; a kind is a leaf one level in.
         assert_eq!(region.rows[0].expanded, Some(true));
@@ -3025,27 +3384,6 @@ mod tests {
         assert_eq!(region.rows[0].target, RowTarget::Disclosure);
         assert_eq!(region.rows[1].depth, 1);
         assert_eq!(region.rows[1].expanded, None, "a kind has nothing to open");
-    }
-
-    /// The core group is not in the folded region. It is the catalog's own root
-    /// and `UI-REDESIGN` §3.2 puts kinds in the API-groups layer, not the core
-    /// group beside the namespaces.
-    #[test]
-    fn the_folded_region_does_not_double_the_core_group() {
-        let tree = ResourceTree::from_catalog(&sample_catalog(), "c");
-        let region = tree.api_groups_region("c", &HashSet::new());
-        assert!(
-            region
-                .rows
-                .iter()
-                .all(|row| row.label.as_ref() != CORE_GROUP),
-            "core is a group, not an API group, and folding it would hide Pods \
-             behind a chevron a reader has to guess at"
-        );
-        assert!(
-            region.rows.iter().all(|row| row.kind != SidebarRowKind::ApiGroup
-                || row.label.as_ref() != CORE_GROUP)
-        );
     }
 
     /// A namespace that cannot be listed says so on its own row and leaves its
@@ -3144,24 +3482,24 @@ mod tests {
         // The group name in the catalog is `apps`, not `apps/v1` — the version
         // lives on the entries. The region is open because the set omits it.
         let region = tree.api_groups_region("c", &HashSet::new());
-        let deployment = region
+        let policy = region
             .rows
             .iter()
-            .find(|row| row.label.as_ref() == "Deployments")
-            .expect("the apps kind");
+            .find(|row| row.label.as_ref() == "Network Policies")
+            .expect("the networking kind");
         assert_eq!(
-            deployment.kind_icon_path(),
-            Some(design::kind_icon_path("Deployment"))
+            policy.kind_icon_path(),
+            Some(design::kind_icon_path("NetworkPolicy"))
         );
         assert_ne!(
-            deployment.kind_icon_path(),
-            Some(design::kind_icon_path("StatefulSet")),
-            "Deployment and StatefulSet are different shapes"
+            policy.kind_icon_path(),
+            Some(design::kind_icon_path("ConfigMap")),
+            "two kinds in the folded region are different shapes"
         );
         // A group is chrome, not a kind, so it has no bespoke icon and the
         // shared catalog answers it by name instead.
-        let apps = region.rows.first().expect("the apps group");
-        assert_eq!(apps.kind_icon_path(), None);
+        let networking = region.rows.first().expect("the networking group");
+        assert_eq!(networking.kind_icon_path(), None);
     }
 
     /// Two saved views, one namespace with one workload — a sidebar with rows

@@ -57,8 +57,9 @@
     }
   },
   {
-    // The base keymap already releases the shared app commands while a search field, a dialog, or
-    // a menu owns the keyboard. macOS adds the lifecycle and Command keys it introduces itself.
+    // The base keymap already releases the shared app commands and the table's own bare keys while
+    // a search field, a dialog, or a menu owns the keyboard. macOS adds the lifecycle and Command
+    // keys it introduces itself, and the chords it introduces for the table.
     "context": "ResourceSearch || Dialog || PopupMenu",
     "unbind": {
       "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
@@ -88,11 +89,16 @@
     }
   },
   {
+    // The base keymap already releases the shared app commands and the table's own bare keys on a
+    // text surface. macOS adds the chords it introduces itself, and the destructive one it gives a
+    // Command chord: the filter field is the only `TextInput` in the app, and a reader typing a
+    // query is not asking to delete the resource behind it.
     "context": "Editor || TextInput",
     "unbind": {
       "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
       "secondary-shift-d": "k8s_shell::ToggleDock",
-      "secondary-shift-y": "k8s_shell::FocusYaml"
+      "secondary-shift-y": "k8s_shell::FocusYaml",
+      "secondary-delete": "k8s_ops::DeleteSelection"
     }
   }
 ]

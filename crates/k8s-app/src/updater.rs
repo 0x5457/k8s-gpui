@@ -974,6 +974,26 @@ impl UpdaterRuntime {
         Ok(())
     }
 
+    /// A check the person did not ask for keeps its own failures to itself.
+    ///
+    /// The poll runs every few hours, so its failures are a tunnel, a captive
+    /// portal or an update server having an afternoon, and none of them is
+    /// something the reader can act on. Answering with `Failed` anyway puts that
+    /// in the update strip, which is the one place the app speaks about its own
+    /// trustworthiness: a strip that cries failure at a reader who did nothing
+    /// teaches them to ignore the strip, and then it cannot tell them that a
+    /// signed build is staged and waiting. Only a check somebody asked for may
+    /// take the strip over. The error still counts, because the backoff behind
+    /// this loop is what stops a broken update server being asked every minute.
+    pub async fn poll(&self) -> Result<()> {
+        let shown = self.status();
+        let result = self.check().await;
+        if result.is_err() && self.status().phase == UpdatePhase::Failed {
+            self.set_status(shown);
+        }
+        result
+    }
+
     pub fn spawn_auto_poll(&self) -> JoinHandle<()> {
         let runtime = self.clone();
         tokio::spawn(async move {
@@ -982,7 +1002,7 @@ impl UpdaterRuntime {
             }
             let mut consecutive_failures = 0u32;
             loop {
-                if runtime.check().await.is_err() {
+                if runtime.poll().await.is_err() {
                     consecutive_failures = consecutive_failures.saturating_add(1);
                 } else {
                     consecutive_failures = 0;

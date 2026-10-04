@@ -35,9 +35,9 @@ use gpui_kit::{Focusable as _, TextRun};
 
 use gpui_kit::{
     Anchor, AnyElement, AnyView, App, Bounds, ClickEvent, ClipboardItem, DismissEvent, Div,
-    ElementId, Entity, FocusHandle, Font, FontFeatures, Hsla, KeyBinding, KeyDownEvent, Keystroke,
-    MouseButton, Pixels, Point, Role, ScrollStrategy, SharedString, Stateful, Subscription, Task,
-    WeakEntity, Window, div, font, px,
+    ElementId, Entity, FocusHandle, Font, FontFeatures, FontWeight, Hsla, KeyBinding, KeyDownEvent,
+    Keystroke, MouseButton, Pixels, Point, Role, ScrollStrategy, SharedString, Stateful,
+    Subscription, Task, WeakEntity, Window, div, font, px,
 };
 use k8s_core::machines::TableEvent;
 use k8s_core::projection::{
@@ -90,7 +90,7 @@ const RETRY_LIVE_UPDATES_GUIDANCE: &str =
     "Live updates stopped. The rows below are the last ones the cluster sent.";
 const RETRY_LOADING_RESOURCES_GUIDANCE: &str =
     "Loading failed. The rows below are the last ones the cluster sent.";
-const START_PORT_FORWARD: &str = "Start Port Forward";
+const START_PORT_FORWARD: &str = "Start port forward";
 /// Estimates the average glyph width as a fraction of the font size.
 ///
 /// 0.52 is Inter's advance at 13px, and it is measured rather than guessed:
@@ -189,56 +189,66 @@ const STATUS_DOT_GAP: Pixels = design::space::ICON;
 /// its own padding, and the skeleton had its own idea of the padding.
 const TABLE_CONTENT_INSET: Pixels = design::space::LG;
 
-/// `UI-SPEC` §4.15: the inline error bar is 32px at the top of the table body.
+/// `UI-SPEC` §4.15: the inline error bar is 32px, under the table body.
 /// `design::size` has no token for it; `TABLE_HEADER` and `SUMMARY_STRIP` are
 /// both 32 and both mean something else, so borrowing one of them would make the
 /// two bands able to drift apart in the future.
 const INLINE_ERROR_HEIGHT: Pixels = px(32.0);
 
-/// The width of the summary strip's proportion bar.
+/// The width of the summary strip's proportion mark.
 ///
-/// The spec says 120px and the bar is 96, which is a deliberate departure: at 96
+/// The spec says 120px and the mark is 96, which is a deliberate departure: at 96
 /// the mid-range segments are still 30px apiece — far past the point where the
 /// eye stops resolving them — while the band spends a quarter less ink on it. A
-/// track that is too long stops being a proportion and becomes a chart, and the
+/// lane that is too long stops being a proportion and becomes a chart, and the
 /// band sits under a 32px table header; a chart there competes with the rows.
+///
+/// The width is also what [`RAIL_MIN_SEGMENT`] and [`RAIL_MAX_SHARE`] are
+/// calibrated against, so it is the one number in this mark that cannot move for
+/// a look: the floor is 4.2% of it and the cap is a share of it.
 const SUMMARY_MICROBAR_WIDTH: Pixels = px(96.0);
-/// Height of the proportion bar, and the reason it is not a hairline.
+/// Height of the proportion mark, and the reason it is thinner than a dot.
 ///
-/// Six pixels, and it is [`design::size::STATUS_DOT`] rather than a number picked
-/// to look right: the bar has to read at the same weight as the `text::LABEL` it
-/// sits beside, and the one mark size this design already uses at that weight is
-/// the 6px status dot. At 3px the bar was a rule — a flat grey line with two
-/// coloured ticks on it, which is a border, not a proportion, and a reader could
-/// not tell it from the header's own hairline two bands below. Height is half of
-/// what it was and the band reads as a bar.
-const SUMMARY_MICROBAR_HEIGHT: Pixels = design::size::STATUS_DOT;
-/// The bar's corner radius, applied to the track and inherited by every segment.
+/// [`design::space::XS`], four pixels, and not [`design::size::STATUS_DOT`] which
+/// is what it used to be. Six is half the cap height of the `text::LABEL` the mark
+/// sits beside, so at six the healthy bucket was eighty pixels of solid
+/// `status.success` and the strip's loudest object — louder than the `2 rows in
+/// error` it was reporting, and heavier than the `NAME` column one band below.
+/// A mark that weighs half the type beside it is a bar; a quarter of it is a
+/// mark. It cannot go thinner than this and stay a mark: at three it read as a
+/// rule — a flat line with two coloured ticks on it, which a reader could not
+/// tell from the header's own hairline two bands below.
+const SUMMARY_MICROBAR_HEIGHT: Pixels = design::space::XS;
+/// The mark's corner radius, applied to the lane and inherited by every segment.
 ///
-/// [`design::radius::XS`] is 3 on a 6px-tall bar, which is the same capsule the
-/// 6px status dot is, and a radius must govern the whole visible surface rather
-/// than the border alone — the track clips its segments, so the track's radius is
-/// the radius of the first and last segment whatever they are drawn at.
+/// [`design::radius::XS`] is the same radius the 6px status dot is drawn at, and a
+/// radius must govern the whole visible surface rather than the border alone — the
+/// lane clips its segments, so the lane's radius is the radius of the first and
+/// last segment whatever they are drawn at.
 const SUMMARY_MICROBAR_RADIUS: Pixels = design::radius::XS;
 /// Narrowest a non-zero bucket is ever drawn at, in logical pixels.
 ///
 /// Twice the 2px gap that separates segments, so the smallest bucket on screen is
 /// a mark and not a hairline between two others, and so a 1-in-20 population is
-/// legible at the size the bar is actually drawn. 4px of a 96px track is 4.2%,
+/// legible at the size the mark is actually drawn. 4px of a 96px lane is 4.2%,
 /// which is the largest this glyph will ever over-report a bucket by.
 const RAIL_MIN_SEGMENT: f32 = 4.0;
 /// Largest share of the rail any one bucket may fill.
 ///
 /// The cap is the half of the fix that a floor cannot do. A floor makes 1%
-/// visible; it does not stop 99% from painting the entire track, and a full
-/// track of one ink is the exact thing a glance at this table must never say.
-/// Bounding every bucket leaves the track showing, so the bar reads "nearly all
-/// of it" instead of "all of it" — and it costs the dominant bucket at most
-/// 12% of a 96px track, which the numbers beside it state exactly.
+/// visible; it does not stop 99% from painting the entire lane, and a full lane
+/// of one ink is the exact thing a glance at this table must never say.
+/// Bounding every bucket leaves the tail of the lane empty, so the mark reads
+/// "nearly all of it" instead of "all of it" — and it costs the dominant bucket
+/// at most 12% of a 96px lane, which the numbers beside it state exactly.
 const RAIL_MAX_SHARE: f32 = 0.88;
 
 /// Height of one placeholder bar in the loading skeleton.
-const SKELETON_BAR_HEIGHT: Pixels = px(8.0);
+///
+/// [`design::space::SM`], the same token the summary strip's own proportion mark
+/// takes its height from: a placeholder bar is a mark in a band, and a mark's
+/// height belongs to the space scale rather than to a number written beside it.
+const SKELETON_BAR_HEIGHT: Pixels = design::space::SM;
 
 /// The fixed lane a row reserves at its trailing edge, and the gap that keeps it
 /// off the value beside it.
@@ -284,6 +294,14 @@ const TYPEAHEAD_RESET: Duration = Duration::from_millis(1_000);
 const TOOLTIP_MAX_WIDTH: Pixels = px(280.0);
 /// Caps the tooltip height so a long value stays scrollable.
 const TOOLTIP_MAX_HEIGHT: Pixels = px(240.0);
+/// Width of the name filter above a table. One number owns the field and the
+/// wrapper that paints its error line and tooltip, so they cannot drift.
+const FILTER_INPUT_WIDTH: Pixels = px(240.);
+/// Width of a column's value filter popover: the same measure the name filter
+/// takes, since both are pick-a-value fields.
+const COLUMN_FILTER_WIDTH: Pixels = FILTER_INPUT_WIDTH;
+/// Twelve 26px rows before the popover scrolls.
+const COLUMN_FILTER_MAX_HEIGHT: Pixels = px(320.);
 /// Shapes a value only when its width estimate is within this factor of the
 /// cell width, which is the only range where the estimate can be wrong.
 const TOOLTIP_SHAPE_FACTOR: f32 = 2.0;
@@ -568,13 +586,13 @@ fn worst(so_far: Option<Severity>, next: Severity) -> Severity {
 /// true: 1.1% of 96px is one pixel, the reader's eye resolves nothing there,
 /// and the bar reports 100% failed while the 110 that are fine sit invisibly
 /// inside it. So every bucket that exists is floored at [`RAIL_MIN_SEGMENT`]
-/// and every bucket is capped at [`RAIL_MAX_SHARE`], which bounds the bar's
+/// and every bucket is capped at [`RAIL_MAX_SHARE`], which bounds the mark's
 /// error at *both* ends — at most 4px too wide for the smallest bucket, at most
-/// 12% of the track too narrow for the largest — and leaves the mid-range
+/// 12% of the lane too narrow for the largest — and leaves the mid-range
 /// exact, so 50/50 is 46 and 46.
 ///
 /// The gaps come out of the budget before the shares do, which is what makes
-/// that 46/46 fit: 48 + 2 + 48 is 98px inside a 96px track, and the old bar
+/// that 46/46 fit: 48 + 2 + 48 is 98px inside a 96px lane, and the old mark
 /// spent those last 2px clipped by its own container. Three buckets then cannot
 /// overflow what is left: the cap binds on at most one of them, so the worst
 /// case is `0.88u + 2x3` against `u = 96 - 4`, and `84.9 < 92`.
@@ -582,7 +600,7 @@ fn worst(so_far: Option<Severity>, next: Severity) -> Severity {
 /// Four buckets, because a waiting row is now a bucket of its own rather than a
 /// note across the other three. The bound still holds — `0.88u + 2(n-1) < u`
 /// with `u = 96 - 2(n-1)` needs `n <= 6` — and the segments keep the same order
-/// as the figures beside them, so the bar and the numbers are read the same way.
+/// as the figures beside them, so the mark and the numbers are read the same way.
 ///
 /// Pure, so the extremes — the case a window is the slow way to reach and the
 /// only case worth a test — can be measured directly.
@@ -735,10 +753,6 @@ pub struct PodsView {
     /// When the list started, for the skeleton's one breath. A visual, so the
     /// wall clock is the right one; the tier above is not.
     loading_since: Option<Instant>,
-    /// Whether a cached snapshot is on screen. A reader who can already see rows
-    /// must never be shown a skeleton over them (`UI-SPEC` §4.14): covering data
-    /// a reader can read is worse than the wait.
-    has_stale_cache: bool,
     /// The severity tally behind the summary strip, and the snapshot generation
     /// it was counted from. 10,000 rows is one pass per rebuild, never one per
     /// frame — a per-frame pass over the listed rows is the one O(n) this
@@ -879,6 +893,9 @@ impl PodsView {
                     view.update(cx, |view, cx| view.on_filter_input(text.to_owned(), cx));
                 }
             })
+            // The one owner of the filter's width: the wrapper paints the
+            // error line below the field, so the field alone stretches it.
+            .with_width(FILTER_INPUT_WIDTH)
         });
 
         // Everything the reader chose in an earlier session is a reader choice in
@@ -941,7 +958,6 @@ impl PodsView {
             typeahead: Rc::new(Cell::new((String::new(), None))),
             loading_tier: LoadingTier::Nothing,
             loading_since: None,
-            has_stale_cache: false,
             summary: RowSummary::default(),
             summary_generation: None,
             resolved_viewport: 0.0,
@@ -1902,7 +1918,7 @@ impl PodsView {
                         }),
                 )
                 .item(
-                    menu_item("Reset Column Widths")
+                    menu_item("Reset column widths")
                         .icon(IconName::RotateCcw)
                         .on_click({
                             let view = view.clone();
@@ -1916,7 +1932,7 @@ impl PodsView {
                 .separator();
             let menu = if problems_filter {
                 menu.item(
-                    menu_item("Show Only Problems")
+                    menu_item("Show only problems")
                         .checked(problems_only)
                         .on_click({
                             let view = view.clone();
@@ -2988,7 +3004,10 @@ impl PodsView {
         cx: &mut Context<Self>,
     ) {
         if let Some(inspector) = self.inspector.clone() {
-            inspector.apply(InspectorUpdate::Selection(selection), cx);
+            inspector.apply(
+                InspectorUpdate::Selection(selection, self.selected_uids.len()),
+                cx,
+            );
         }
     }
 
@@ -3069,7 +3088,35 @@ impl PodsView {
             .is_some_and(|uid| !kept.contains(uid.as_ref()))
         {
             // Keep one active row so Enter and the Inspector still have a target.
-            let next = kept.iter().min().cloned();
+            //
+            // It was `kept.iter().min()`, which is the LEXICOGRAPHICALLY SMALLEST
+            // uid — and a uid is an opaque hash, so "smallest" means nothing a
+            // reader could predict. Filtering Pods down to one removed the row
+            // they were looking at and silently moved the Inspector to whatever
+            // pod happened to hash lowest, which reads as the app deciding to
+            // show them a different object.
+            //
+            // `snapshot.rows` is already the order the reader is looking at, and
+            // `by_uid` resolves to a position in it, so "nearest" is a distance
+            // along that order and nothing more. The row on the anchor's own side
+            // wins the tie, because that is the one the eye was already moving
+            // toward.
+            let anchor_row = self
+                .selection_anchor
+                .as_deref()
+                .and_then(|uid| snapshot.by_uid.get(uid))
+                .copied();
+            let next = kept
+                .iter()
+                .filter_map(|uid| {
+                    let row = snapshot.by_uid.get(uid.as_ref()).copied()?;
+                    let distance = anchor_row.map_or(0, |anchor| anchor.abs_diff(row));
+                    Some((distance, anchor_row.is_some_and(|anchor| row < anchor), uid.clone()))
+                })
+                .min_by(|left, right| {
+                    left.0.cmp(&right.0).then_with(|| right.1.cmp(&left.1))
+                })
+                .map(|(_, _, uid)| uid);
             self.selected_uid = next.clone();
             self.selection_anchor = next;
         }
@@ -3873,31 +3920,31 @@ impl PodsView {
     /// figure at `text::MEDIUM`, and it is the only one wearing a status channel.
     /// Healthy is metadata in `fg.tertiary`; *pending* is metadata in
     /// `fg.secondary` and is deliberately **not** graded — the pending bucket's
-    /// severity is the one thing the bar already draws as a mark, so grading the
+    /// severity is the one thing the mark already draws, so grading the
     /// word as well says the same thing twice, and says it in the channel the
     /// guide reserves for a signal rather than for a confirmation. Attention is
     /// not spent twice on one fact.
     ///
     /// All four words wear a word role (`role::status_word_for` for the two that
-    /// carry a channel, the ink ladder for the two that do not) and all four bar
+    /// carry a channel, the ink ladder for the two that do not) and all four mark
     /// segments wear a mark role (`role::status_for`). The design system's own
     /// distinction is the whole reason the two sets exist: a 12px word is solved
-    /// to clear the text floor, a 6px segment to clear the graphic one, and the
+    /// to clear the text floor, a 4px segment to clear the graphic one, and the
     /// strip reads correctly for a reader who cannot tell the hues apart at all.
     ///
-    /// Everything in the band shares one baseline and one gap. The bar is a flex
+    /// Everything in the band shares one baseline and one gap. The mark is a flex
     /// item of the same row as the two text runs, on the same `items_center` line
     /// and the same `text::LABEL` line box, so it sits on their centre line rather
     /// than on a rule of its own; and the two gaps in the band — strip-level and
     /// between the figures — are `space::SM` and `space::XS` for one stated
     /// reason: the figures are separated by a `·` glyph that *is* the gap, so they
-    /// need less space around it than the bar, which is a solid object. One value
-    /// per relationship, and the relationship is named.
+    /// need less space around it than the mark, which is a solid object. One
+    /// value per relationship, and the relationship is named.
     ///
     /// It also renders the age grade: the `pending` bucket is split into the pods
     /// that have only just been scheduled and the ones that are stuck, which is
     /// §4.14's stale-data rule applied to a status rather than to a cache — and it
-    /// is the bar's own segment that carries the grade, not the word.
+    /// is the mark's own segment that carries the grade, not the word.
     fn summary_strip(
         &self,
         status: &TableStatus,
@@ -3906,23 +3953,37 @@ impl PodsView {
         cx: &Context<Self>,
     ) -> AnyElement {
         let plural = self.spec.label_lower();
-        let listing = matches!(status, TableStatus::Listing);
+        // A primed cache paints a thousand rows while the machine is still
+        // `Listing`, and a band that says `pods –` over them has decided they are
+        // not there.
+        let listing = matches!(status, TableStatus::Listing) && shown == 0;
+        let filtered = !listing && shown < total;
         let count = shown;
         let count_label = if listing {
             format!("{plural} \u{2013}")
+        } else if filtered {
+            // The visible half of a sentence the strip only used to give a screen
+            // reader. Eight rows out of ten thousand labelled `8 pods` reads as an
+            // eight-pod cluster, and the reader who believes it is wrong about the
+            // only fact the table was opened for.
+            format!(
+                "{} of {} {plural}",
+                design::format::count(shown),
+                design::format::count(total)
+            )
         } else {
             format!("{} {plural}", design::format::count(count))
         };
         let mut description = if listing {
             format!("Loading {plural}.")
-        } else if shown == total {
-            format!("{} {plural} in this scope.", design::format::count(count))
-        } else {
+        } else if filtered {
             format!(
                 "{} of {} {plural} match the current filters.",
                 design::format::count(shown),
                 design::format::count(total)
             )
+        } else {
+            format!("{} {plural} in this scope.", design::format::count(count))
         };
         let summary = self.summary;
         // The breakdown, one span per fact, each carrying its own ink. The figures
@@ -3941,7 +4002,7 @@ impl PodsView {
         //   disagree with a third surface that spells them differently.
         // * **Exactly one figure is loud.** The error count is the fact; healthy
         //   and pending are metadata, and pending is metadata *ungraded* — its
-        //   grade is the one thing the bar already draws as a mark, so a coloured
+        //   grade is the one thing the mark already draws, so a coloured
         //   word beside a coloured segment says the same thing twice and spends
         //   the emphasis budget twice on one population.
         let mut parts: Vec<(SharedString, Hsla, bool)> = Vec::with_capacity(4);
@@ -3988,10 +4049,10 @@ impl PodsView {
             }
             // Pending is a bucket, not a note across the three above it, so the
             // four figures are a partition and add up to the row count. Its *word*
-            // is metadata: the grade those rows reached is carried by the bar's own
-            // pending segment, which is a mark wearing a mark role, so a cluster
-            // that just scheduled 9,900 pods and one that has had 9,900 stuck for
-            // five minutes are still told apart — by the segment, where a
+            // is metadata: the grade those rows reached is carried by the mark's
+            // own pending segment, which is a mark wearing a mark role, so a
+            // cluster that just scheduled 9,900 pods and one that has had 9,900
+            // stuck for five minutes are still told apart — by the segment, where a
             // distribution belongs, rather than by a second coloured word.
             if summary.pending > 0 {
                 parts.push((
@@ -4017,18 +4078,19 @@ impl PodsView {
         // rather than grey.
         //
         // This is the one place in the file where a *mark* wears a success colour,
-        // and it is the exception that makes the bar a chart. §0 铁律三 says a
-        // healthy resource is grey and only a problem takes a colour, and that
-        // rule is about the reader's attention: a green "10,000 healthy" is
+        // and it is the exception that makes the mark a distribution. §0 铁律三
+        // says a healthy resource is grey and only a problem takes a colour, and
+        // that rule is about the reader's attention: a green "10,000 healthy" is
         // shouting, and a green dot beside every `Running` cell in a 10,000-row
-        // table is worse. Inside a bar it is the opposite problem. A distribution
-        // whose healthy segment is the same grey as its own track has one
-        // unlabelled part and three labelled ones, so "18 of 20 rows are fine" and
-        // "the other 2 are the red I can see" both failed to say anything and the
-        // reader was left guessing at the two pixels of grey. A mark inside a
-        // proportion carries a category; a number carries news. That is why the
-        // healthy *figure* below stays `fg.tertiary` and only the healthy *segment*
-        // is a colour.
+        // table is worse. Inside a proportion it is the opposite problem. A
+        // distribution whose healthy segment is grey beside three coloured ones
+        // has one unlabelled part, so "18 of 20 rows are fine" and "the other 2
+        // are the red I can see" both failed to say anything and the reader was
+        // left guessing at the two pixels of grey. A mark inside a proportion
+        // carries a category; a number carries news. That is why the healthy
+        // *figure* beside it stays `fg.tertiary` and only the healthy *segment* is
+        // a colour — and why the segment is four pixels rather than six, because
+        // a category is not a claim on the reader's attention.
         let inks = [
             ("table-summary-rail-healthy", design::role::success(cx)),
             ("table-summary-rail-warning", design::role::warning(cx)),
@@ -4039,6 +4101,37 @@ impl PodsView {
             ),
         ];
         let stale = matches!(status, TableStatus::Stale(_));
+        // Whether the rows on screen came off the disk, how long ago, and how long
+        // the watch has been silent. None of this used to reach the screen at all:
+        // `TableStatus::Stale` carried a reason and no clock, and the cache
+        // carried a save time and nothing else, so rows written to disk at startup
+        // were indistinguishable from live ones and a watch that had been dead for
+        // an hour was indistinguishable from one that had just hiccuped. A reader
+        // about to scale or restart something needs to know which one they are
+        // looking at, and the strip is the one line they read either way.
+        let (cache_age, cache_past_ttl, stale_age) = {
+            let host = self.host.read(cx);
+            (
+                host.cache_age(),
+                host.cached().is_some_and(|cached| cached.stale),
+                host.stale_age(),
+            )
+        };
+        // The live region has to say it too: the words on the band are the ones a
+        // screen reader is never handed, and "8 pods" is exactly the claim that
+        // needs correcting when the rows are twenty minutes old.
+        if let Some(age) = cache_age {
+            description.push_str(&format!(
+                ". These rows were last read from disk {} ago.",
+                design::format::age(age.as_secs())
+            ));
+        }
+        if let Some(age) = stale_age {
+            description.push_str(&format!(
+                ". Live updates stopped {} ago.",
+                design::format::age(age.as_secs())
+            ));
+        }
         // The band and the header band below it are one 64px block, so the strip
         // owns two things the rest of the stack already owns: the table's own
         // surface (stated, not inherited — the header band neutralises the
@@ -4085,27 +4178,29 @@ impl PodsView {
                     )
                     .when(!listing && summary.total() > 0, |strip| {
                         strip.child(
-                            // A proportion bar, not a rule with ticks on it.
+                            // A proportion mark, not a bar and not a rule with ticks on it.
                             //
-                            // Three things made the previous version read as a glitch
-                            // rather than as a chart of the rows below it. The track was
-                            // `border.subtle`, so the one thing a reader saw was a grey
-                            // line the width of the whole band — the same value, the same
-                            // colour and nearly the same height as the header's hairline a
-                            // band below it, with two coloured ticks sitting on it. The bar
-                            // was 3px tall, which is a border. And the healthy share was
-                            // `fg.tertiary`, the same grey as the track, so the only
-                            // *decodable* thing in it was the failure it was hiding.
+                            // It has been three things. A 3px rule on a `border.subtle`
+                            // track, which is a border; a 6px bar on a `surface.inset`
+                            // track, which is worse — the track is four steps below the
+                            // strip it sits on, so every gap between two segments read as
+                            // a black slot cut through the line rather than as air, and
+                            // eighty pixels of solid `status.success` made the mark the
+                            // second loudest thing in the band's own row. It is a mark
+                            // now: four pixels of [`SUMMARY_MICROBAR_HEIGHT`], no track
+                            // at all, and a real [`design::space::XXS`] of the strip's
+                            // own surface between every pair of segments.
                             //
-                            // The track is now `surface.inset`, the one step of the ramp
-                            // that means recessed, so the eye reads a channel the segments
-                            // sit in; the bar is 6px, the status-dot size, so it reads at
-                            // the weight of the type beside it; and every bucket that is
-                            // present wears its own mark ink, so all four parts of the
-                            // distribution are decodable and the bar and the figures are
-                            // read the same way. The figures keep the quieter inks: a
-                            // *number* is not an alert, and the bar is the part of the
-                            // line that is allowed to shout about a fault.
+                            // The track is gone rather than repainted because the
+                            // Overview's own meters rejected `surface.inset` for the same
+                            // reason — a meter drawn on it reads as a hole in the surface
+                            // rather than as the whole a share is a share of — and the
+                            // lane this mark needs is not a container but a separation,
+                            // which a gap already is. Every bucket that is present still
+                            // wears its own mark ink, so all four parts of the
+                            // distribution stay decodable, and the figures keep the
+                            // quieter inks: a *number* is not an alert, and a mark is not
+                            // a word.
                             h_flex()
                                 .id("table-summary-rail")
                                 .debug_selector(|| "table-summary-rail".to_owned())
@@ -4113,12 +4208,16 @@ impl PodsView {
                                 .w(SUMMARY_MICROBAR_WIDTH)
                                 .h(SUMMARY_MICROBAR_HEIGHT)
                                 .gap(design::space::XXS)
-                                // The radius belongs to the track, and the track clips, so
+                                // The radius belongs to the lane, and the lane clips, so
                                 // the first and last segments get it for free — including
-                                // the case where one segment fills 88% of the width.
+                                // the case where one segment fills 88% of the width. The
+                                // clip stays with nothing behind it for the same reason
+                                // the radius stays: the segment widths are a budget
+                                // against this lane, and a bucket the arithmetic
+                                // over-runs is a bucket that must not push the figures
+                                // beside it along.
                                 .rounded(SUMMARY_MICROBAR_RADIUS)
                                 .overflow_hidden()
-                                .bg(design::role::surface_inset(cx))
                                 .children(
                                     inks.into_iter()
                                         .zip(rail)
@@ -4173,22 +4272,41 @@ impl PodsView {
                         }
                         strip.child(row)
                     })
-                    // §4.14's "保留旧数据 + 4% warning 底 wash + 表头标 Stale". The strip is
-                    // the cheapest honest place for the word, and the age is not available
-                    // here: `TableStatus::Stale` carries a reason and not a timestamp, so
-                    // the age belongs on the connection dot in the title bar, which is
-                    // Wave 2's and is where §4.1 puts it.
+                    // §4.14's "保留旧数据 + 4% warning 底 wash + 表头标 Stale", and the
+                    // age the rule asks for. The comment that used to sit here said the
+                    // age "is not available here" and sent it to the title bar; that was
+                    // true of `TableStatus`, which carries a reason and not a clock, and
+                    // it was used as a reason not to know. The host times the failure
+                    // itself, so the strip can say how long the rows have been frozen —
+                    // and a reader deciding whether to trust a row is better served by
+                    // the band under their cursor than by a dot two hundred pixels away.
                     //
-                    // A *word*, so it wears the word role: `Stale data` is the same
-                    // 12px sentence as the three figures beside it and is solved to the
-                    // text floor with them. The bar keeps the mark role for the same
-                    // reason it does everywhere else.
+                    // A *word*, so it wears the word role: the same 12px sentence as the
+                    // figures beside it, solved to the text floor with them. The bar
+                    // keeps the mark role for the same reason it does everywhere else.
                     .when(stale, |strip| {
                         strip.child(
                             div()
                                 .flex_none()
                                 .text_color(design::role::status_word_for(Severity::Warning, cx))
-                                .child(SharedString::from("Stale data")),
+                                .child(freshness_word("Stale data", stale_age)),
+                        )
+                    })
+                    // Rows read off the disk at startup wear the same band. A cache
+                    // older than the TTL says so in the warning channel, because past
+                    // that point it is not a fast start — it is a list of objects that
+                    // may no longer exist, and it has to be graded like one.
+                    .when(cache_age.is_some(), |strip| {
+                        let ink = if cache_past_ttl {
+                            design::role::status_word_for(Severity::Warning, cx)
+                        } else {
+                            design::role::fg_secondary(cx)
+                        };
+                        strip.child(
+                            div()
+                                .flex_none()
+                                .text_color(ink)
+                                .child(freshness_word("From cache", cache_age)),
                         )
                     }),
             )
@@ -4209,7 +4327,8 @@ impl PodsView {
     /// The query input the resource header mounts.
     ///
     /// `UI-REDESIGN` D16 deleted the five-pill toolbar, and `UI-SPEC` §4.2 puts
-    /// the query box on the *right* of the 44px resource header — which belongs
+    /// the query box on the *right* of the [`design::size::RESOURCE_HEADER`] band —
+    /// which belongs
     /// to `shell/panels.rs` and is Wave 2's. The input therefore has no button
     /// in this file any more, and deleting the entity would have deleted the
     /// filter with it: every debounced predicate, the problems count, and the
@@ -4228,16 +4347,16 @@ impl PodsView {
     /// The box and its error are one element, because the error belongs *under* the
     /// box and a caller that mounted them separately would have to know the box's
     /// height to place the second one. It is positioned rather than stacked so the
-    /// header's own 44px band does not grow: the header is a fixed-height row, and
-    /// a filter that made the whole app's title area taller on a typo would be a
-    /// worse mistake than the one being reported.
+    /// header's own [`design::size::RESOURCE_HEADER`] band does not grow: the
+    /// header is a fixed-height row, and a filter that made the whole app's title
+    /// area taller on a typo would be a worse mistake than the one being reported.
     pub fn filter_input(&self, cx: &App) -> AnyElement {
-        let focus_filter = action_tooltip("Focus Resource Filter", &FocusFilter, cx);
+        let focus_filter = action_tooltip("Focus resource filter", &FocusFilter, cx);
         let mut action = div()
             .id("table-filter-action")
             .relative()
             .flex_none()
-            .w(px(240.))
+            .w(FILTER_INPUT_WIDTH)
             .h(design::size::CONTROL)
             .child(self.filter.clone());
         if let Some(error) = &self.query_error {
@@ -4516,7 +4635,7 @@ impl PodsView {
                         // `border.subtle` rule the component draws, and this rect
                         // is on top of it.
                         .h(design::size::TABLE_HEADER - design::border::LINE)
-                        .bg(table_row_surface(cx)),
+                        .bg(table_header_surface(cx)),
                 )
             })
             .into_any_element()
@@ -4586,6 +4705,9 @@ impl PodsView {
         // label and the wash under it change together. They were two separate
         // hover reads before, which is how a header ended up with a bright label
         // under a faint wash.
+        //
+        // Weight carries "which column is this table ordered by", not the ink:
+        // see [`header_label_weight`].
         let title = div()
             .when(sorted, |title| {
                 title.debug_selector(|| "pod-header-sorted-label".to_owned())
@@ -4597,7 +4719,7 @@ impl PodsView {
             .font(ui_font(cx))
             .text_size(design::text::CAPTION)
             .line_height(design::text::CAPTION_LINE_HEIGHT)
-            .font_weight(design::text::SEMIBOLD)
+            .font_weight(header_label_weight(affordance))
             .text_color(header_label_color(affordance, false, cx))
             .group_hover(group.clone(), |label| {
                 label.text_color(header_label_color(affordance, true, cx))
@@ -4625,18 +4747,16 @@ impl PodsView {
             .flex()
             .items_center()
             .gap(design::space::XS)
-            // §4.4: `背景 transparent ← 不填色`. The shared table paints its header
-            // band with its own `table_head` token, which in this theme resolves to
-            // `surface.raised` — a second surface one step above the `content`
-            // surface the rows sit on, and 1.44:1 against it, so the header read as
-            // a bar laid over the table rather than as the table's own chrome. The
-            // token is inside the component and no call in this file reaches it, so
-            // the band is neutralized from here instead: one rect per column,
-            // reaching out by the cell padding the same way the hover wash below
-            // does, and stopping one pixel short of the bottom so the 1px
-            // `border.subtle` rule underneath stays the only thing between the
-            // header and the rows. `docs/mockup` measures `(17,18,22)` from above
-            // the rule to below it; this is what makes the shipping pixels say so.
+            // §4.4 puts the band's own fill at `surface.raised`, which is the
+            // step above the `content` surface the rows sit on and the one the
+            // role ladder names for a table header. The shared table paints its
+            // header band with its own `table_head` token, so the band is stated
+            // here rather than inherited: one rect per column, reaching out by
+            // the cell padding the same way the hover wash below does, and
+            // stopping one pixel short of the bottom so the 1px `border.subtle`
+            // rule underneath stays the only thing between the header and the
+            // rows. It was `table_row_surface` — the rows' own value — which is
+            // what made the band read as another row.
             .child(
                 div()
                     .debug_selector({
@@ -4653,7 +4773,7 @@ impl PodsView {
                     // stopping short of the cell's own edge left a 1px sliver of
                     // that fill between the rect and the rule.
                     .bottom_0()
-                    .bg(table_row_surface(cx)),
+                    .bg(table_header_surface(cx)),
             )
             // §4.4's second half of the header hover, the part the shared table
             // cannot do for us: `hover → 底线 → border.base` needs the hairline,
@@ -4862,11 +4982,20 @@ impl PodsView {
     /// Returns the snapshot rows the table shows, in display order.
     ///
     /// The query's `status!=` clause already left the host's snapshot without the
-    /// rows the reader excluded, so what is left here is the *age* half of the
-    /// grade: a `Pending` pod the cluster has been queuing for two seconds is doing
-    /// what a scheduled pod does, and a clause over the value `Pending` cannot say
-    /// so. Reading the same severities the ink reads is what keeps the header
-    /// control, the popover row and the dot from meaning three different things.
+    /// settled rows, so what is left here is the grade. A row stays only when the
+    /// ink in its own status cell calls it a fault.
+    ///
+    /// It used to keep every row that was *not* `Success`, which is the same
+    /// sentence stated as its complement and is not the same set: a status word
+    /// this app does not know grades `Neutral` and an absent one grades `Muted`,
+    /// and both are "not Success". So on a Service, a ConfigMap or anything else
+    /// the cluster reports no status for, a filter named `Only problems` left
+    /// every row on screen — while the strip directly above it counted those same
+    /// rows as healthy. A filter whose membership the reader cannot predict is
+    /// worse than no filter, because they will trust it. `Only problems` is now
+    /// exactly the two populations the strip names as faults, and the pending
+    /// queue stays out of it, which is what the age grade has always said a
+    /// queue is.
     fn shown_rows(&self, snapshot: &IndexSnapshot) -> Vec<usize> {
         let all = || (0..snapshot.rows.len()).collect::<Vec<_>>();
         if !self.problems_only {
@@ -4879,9 +5008,9 @@ impl PodsView {
             .filter(|&index| {
                 let row = &snapshot.rows[index];
                 row.cells.get(status).is_some_and(|cell| {
-                    !matches!(
+                    matches!(
                         status_severity(cell.text.trim(), row_age(row)),
-                        Severity::Success
+                        Severity::Warning | Severity::Error
                     )
                 })
             })
@@ -5050,13 +5179,27 @@ impl PodsView {
     /// the band, so a test can find the `Status` filter without counting columns
     /// and so a reordering cannot silently move the assertion onto another one.
     ///
-    /// The foreground is declared rather than taken from `ghost()`. `Ghost` paints
+    /// The ink is declared, because the button owns its glyph and the variant is
+    /// the only place an ink can be stated for it. The band has exactly one
+    /// resting ink for its controls and one active ink, and both come from
+    /// `design::icon` rather than from the variant's own defaults: `Ghost` paints
     /// its icon in `secondary_foreground`, which is the brightest ink in the
     /// component's palette, so a per-value filter — a convenience next to the
-    /// query box that can already do it — came out louder than the sorted column's
-    /// own label and louder than the sort control it sits beside. `fg.tertiary` is
-    /// what the other two header marks use, and one band with one ink for its
-    /// controls is the whole point of the hierarchy.
+    /// query box that can already do it — used to come out louder than the sorted
+    /// column's own label. The tier it retreated to was no better: `fg.tertiary`
+    /// beside the `fg_secondary` column label is what a *disabled* control looks
+    /// like, and this one is never disabled.
+    ///
+    /// The active tier is spent on the one state the reader has to be able to see
+    /// without pointing at anything: a column that is filtering. Every other
+    /// column's funnel is at rest opacity until the header lights up, so an ink
+    /// difference is the only thing that separates "this column is filtering" from
+    /// "this column is hovered".
+    ///
+    /// Hover stays off the glyph. gpui-kit's `hovered` keeps a custom variant's
+    /// `foreground`, so the wash on the control is the whole hover and the funnel
+    /// does not change colour under the pointer — a glyph that changes ink on hover
+    /// reads as a different glyph.
     #[allow(clippy::too_many_arguments)]
     fn column_filter_trigger(
         &self,
@@ -5084,9 +5227,9 @@ impl PodsView {
             .custom(
                 ButtonCustomVariant::new(cx)
                     .foreground(if active {
-                        design::role::fg_secondary(cx)
+                        design::icon::active(cx)
                     } else {
-                        design::role::fg_tertiary(cx)
+                        design::icon::resting(cx)
                     })
                     .hover(design::role::fg_secondary(cx))
                     .active(design::role::fg_primary(cx)),
@@ -5104,14 +5247,21 @@ impl PodsView {
             .tab_index(0)
     }
 
-    /// The header's own sort control: a 12px direction on the sorted column, and
-    /// the same 12px held back on every other column until the pointer arrives.
+    /// The header's own sort control: a direction on the sorted column, and the
+    /// same mark held back on every other column until the pointer arrives.
     ///
-    /// One control per column, in the same 20px box the value filter beside it
-    /// uses, because two controls of different sizes in one header read as two
-    /// designers. 20px is under §4.6's 24px icon button because two of them have
-    /// to sit inside a 32px band beside a word; the keyboard reaches all three
-    /// orders with `Shift+Enter`, and the header's own tooltip says so.
+    /// One control per column, in the same [`design::size::HIT_MIN`] box the value
+    /// filter beside it uses, because two controls of different sizes in one
+    /// header read as two designers. 20px is under §4.6's 24px icon button
+    /// because two of them have to sit inside a 32px band beside a word; the
+    /// keyboard reaches all three orders with `Shift+Enter`, and the header's own
+    /// tooltip says so.
+    ///
+    /// The box is also the glyph. gpui-kit derives a `Button`'s icon from its own
+    /// size at 0.75, and the two controls in this band share a box on purpose, so
+    /// the funnel and the chevron come out at one weight without either of them
+    /// having to name a size — and a box that differed would have silently made
+    /// the two differ too.
     fn column_sort_control(
         &self,
         position: usize,
@@ -5130,18 +5280,19 @@ impl PodsView {
             _ => IconName::ChevronsUpDown,
         };
         let description = sort_description(affordance);
-        // The indicator wears the *mark* step and the label wears the *text* step,
-        // so the two can never be read as one word. They used to share `fg.primary`
-        // on the sorted column, which made `NAME ⌃` a single eleven-character
-        // label as far as the eye was concerned and left the reader to guess which
-        // glyph was the column's name — the one question a header cannot afford to
-        // raise. One rung quieter and a chevron in a 12px lane is unmistakably a
-        // mark beside a word; the same ink at the same weight is a ligature.
-        let ink = if sorted {
-            design::role::fg_secondary(cx)
-        } else {
-            design::role::fg_tertiary(cx)
-        };
+        // One ink for the lane, not one per state: the chevron is a mark beside
+        // the column label, and it is drawn one rung below the label so the two
+        // are never read as one word. `NAME ^` used to share `fg.primary` on the
+        // sorted column, which made it a single eleven-character label as far as
+        // the eye was concerned; a chevron a rung quieter than its label is
+        // unmistakably a mark beside it.
+        //
+        // Which column is ordered is already carried twice over by shapes that
+        // cost no ink — the label's weight, and the fact that this control stays
+        // at rest opacity on the sorted column while every other column's arrow
+        // appears only under the pointer. The tier below the resting one would
+        // have said neither, and it is the tier that reads as disabled.
+        let ink = design::icon::resting(cx);
         let debug_selector = format!("pod-sort-control-{index}");
         let control = Button::new(("column-sort", position))
             .debug_selector(move || debug_selector.clone())
@@ -5232,7 +5383,7 @@ fn query_error_line(error: &QueryError, cx: &App) -> AnyElement {
         .top(design::size::CONTROL)
         .left_0()
         .right_0()
-        .mt(px(2.))
+        .mt(design::space::XXS)
         .flex()
         .flex_col()
         .gap(design::space::XXS)
@@ -5300,12 +5451,12 @@ fn column_filter_body(
     let mut body = v_flex()
         .id("column-filter-body")
         .debug_selector(|| "column-filter-body".to_owned())
-        .w(px(240.))
+        .w(COLUMN_FILTER_WIDTH)
         // §4.10: 4px of padding, 2px between items. The items are the rows, and the
         // gap is what makes a list of them read as a list.
         .p_1()
         .gap(design::space::XXS)
-        .max_h(px(320.))
+        .max_h(COLUMN_FILTER_MAX_HEIGHT)
         .overflow_y_scroll();
     for (value, count) in values {
         let checked = allowed.is_none_or(|allowed| allowed.iter().any(|one| one == value));
@@ -5554,8 +5705,8 @@ fn problems_row(problems_only: bool, cx: &App) -> AnyElement {
 
 /// A 14px check box, drawn rather than borrowed.
 ///
-/// `IconName::Check` in a menu slot is 16px and its box is the menu's, so a popover
-/// that used the menu's own check would have a control 2px wider than §4.10 says and
+/// `IconName::Check` in a menu slot is 12px and its box is the menu's, so a popover
+/// that used the menu's own check would have a control 2px narrower than §4.10 says and
 /// no box at all on the unticked rows — a check that appears is a check, and a
 /// missing one reads as "no value here" rather than "not chosen".
 fn filter_checkbox(checked: bool, cx: &App) -> AnyElement {
@@ -5744,7 +5895,7 @@ impl PodsView {
             // row they just right-clicked. A second `Describe` entry used to
             // carry a byte-identical handler: two labels, two icons, one
             // behaviour.
-            menu_item("Open Details")
+            menu_item("Open details")
                 .icon(IconName::ChevronRight)
                 .on_click({
                     let view = ops_view.clone();
@@ -5831,13 +5982,18 @@ impl PodsView {
             entries.push(
                 // The one destructive row, so it is the one that carries the
                 // error channel on both its glyph and its label.
+                //
+                // The glyph goes in the menu's own icon slot rather than beside
+                // the label. The slot is the lane this menu's other glyphs are
+                // drawn in — the component sizes it — so a hand-drawn twin beside
+                // the label put two bins on one row at two weights, one of them in
+                // the row's default ink because the slot is what the other rows
+                // use, and the danger one was the second rather than the only.
                 PopupMenuItem::element(move |_, _| {
                     h_flex()
                         .id("menu-item-delete")
                         .flex_1()
                         .min_w_0()
-                        .gap_1p5()
-                        .child(Icon::new(IconName::Trash).small().text_color(delete_marker))
                         .child(Label::new("Delete").text_color(delete_marker).truncate())
                 })
                 .icon(Icon::new(IconName::Trash).text_color(delete_marker))
@@ -5875,7 +6031,7 @@ impl PodsView {
         self.row_menu_entries(target, window, cx)
     }
 
-    /// The inline error bar `UI-SPEC` §4.15 puts at the top of the table body.
+    /// The inline error bar `UI-SPEC` §4.15 puts under the table body.
     ///
     /// The bar replaced a full-area panel: a 40px coloured disc, a title, a
     /// 480px explanation, a guidance line and a button, in the middle of the
@@ -5886,9 +6042,17 @@ impl PodsView {
     /// reader could not Tab past it. And it replaced the *region*, so the table's
     /// own scroll position, its column widths and its selection went with it.
     ///
-    /// §4.15 wants the error where it happened: 32px, at the top of the body, a
-    /// 3px `danger` bar on the left, a `danger` wash behind it, 12px `danger`
-    /// copy, and a verb phrase as the action. The rows stay underneath.
+    /// §4.15 wants the error where it happened: 32px, a band of its own, a 3px
+    /// `danger` bar, a `danger` wash behind it, 12px `danger` copy, and a verb
+    /// phrase as the action. The rows stay.
+    ///
+    /// "Where it happened" is the half of §4.15 that did not survive. The bar sat
+    /// above the body, so a watch stopping moved the header and every row down
+    /// 32px and starting again moved them back: the window rearranged itself
+    /// under a reader who was looking at it. Under the body it is the same band
+    /// with the same ink, and the table loses 32px of height instead of gaining
+    /// it, which is a change the reader's eye is already used to from the
+    /// selection bar.
     fn error_bar(
         &self,
         status: &TableStatus,
@@ -5950,16 +6114,14 @@ impl PodsView {
                 // The text starts where the summary strip's and the first column's
                 // text start: 16, the table's own padding-x. `UI-SPEC` §7 asks for
                 // one left edge across everything in a region, and the bar was the
-                // one thing in the table's own header stack that broke it.
+                // one thing in the table's own bands that broke it.
                 //
-                // It could not be fixed by padding alone. The bar carries a 3px rule
-                // on its leading edge, so the content's left edge is `padding + 3 +
-                // gap`, and matching 16 from that would need 5 — a value that is in
-                // no step of §2.1's ten. So the rule moved out of the flow instead:
-                // flush to the region's own edge at x=0, which is also where a
-                // full-width bar's edge marker belongs, and the content pads to the
-                // region's own inset on its own. Both numbers are tokens, and the
-                // text lines up with the summary line and the first cell above it.
+                // It could not be fixed by padding alone. The rule is 3px of
+                // `danger` on the band's own top edge, so the content's left edge
+                // is the region's inset and nothing else — no rule inset to add
+                // and no 5 to subtract, which is a value in no step of §2.1's ten.
+                // The content pads to the region's own inset and the rule is laid
+                // across the band above it.
                 .pl(TABLE_CONTENT_INSET)
                 .relative()
                 .bg(design::role::danger_wash(cx))
@@ -5967,18 +6129,26 @@ impl PodsView {
                 .text_size(design::text::LABEL)
                 .line_height(design::text::LABEL_LINE_HEIGHT)
                 .child(
-                    // The 3px bar is the error's one piece of geometry. It is the
-                    // only thing in the table that is a solid block of `danger`,
-                    // so it reads as a boundary rather than as content — and as a
-                    // boundary it belongs on the region's edge, where it marks the
-                    // whole band rather than sitting 8px inside it as an item.
+                    // The 3px bar is the error's one piece of geometry, and it is
+                    // the only thing in the table that is a solid block of `danger`,
+                    // so it reads as a boundary rather than as content.
+                    //
+                    // It is on the band's **top** edge because that is the boundary
+                    // it owns: the edge between the rows the reader is reading and
+                    // the statement that those rows may be behind. It used to be a
+                    // 3px stub down the band's leading edge, which was right while
+                    // the band sat at the region's left — it marked the whole band
+                    // by marking its corner. Under the body there is no left edge
+                    // to mark, and a full-width rule across the top is both the
+                    // stronger claim and the same 3px of ink: the fault is the one
+                    // thing on this screen that draws a line under the data.
                     div()
                         .debug_selector(|| "table-error-bar-rule".to_owned())
                         .absolute()
                         .left_0()
+                        .right_0()
                         .top_0()
-                        .bottom_0()
-                        .w(design::space::XXS + px(1.))
+                        .h(design::space::XXS + px(1.))
                         .bg(design::role::danger(cx)),
                 )
                 .child(
@@ -6007,10 +6177,10 @@ impl PodsView {
                         IconName::X,
                         &self.notice_focus,
                         1isize,
-                        "Dismiss Error",
+                        "Dismiss error",
                         cx,
                     )
-                    .tooltip(text_tooltip("Dismiss Error"))
+                    .tooltip(text_tooltip("Dismiss error"))
                     .on_click({
                         let view = cx.weak_entity();
                         let reason = reason.clone();
@@ -6403,9 +6573,6 @@ impl Render for PodsView {
             self.loading_since = None;
             self.loading_tier = LoadingTier::Nothing;
         }
-        self.has_stale_cache = snapshot
-            .as_ref()
-            .is_some_and(|snapshot| !snapshot.rows.is_empty());
         self.refresh_summary(&snapshot, &shown);
         let body = self.table(snapshot, shown.clone(), &status, window, cx);
 
@@ -6421,10 +6588,10 @@ impl Render for PodsView {
                         IconName::X,
                         &notice_focus,
                         0isize,
-                        "Dismiss Message",
+                        "Dismiss message",
                         cx,
                     )
-                    .tooltip(text_tooltip("Dismiss Message"))
+                    .tooltip(text_tooltip("Dismiss message"))
                     .on_click(move |_, window, cx| {
                         view.update(cx, |view, cx| view.dismiss_notice(epoch, window, cx))
                             .ok();
@@ -6442,7 +6609,7 @@ impl Render for PodsView {
             gpui_kit::deferred(
                 gpui_kit::anchored()
                     .position(position)
-                    .snap_to_window_with_margin(px(8.0))
+                    .snap_to_window_with_margin(design::space::SM)
                     .child(
                         div()
                             .id("resource-context-menu")
@@ -6511,12 +6678,34 @@ impl Render for PodsView {
             }))
             .on_key_down(cx.listener(Self::on_key_down))
             .child(summary)
-            .when_some(notice, |this, notice| this.child(notice))
-            // The error belongs at the top of the table *body*, not above the
-            // summary strip: the strip reports what is on screen, and the bar
-            // reports why the screen might be behind the cluster.
-            .when_some(error_bar, |this, bar| this.child(bar))
             .child(div().flex_grow_1().min_h_0().child(body))
+            // §4.15 wanted the error at the top of the table body so it would not
+            // be interleaved with the summary strip — the strip reports what is on
+            // screen, and the bar reports why the screen might be behind the
+            // cluster. Those are two claims and only the first survives: a band
+            // above the body is a band that pushes the body down, so the header
+            // and every row moved 32px when a watch stopped and 32px back when it
+            // came, and the notice above it did the same on its own eight-second
+            // timer. The top was the only place from which a transient band could
+            // displace rows, so the transient bands moved to the only place from
+            // which they cannot.
+            //
+            // Here the table shrinks from the bottom, which is what the selection
+            // bar has always done and what every reader has already accepted as
+            // how this table behaves when something about the rows is currently
+            // true. Nothing above the body moves, so the header holds its y, the
+            // reader's rows hold their y, and the scroll position keeps meaning
+            // something.
+            //
+            // The order is fault, then message, then the reader's own actions:
+            // the fault is about the data that is on screen and belongs against
+            // it, the message is about something the reader just did, and the
+            // selection bar is a committed state with buttons on it and stays
+            // nearest the window's own edge. All three are `flex_none` and all
+            // three are below the body, so they stack upward from it and nothing
+            // in the header stack is ever conditional.
+            .when_some(error_bar, |this, bar| this.child(bar))
+            .when_some(notice, |this, notice| this.child(notice))
             .when_some(selection_bar, |this, bar| this.child(bar))
             .when_some(context_menu, |this, menu| this.child(menu))
     }
@@ -6737,12 +6926,15 @@ fn recovery_button(
         // The screen's one `primary`. §4.6: a pushed button has no hover, only a
         // pressed state, which is why this arm carries no `.hover`.
         ButtonEmphasis::Accent => (Some(design::role::accent(cx)), design::role::accent_fg(cx)),
-        // `danger`, not a coloured wash: the only destructive control in the
-        // table has to read as destructive without a second status colour on
-        // screen, and `PROMPT` §2.1 #8 caps the accent at two uses per screen.
+        // A wash of the channel rather than a solid fill: the one destructive
+        // control in the table has to read as destructive without spending a
+        // second status colour on screen, and `PROMPT` §2.1 #8 caps the accent at
+        // two uses per screen. The label on that wash is the channel's *word*
+        // ink, because a label on a wash of its own channel is what the word
+        // role exists for and the button's label is 12px body text.
         ButtonEmphasis::Danger => (
             Some(design::role::danger_wash(cx)),
-            design::role::danger(cx),
+            design::role::danger_word(cx),
         ),
     };
     let button = BaseButton::new(id)
@@ -6773,6 +6965,11 @@ fn recovery_button(
 }
 
 /// The icon-only half of [`recovery_button`], on the same target.
+///
+/// The box and the glyph are stated separately, which is the whole point: gpui-kit
+/// derives a component button's icon from its own box, so a 28px box would have
+/// drawn a 21px glyph and this bar's two dismiss controls would not have matched
+/// the icon controls in any other bar.
 fn recovery_icon_button(
     id: impl Into<ElementId>,
     icon: IconName,
@@ -6788,9 +6985,15 @@ fn recovery_icon_button(
         .accessibility_label(label)
         .size(design::size::CONTROL)
         .rounded(design::radius::MD)
-        .text_color(design::role::fg_tertiary(cx))
+        // The resting ink of a glyph in a control, not `fg.tertiary`. This is an
+        // icon-only button with no label to read, so the glyph is the whole
+        // control — drawn at the placeholder tier beside the bar's `fg_secondary`
+        // text it read as a disabled button, which is the one thing an active
+        // dismiss control must not look like.
+        .text_color(design::icon::resting(cx))
+        // Hover is the wash, never a second ink on the glyph.
         .hover(|style| style.bg(design::role::accent_wash(cx)))
-        .child(Icon::new(icon).with_size(Size::Size(design::size::ICON)))
+        .child(Icon::new(icon).with_size(Size::Size(design::icon::IN_TOOLBAR)))
 }
 
 /// The UI text face a subtree renders in.
@@ -6822,7 +7025,7 @@ fn description_label(text: impl Into<SharedString>) -> Label {
 /// `label 12/400`, because this is the same sentence the inline error bar shows
 /// (`table-error-bar`, also `design::text::LABEL`) and §4.15 fixes both at 12/400.
 /// It was `caption` 11, so the same words were 11px in the empty state and 12px in
-/// the bar above it — a difference too small to name and large enough to see as the
+/// the bar beside it — a difference too small to name and large enough to see as the
 /// error moving when the table loses its rows.
 fn reason_label(text: impl Into<SharedString>) -> Label {
     Label::new(text)
@@ -6886,21 +7089,39 @@ fn format_age(age: Duration) -> String {
 /// event and putting it in the error bar's slot would have made the bar mean
 /// two things.
 ///
+/// It stacks against the table's own bottom edge, with the error bar above it,
+/// because that is the only slot a transient band can occupy without moving the
+/// rows. It used to sit between the summary strip and the table body, which put
+/// 28px between the header and the reader's reading position for eight seconds —
+/// the length of [`NOTICE_DURATION`] — and then took it back. A band that
+/// arrives on a timer must not be able to move anything above it.
+///
 /// A 6px dot rather than the 16px health glyph, for §4.4's reason: the dot
 /// carries the severity, and a glyph per severity in a bar that can appear above
 /// a table of a thousand rows is a second status vocabulary in the same screen.
 fn notice_banner(notice: &Notice, cx: &App) -> gpui_kit::Stateful<Div> {
+    // The dot is a mark and the sentence is a word, and the design system keeps
+    // two inks per channel for exactly that split. One value for both held the
+    // banner's message to the graphic floor while the error bar a band below it —
+    // the same failure, in the same words, at the same size — wore the text floor.
+    //
+    // The dot's own ink is named by what it carries rather than picked from the
+    // role ladder beside it: a severity is a mark's channel, and a dot that
+    // repeats the word beside it is decoration.
     let (dot, ink) = match notice.severity {
-        Severity::Error => (design::role::danger(cx), design::role::danger(cx)),
-        Severity::Warning => (design::role::warning(cx), design::role::warning(cx)),
+        Severity::Error => (
+            design::icon::status(cx, Severity::Error),
+            design::role::danger_word(cx),
+        ),
+        Severity::Warning => (
+            design::icon::status(cx, Severity::Warning),
+            design::role::warning_word(cx),
+        ),
         // §0 铁律三: an operation that merely succeeded is not a problem, so it
         // takes the quiet ink. The old code handed `Success` and `Info` the same
         // green wash, so "it worked" and "here is something to know" were one
         // colour at the one place a reader is being told them apart.
-        _ => (
-            design::role::fg_tertiary(cx),
-            design::role::fg_secondary(cx),
-        ),
+        _ => (design::icon::incidental(cx), design::role::fg_secondary(cx)),
     };
     let role = if notice.severity == Severity::Error {
         Role::Alert
@@ -6912,6 +7133,11 @@ fn notice_banner(notice: &Notice, cx: &App) -> gpui_kit::Stateful<Div> {
             "resource-notice".into(),
             notice.epoch,
         ))
+        // A named integer has no selector a test can look up, and this band is
+        // one of the two that stack against the table's own bottom edge, so the
+        // invariant that they never move the rows is only testable if this band
+        // answers to a name.
+        .debug_selector(|| "table-notice".to_owned())
         .role(role)
         .aria_label(notice.message.clone())
         .w_full()
@@ -6929,7 +7155,7 @@ fn notice_banner(notice: &Notice, cx: &App) -> gpui_kit::Stateful<Div> {
     let tooltip = notice
         .detail
         .clone()
-        .unwrap_or_else(|| SharedString::from("Dismiss Message"));
+        .unwrap_or_else(|| SharedString::from("Dismiss message"));
     banner.interactivity().tooltip(text_tooltip(tooltip));
     banner
         .child(
@@ -7001,10 +7227,20 @@ fn pending_badge(pending: &PendingState, row_index: usize, cx: &App) -> AnyEleme
     // pending scale or restart is not a problem at all, so it takes the quiet
     // role. The old code gave both an icon glyph, which put two more shapes in
     // the same cell as the 6px status dot the spec asks for.
-    let (background, ink) = match op {
-        PendingOp::Delete => (design::role::warning_wash(cx), design::role::warning(cx)),
+    //
+    // The dot keeps the mark ink and the label takes the word ink: a chip is the
+    // one place in the table that prints a status word on a wash of its own
+    // channel, which is the case the design system's second ink per channel
+    // exists for.
+    let (background, dot, ink) = match op {
+        PendingOp::Delete => (
+            design::role::warning_wash(cx),
+            design::icon::status(cx, Severity::Warning),
+            design::role::warning_word(cx),
+        ),
         PendingOp::Scale { .. } | PendingOp::Restart => (
             design::role::accent_wash(cx),
+            design::icon::resting(cx),
             design::role::fg_secondary(cx),
         ),
     };
@@ -7033,7 +7269,7 @@ fn pending_badge(pending: &PendingState, row_index: usize, cx: &App) -> AnyEleme
                 .size(design::size::STATUS_DOT)
                 .flex_none()
                 .rounded_full()
-                .bg(ink),
+                .bg(dot),
         )
         .child(SharedString::from(op.label()))
         .when(seconds > 0, |badge| {
@@ -7270,31 +7506,42 @@ fn row_accessible_label(
 /// multi-selection". Every one of them has to be told apart without being told
 /// apart *twice*, so the ladder spends one channel at a time and stops:
 ///
-/// | state | wash | rail | ink |
-/// |---|---|---|---|
-/// | rest | the content surface | — | the column's own declaration |
-/// | hover | the solved hover wash, *composited over* whatever the row already is | — | unchanged |
-/// | keyboard cursor | `row_focus_bg` | accent rail | stepped up one rung |
-/// | selected, focused | `row_selected_bg` | accent rail | stepped up one rung |
-/// | selected, table unfocused | a solved, weaker selection wash | accent rail | stepped up one rung |
-/// | range member | the focused selection wash, identical | — | stepped up one rung |
+/// | state | wash | rail | focus edge | ink |
+/// |---|---|---|---|---|
+/// | rest | the content surface | — | — | the column's own declaration |
+/// | hover | the solved hover wash, *composited over* whatever the row already is | — | — | unchanged |
+/// | keyboard cursor | `row_focus_bg` | accent rail | hairline around the row |
+/// | selected, focused, and the row the inspector is showing | `row_selection_bg` | accent rail | hairline around the row |
+/// | selected, table unfocused | `row_selection_bg`, unchanged | accent rail | — |
+/// | range member | `row_selection_bg`, unchanged | — | — |
 ///
-/// Three things follow from that table and all three are load-bearing:
+/// Four things follow from that table and all four are load-bearing:
 ///
 /// * **Hover is one wash, composited.** `selected + hover` is the *same* signal at
 ///   a stronger strength, so the hover is laid over the row's own state rather
 ///   than swapped in for it. Swapping it replaced the accent wash with the plain
 ///   hover wash at the exact moment the reader was about to act.
-/// * **A member and the active row differ by the rail alone.** The two used to
-///   take different fills and the difference measured 1.018:1 against the
-///   unselected row beside them, so neither appearance could show it. One fill,
-///   one rail, and the rail names exactly one command target.
+/// * **A member is quieter than the row the inspector is showing.** The two used
+///   to take the same fill and the difference was 1.018:1 against the unselected
+///   row beside them — invisible — while every selected row took the *full*
+///   selection wash, so a 200-row range painted 200 slabs at the strength meant
+///   for one. The active row keeps the strong wash and the rail, because it is
+///   the one row a command acts on; every other selected row takes the quiet
+///   wash, which is a step above hover and a step below the cursor. A range
+///   therefore reads as *one* marked row among several tinted ones, and a
+///   single selection reads as a marked row alone.
+/// * **Focus is a shape, not a tint.** Keyboard focus used to be told from
+///   selection by four points of accent alpha, which is a difference a reader
+///   cannot see and a greyscale screenshot cannot show at all. The focused row
+///   now carries a `border.strong` hairline around it as well as its wash, so the
+///   cue is a frame rather than a slightly bluer band, and hiding the colour still
+///   leaves the keyboard's position readable.
 /// * **The inspector's row is the active row.** The selection is what drives the
 ///   Inspector, so there is no seventh state to paint and no way for the two to
-///   disagree about which row they mean. The cell inks on every row that carries a
-///   wash are re-solved against it — [`RowVisual::carries_accent_wash`] — because
-///   a `fg.secondary` solved against the plain surface is not that colour on a
-///   20% accent wash.
+///   disagree about which row they mean. The cell inks are not stepped up on a
+///   washed row: [`columns::CellInk::color`] already solves every level against
+///   the surface the cell is drawn on, so a `fg.secondary` on a 20% accent wash
+///   is that wash's `fg.secondary` rather than the plain surface's.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum RowVisual {
     /// Not selected, no cursor.
@@ -7319,28 +7566,17 @@ impl RowVisual {
         )
     }
 
-    /// Reports whether the row keeps the selection fill.
-    fn is_selected(self) -> bool {
-        matches!(
-            self,
-            Self::SelectedFocused | Self::SelectedUnfocused | Self::SelectedMember
-        )
-    }
-
-    /// Reports whether the row's own ink has to be solved against *its own wash*
-    /// rather than against the plain content surface.
+    /// Reports whether the row is the one the keyboard is on.
     ///
-    /// Three states answer yes and they are the three that carry a wash: the
-    /// focused selection, a range member, and the keyboard cursor. The first two
-    /// already did — `columns::CellInk::color` steps every level up one rung when
-    /// `selected` is true — and the cursor did not, so the row the keyboard was on
-    /// was painted with `fg.secondary` and `fg.tertiary` values solved against a
-    /// surface it was no longer on. The focus wash is 16% accent: enough to move a
-    /// solved hue off its floor, not enough for the eye to notice that anything
-    /// changed. The rail is still what says "the keyboard is here"; this only makes
-    /// sure the values on that row are readable against the row they are on.
-    fn carries_accent_wash(self) -> bool {
-        self.is_selected() || matches!(self, Self::FocusRing)
+    /// This is the cue that has to survive greyscale, so it is drawn as a shape —
+    /// a `border.strong` frame round the whole row — and not as a fourth
+    /// alpha of accent. Focus used to be the same 2px accent rail the selection uses, and on a
+    /// selected row the rail, the wash and the focus were three readings of one
+    /// hue: a reader who cannot separate the hues (or a screenshot reduced to
+    /// luminance) saw one selected row and could not say which one the next
+    /// keystroke would act on.
+    fn is_focused(self) -> bool {
+        matches!(self, Self::SelectedFocused | Self::FocusRing)
     }
 }
 
@@ -7384,42 +7620,41 @@ fn row_visual(
     RowVisual::Plain
 }
 
-/// Selected row background for a table that lost keyboard focus.
+/// The wash a selected row takes, whenever it was selected.
 ///
-/// It composites on the same base as every other row state, so a selected row
-/// that lost focus steps down from the focused fill without changing surface.
-fn row_selected_muted_bg(cx: &App) -> Hsla {
-    // A softer wash than the focused selection, but still a row state, so it
-    // clears the same floor. Scaling the alpha by hand put it at 1.188:1 in the
-    // light appearance -- under `ROW_STATE_MIN_CONTRAST` -- and it had no
-    // contrast assertion at all, which is how that survived. The solver walks the
-    // wash away from the base until it clears, so the two states stay distinct by
-    // construction rather than by a constant somebody chose once.
-    let base = table_row_surface(cx);
-    design::graphic_on_with_minimum(
-        base,
-        base.blend(design::role::accent(cx).opacity(design::ROW_SELECTED_ALPHA * 0.55)),
-        design::ROW_STATE_MIN_CONTRAST,
-    )
+/// One value for all three selected states on purpose. Selection is a fact about
+/// the resource, not about where the keyboard is: a reader who alt-tabs away and
+/// comes back has to find the same rows selected, so a row that lost focus keeps
+/// its fill exactly. It used to step *down* (`design::row_selected_bg` at 20%
+/// accent focused, a hand-scaled 11% unfocused), and the weaker step is what made
+/// a selection look like it had evaporated.
+///
+/// It is `role::accent_wash` — the theme's own accent wash at its own alpha —
+/// rather than a strength of accent picked here, for two reasons. It is a quarter
+/// lighter than the wash it replaces, which is the whole of the "muddy slab that
+/// reads heavier than the data" defect: at 20% the band was darker and bluer than
+/// the name it was supposed to be sitting behind. And `Roles::text_surfaces`
+/// already solves every ink against exactly this plane
+/// (`composite_surface(surface_content, accent_wash)`), so the quiet selection is
+/// a surface the type ladder was designed on rather than one invented to fill a
+/// gap.
+fn row_selection_bg(cx: &App) -> Hsla {
+    design::composite_surface(table_row_surface(cx), design::role::accent_wash(cx))
 }
 
 /// Paints one row's visual state.
 ///
-/// A range member used to take the muted fill, which measured 1.018:1 against
-/// the unselected row beside it in dark and 1.022:1 in light: the wash was the
-/// only signal a member had, and neither appearance could show it. Members now
-/// take the same fill as the active row and stay apart by rail alone, which
-/// `uses_table_focus_rail` still reserves for the row a command acts on.
-fn row_visual_background(
-    visual: RowVisual,
-    selected: Hsla,
-    selected_muted: Hsla,
-    focused: Hsla,
-    plain: Hsla,
-) -> Hsla {
+/// Three selected states, one fill: the selection is persistent, so the state the
+/// reader can *see* does not answer a question they did not ask. What separates
+/// the three is the rail and the focus edge, and both are shapes rather than
+/// tints — which is what lets them survive greyscale, and what lets a
+/// hundred-row range read as a range (many tinted rows, one of them marked)
+/// rather than as a hundred equally loud slabs.
+fn row_visual_background(visual: RowVisual, selected: Hsla, focused: Hsla, plain: Hsla) -> Hsla {
     match visual {
-        RowVisual::SelectedFocused | RowVisual::SelectedMember => selected,
-        RowVisual::SelectedUnfocused => selected_muted,
+        RowVisual::SelectedFocused | RowVisual::SelectedUnfocused | RowVisual::SelectedMember => {
+            selected
+        }
         RowVisual::FocusRing => focused,
         RowVisual::Plain => plain,
     }
@@ -7453,6 +7688,17 @@ fn row_hover_background(visual: RowVisual, background: Hsla, cx: &App) -> Hsla {
 /// function for both keeps the two states from drifting apart.
 fn table_row_surface(cx: &App) -> Hsla {
     design::role::surface_content(cx)
+}
+
+/// The surface the column header band paints on.
+///
+/// `surface_raised`, one step above the content plane the rows sit on, and the
+/// step the role ladder names for a table header. The header and the body were
+/// the same value, so the band read as a fifth row rather than as the chrome
+/// above them — and the fix is not a hairline, because a hairline cannot say
+/// "this band is a different kind of thing", only "these two things touch".
+fn table_header_surface(cx: &App) -> Hsla {
+    design::role::surface_raised(cx)
 }
 
 /// The grid's 1-based row index of a listed row.
@@ -7649,6 +7895,23 @@ struct CellShape {
 /// `nightly-reindex-warehouse-…-dp…`. Charging the rule here fixes all three
 /// readers of the width at once — the middle ellipsis, the overflow test and the
 /// tooltip — because they all ask this function.
+///
+/// This is also the one truncation policy, in one place. Two rules, and every
+/// column obeys both:
+///
+/// * **A name is cut in the middle** (`UI-SPEC` §10.1), because a Kubernetes
+///   name's hash is at its tail and a tail ellipsis deletes the half that tells
+///   one pod from another.
+/// * **Everything else is cut at the tail**, because a namespace, a node or an
+///   image tag is identified by its prefix — and a value that does not fit in
+///   either carries its full text in a tooltip.
+///
+/// What is *not* here is a per-column truncation width, and that is the point: a
+/// column's resolved width is a consequence of the reader's window and their
+/// drags, so a policy stated in widths is a policy that changes under them. This
+/// function takes the resolved width and asks the same question of every column,
+/// which is why dragging one wider cannot silently give it a different
+/// truncation rule from its neighbour.
 fn cell_text_width(column: Option<&ResourceColumn>, width: Pixels) -> f32 {
     let width = if f32::from(width) > 0.0 {
         f32::from(width)
@@ -7787,6 +8050,22 @@ fn first_line(text: &str, limit: usize) -> String {
     let mut out: String = text.chars().take(limit.saturating_sub(1)).collect();
     out.push('…');
     out
+}
+
+/// The strip's word for rows that are not live, carrying how old they are.
+///
+/// The duration is part of the word rather than a figure beside it because the
+/// reader is not comparing it to the counts next to it — they are deciding
+/// whether the row under the cursor is safe to act on, and `Stale data` on its
+/// own does not answer that.
+fn freshness_word(label: &str, age: Option<Duration>) -> SharedString {
+    match age {
+        Some(age) => SharedString::from(format!(
+            "{label} \u{b7} {} old",
+            design::format::age(age.as_secs())
+        )),
+        None => SharedString::from(label),
+    }
 }
 
 fn table_status_detail(status: &TableStatus) -> String {
@@ -7968,7 +8247,7 @@ impl Recovery {
             ),
             Self::ClearHidingFilter => (
                 "empty-stale-action",
-                "Clear Filter",
+                "Clear filter",
                 ButtonEmphasis::Default,
             ),
         }
@@ -7977,7 +8256,7 @@ impl Recovery {
     /// The control's own words plus the key that runs it.
     fn tooltip(self, cx: &App) -> String {
         match self {
-            Self::Resume => action_tooltip("Resume Live Updates", &ToggleUpdates, cx),
+            Self::Resume => action_tooltip("Resume live updates", &ToggleUpdates, cx),
             Self::RetryLive => action_tooltip(RETRY_LIVE_UPDATES, &Refresh, cx),
             Self::RetryList => action_tooltip(RETRY_LOADING_RESOURCES, &Refresh, cx),
             Self::Refresh => action_tooltip(REFRESH_RESOURCES, &Refresh, cx),
@@ -8166,27 +8445,29 @@ fn empty_state(context: EmptyStateContext<'_>, window: &Window, cx: &App) -> Any
             format!("Cannot list {plural}: this identity is not permitted to."),
         ),
     };
-    // One icon size for all table empty states, and the one size token the
-    // rest of the app uses, so the same empty state is not a different size here
-    // than in every sibling panel.
-    let icon_size = Size::Size(design::size::ICON_LARGE);
+    // One icon size for all table empty states, and the lead lane's own
+    // number, so the same empty state is not a different size here than in
+    // every sibling panel.
+    let icon_size = Size::Size(design::icon::LEAD);
     let spinning = icon == IconName::LoaderCircle;
-    // The icon is 24px `fg.tertiary` in every state including the failures.
-    // §4.13 is explicit that it must not be a coloured large icon: a 40px red
-    // disc in the middle of a table is a web dialog's apology, and a red one
-    // reads as a second thing that went wrong on top of the thing that did.
+    // The lead mark takes the resting ink: one rung under its own title, which is
+    // the relationship every other mark/word pair in the product has, and quiet
+    // enough that the title is still the thing being read. §4.13 is explicit
+    // that it must not be a *coloured* large icon — a 40px red disc in the middle
+    // of a table is a web dialog's apology, and a red one reads as a second thing
+    // that went wrong on top of the thing that did — and that rule is about hue,
+    // which left the tier below unclaimed. It was sitting there, and
+    // `fg.tertiary` is the placeholder and count rung: a mark the reader has to
+    // identify, drawn at the ink the product uses for text nobody must read.
+    let lead_ink = design::icon::resting(cx);
     let glyph: AnyElement = if spinning {
         // The shared spinner stops when the reader asked for less motion.
-        crate::panels::common::spinner(icon, design::role::fg_tertiary(cx), icon_size)
+        crate::panels::common::spinner(icon, lead_ink, icon_size)
     } else {
         div()
             .id("empty-icon")
             .debug_selector(|| "empty-icon".to_owned())
-            .child(
-                Icon::new(icon)
-                    .with_size(icon_size)
-                    .text_color(design::role::fg_tertiary(cx)),
-            )
+            .child(Icon::new(icon).with_size(icon_size).text_color(lead_ink))
             .into_any_element()
     };
     // The reason is readable on screen; the raw text stays in the tooltip, so a
@@ -8227,7 +8508,12 @@ fn empty_state(context: EmptyStateContext<'_>, window: &Window, cx: &App) -> Any
         lines = lines.child(
             div()
                 .debug_selector(|| "empty-detail".to_owned())
-                .child(description_label(detail).text_color(design::role::fg_tertiary(cx))),
+                // `fg.secondary`, the ink the Dock's empty state gives the identical
+                // slot. `fg.tertiary` is the placeholder and count rung: a 13px
+                // paragraph the reader is meant to read once, drawn in it, reads
+                // as a second thing the app is not going to tell them about, and
+                // it left two same-shaped empty states a tier apart.
+                .child(description_label(detail).text_color(design::role::fg_secondary(cx))),
         );
     }
     let state_element = Empty::new()
@@ -8247,7 +8533,7 @@ fn empty_state(context: EmptyStateContext<'_>, window: &Window, cx: &App) -> Any
         .header(
             EmptyHeader::new()
                 .gap(design::space::SM)
-                .max_w(EMPTY_MEASURE)
+                .max_w(design::size::EMPTY_MEASURE)
                 .media(
                     // A turning glyph gets the unframed slot: the frame is sized
                     // for a static icon and would crop the sweep.
@@ -8320,14 +8606,6 @@ fn empty_state(context: EmptyStateContext<'_>, window: &Window, cx: &App) -> Any
         .into_any_element()
 }
 
-/// The reading measure of an empty state's text.
-///
-/// `UI-SPEC` §2.3 fixes it at 40ch rather than a pixel width: 480px is 78ch in
-/// the UI face and 32ch in a wide one, so a pixel width silently changed how
-/// much of a sentence a reader saw depending on the font that happened to be
-/// installed.
-const EMPTY_MEASURE: Pixels = px(270.);
-
 /// The one row that says a list is on its way, without a skeleton under it.
 ///
 /// `UI-SPEC` §4.14's 200ms-to-2s tier, and the row the skeleton also opens with
@@ -8352,11 +8630,14 @@ fn loading_status_band(spec: &ResourceSpec, cx: &App) -> gpui_kit::Stateful<Div>
         .line_height(design::text::LABEL_LINE_HEIGHT)
         .child(
             // The shared spinner reads the reduce-motion setting, so this table
-            // stops turning when the reader asked for less motion.
+            // stops turning when the reader asked for less motion. It carries the
+            // band word's own rung rather than the tier below it: the word beside
+            // it says what is loading, and the sweep is the only thing that says
+            // it is still happening.
             crate::panels::common::spinner(
                 IconName::LoaderCircle,
-                design::role::fg_tertiary(cx),
-                Size::Size(design::size::STATUS_MARKER),
+                design::icon::resting(cx),
+                Size::Size(design::icon::IN_ROW),
             ),
         )
         .child(
@@ -8476,6 +8757,10 @@ fn loading_table(
         // into place. Padding and `items_center` are what make the two states one
         // layout.
         .items_center()
+        // The live band's own surface, for the same reason it has one: a skeleton
+        // header at the rows' value is a header that reads as a fifth row, and it
+        // is on screen for every long load.
+        .bg(table_header_surface(cx))
         // The one rule a skeleton keeps: the live header's own 1px
         // `border.subtle` baseline, so the columns do not move up a pixel when
         // the rows replace the placeholders.
@@ -8511,8 +8796,13 @@ fn loading_table(
                 .font(ui_font(cx))
                 .text_size(design::text::CAPTION)
                 .line_height(design::text::CAPTION_LINE_HEIGHT)
-                .font_weight(design::text::SEMIBOLD)
-                .text_color(design::role::fg_tertiary(cx))
+                // `MEDIUM`, which is what an unsorted live label is set at. The
+                // skeleton has no sort state to read, so it draws the resting
+                // weight — a skeleton label at the sorted column's weight would
+                // name a sort that is not there yet, and then drop a step when the
+                // real header arrives.
+                .font_weight(design::text::MEDIUM)
+                .text_color(design::role::fg_secondary(cx))
                 .child(header_label(column.title))
         }));
     // The count of rows stays readable, so the iterator does not shadow it.
@@ -8830,10 +9120,8 @@ fn row_cell(
     widths: &[Pixels],
     typography: &DataTypography,
     char_width: f32,
-    // Whether the row carries a wash the cell's ink has to be solved against, so
-    // `CellInk::color` steps every level up one rung. See
-    // [`RowVisual::carries_accent_wash`].
-    emphasised: bool,
+    // `CellInk::color` resolves the level against the row it is drawn on
+    // already, so a selected row does not restate the wash here.
     row_background: Hsla,
     pending: Option<&PendingState>,
     has_status_column: bool,
@@ -9029,12 +9317,23 @@ fn row_cell(
                 );
         }
         // The ink ladder, resolved by the column's own declaration so no kind can
-        // decide a cell's colour for itself. A row that carries a wash has to be
-        // readable *on* that wash, so every level steps up one rung rather than
-        // inheriting a colour solved against the plain row — see
-        // [`RowVisual::carries_accent_wash`] for the three states that do.
-        if let Some(ink) = column.map(|column| column.ink) {
-            element = element.text_color(ink.color(emphasised, cx));
+        // decide a cell's colour for itself. A row that carries a wash is not
+        // re-inked here: `CellInk::color` already solves every level against
+        // the surface the cell is actually drawn on, so a selected row keeps the
+        // same three steps a resting row has.
+        //
+        // One value overrides the column, and it is the one that is not a value:
+        // a dash stands for "the cluster never reported this", so it wears the
+        // placeholder rung whatever the column asked for. A `READY` column whose
+        // dashes sit at body weight is a column where the dashes compete with
+        // the numbers the reader is scanning for.
+        let ink = if super::columns::is_absent(&cell.text) {
+            Some(design::role::fg_tertiary(cx))
+        } else {
+            column.map(|column| column.ink.color(cx))
+        };
+        if let Some(ink) = ink {
+            element = element.text_color(ink);
         }
         // Put the pending badge in the first cell when Status is hidden.
         if let Some(pending) = pending
@@ -9355,8 +9654,7 @@ impl ResourceTableDelegate {
         );
         let background = row_visual_background(
             visual,
-            design::row_selected_bg(cx),
-            row_selected_muted_bg(cx),
+            row_selection_bg(cx),
             design::row_focus_bg(cx),
             table_row_surface(cx),
         );
@@ -9678,6 +9976,28 @@ impl TableDelegate for ResourceTableDelegate {
                     .bg(design::role::accent(cx)),
             );
         }
+        // The keyboard's row is framed by a 1px `border.strong` rectangle, the
+        // one border role the design reserves for a focused edge.
+        //
+        // Focus used to be told from selection by a wash four points of accent
+        // lighter, which is not a difference a reader resolves and is not a
+        // difference at all once the hue is gone. A frame is a shape: it survives
+        // greyscale, it survives a reader who cannot separate the hues, and it
+        // names one row without adding a second fill to decode. Drawn only when
+        // the keyboard is on this row, so a click never leaves one behind.
+        if visual.is_focused() {
+            row = row.child(
+                div()
+                    .debug_selector(move || format!("resource-row-focus-edge-{position}"))
+                    .absolute()
+                    .left_0()
+                    .right_0()
+                    .top_0()
+                    .bottom_0()
+                    .border_1()
+                    .border_color(design::role::border_strong(cx)),
+            );
+        }
         let view = self.view.clone();
         let Some(focus) = self
             .view
@@ -9719,7 +10039,7 @@ impl TableDelegate for ResourceTableDelegate {
         window: &mut Window,
         cx: &mut Context<TableState<Self>>,
     ) -> impl IntoElement {
-        let Some((visual, background, pending)) = self.row_state(row_ix, cx) else {
+        let Some((_visual, background, pending)) = self.row_state(row_ix, cx) else {
             return div().into_any_element();
         };
         let Some((row, _)) = self.row(row_ix) else {
@@ -9727,10 +10047,6 @@ impl TableDelegate for ResourceTableDelegate {
         };
         let trailing = row_confidence(self.stale, row, &self.columns);
         let char_width = f32::from(self.typography.size) * CHAR_WIDTH_RATIO;
-        // Whether the ink ladder steps up one rung for this row. Three of the six
-        // row states paint a wash, so three of them have to be read against it —
-        // including the keyboard cursor, which used to be the one that was not.
-        let emphasised = visual.carries_accent_wash();
         row_cell(
             row_ix,
             col_ix,
@@ -9740,7 +10056,6 @@ impl TableDelegate for ResourceTableDelegate {
             &self.widths,
             &self.typography,
             char_width,
-            emphasised,
             background,
             pending.as_ref(),
             self.has_status_column,
@@ -9822,7 +10137,7 @@ fn confidence_marker(row_index: usize, state: design::Confidence, cx: &App) -> O
             .tooltip(text_tooltip(label))
             .child(
                 Icon::new(icon)
-                    .with_size(Size::Size(design::size::STATUS_MARKER))
+                    .with_size(Size::Size(design::icon::IN_ROW))
                     .text_color(design::confidence::foreground(state, cx)),
             )
             .into_any_element(),
@@ -9992,13 +10307,38 @@ fn header_cell_height() -> Pixels {
 /// belongs to the *query*, not to a column, and the old rule read "not Unsorted",
 /// so a single typed filter lit all seven labels at once and the band stopped
 /// having a sorted column to point at. See [`affordance_marks_the_column`].
-fn header_label_color(affordance: SortAffordance, hovered: bool, cx: &App) -> Hsla {
+fn header_label_color(affordance: SortAffordance, _hovered: bool, cx: &App) -> Hsla {
     if affordance_marks_the_column(affordance) {
         design::role::fg_primary(cx)
-    } else if hovered {
-        design::role::fg_secondary(cx)
     } else {
-        design::role::fg_tertiary(cx)
+        // `fg.secondary`, not `fg.tertiary`. A column header is the one label a
+        // reader has to find before they can read anything at all, and the
+        // quietest rung is the one the design reserves for things nobody must
+        // read to do the job — a count, a placeholder, a group head. An 11px
+        // uppercase word at that rung is a word a reader has to lean in for.
+        design::role::fg_secondary(cx)
+    }
+}
+
+/// The weight a header label is set at.
+///
+/// Weight, not ink, is what separates the sorted column from its neighbours —
+/// and it is a channel that survives greyscale, which the 11px size does not. The
+/// label used to be `SEMIBOLD` on every column, which made the weight a property
+/// of the band rather than of the state, and then the *ink* was asked to carry
+/// "sorted" as well. Hover was given the ink too, and a pointer crossing an
+/// unsorted column made its label as loud as the sorted one, so the one question
+/// a header exists to answer — which column is the table ordered by — became
+/// unanswerable from the resting pixels.
+///
+/// Hover therefore says nothing with the label. It already says something twice
+/// over, in shapes that cost no ink: the column's own wash and the control that
+/// appears beside the word.
+fn header_label_weight(affordance: SortAffordance) -> FontWeight {
+    if affordance_marks_the_column(affordance) {
+        design::text::SEMIBOLD
+    } else {
+        design::text::MEDIUM
     }
 }
 
@@ -10280,32 +10620,63 @@ mod tests {
 
     // A multi-row selection must mark one command target, not every row.
 
-    // The two selected states must not paint the same fill.
+    // Selection is a fact about the resource, not about where the keyboard is,
+    // so a row that lost focus keeps the fill it had. The two selected states
+    // used to paint different washes, and the weaker one is what made a
+    // selection look like it had evaporated when the reader alt-tabbed away.
     #[gpui_kit::test]
-    fn unfocused_selected_fill_is_muted(cx: &mut TestAppContext) {
+    fn selection_survives_the_table_losing_focus(cx: &mut TestAppContext) {
         init_app(cx);
         cx.update(|cx| {
-            assert_ne!(
-                design::row_selected_bg(cx),
-                row_selected_muted_bg(cx),
-                "a selected row that lost focus must look different"
+            let selected = row_selection_bg(cx);
+            let focused = design::row_focus_bg(cx);
+            let plain = table_row_surface(cx);
+            let fill = |visual| row_visual_background(visual, selected, focused, plain);
+            assert_eq!(
+                fill(RowVisual::SelectedUnfocused),
+                fill(RowVisual::SelectedFocused),
+                "losing focus must not unselect a row"
             );
+            // And a selection is still not a hover or a cursor: the three fills a
+            // reader can be looking at have to be three colours.
+            for visual in [
+                RowVisual::SelectedUnfocused,
+                RowVisual::SelectedFocused,
+                RowVisual::SelectedMember,
+            ] {
+                assert_ne!(
+                    fill(visual),
+                    plain,
+                    "a selected row cannot match an unselected one"
+                );
+                assert_ne!(
+                    fill(visual),
+                    design::row_hover_bg(cx),
+                    "a selection cannot resolve to the hover wash"
+                );
+                assert_ne!(
+                    fill(visual),
+                    focused,
+                    "a selection cannot resolve to the keyboard cursor's wash"
+                );
+            }
         });
     }
 
-    // A range member used to take the muted fill, which measured 1.018:1 in
-    // dark and 1.022:1 in light against the row beside it. The wash was the only
-    // signal a member had and neither appearance could show it.
+    // The rail names one command target, so a member and the active row stay
+    // told apart; the focus edge is what tells a reader which of the *selected*
+    // rows the next keystroke will act on, and it is a shape so it survives
+    // greyscale. A range member used to take the muted fill, which measured
+    // 1.018:1 in dark and 1.022:1 in light against the row beside it: the wash was
+    // the only signal a member had and neither appearance could show it.
     #[gpui_kit::test]
-    fn a_range_member_takes_the_same_fill_as_the_active_row(cx: &mut TestAppContext) {
+    fn a_range_member_reads_as_selected_and_the_keyboard_row_as_focused(cx: &mut TestAppContext) {
         init_app(cx);
         cx.update(|cx| {
-            let selected = design::row_selected_bg(cx);
-            let selected_muted = row_selected_muted_bg(cx);
+            let selected = row_selection_bg(cx);
             let focused = design::row_focus_bg(cx);
             let plain = table_row_surface(cx);
-            let fill =
-                |visual| row_visual_background(visual, selected, selected_muted, focused, plain);
+            let fill = |visual| row_visual_background(visual, selected, focused, plain);
             assert_eq!(
                 fill(RowVisual::SelectedMember),
                 fill(RowVisual::SelectedFocused),
@@ -10326,6 +10697,13 @@ mod tests {
             // active row stay told apart without a second colour.
             assert!(!RowVisual::SelectedMember.has_rail());
             assert!(RowVisual::SelectedFocused.has_rail());
+            // Focus is a hairline, not a fourth wash: exactly the rows the
+            // keyboard can act on have one, and no others do.
+            assert!(RowVisual::FocusRing.is_focused());
+            assert!(RowVisual::SelectedFocused.is_focused());
+            assert!(!RowVisual::SelectedMember.is_focused());
+            assert!(!RowVisual::SelectedUnfocused.is_focused());
+            assert!(!RowVisual::Plain.is_focused());
             // `UI-SPEC` §4.4: no zebra. The variant is gone rather than set to
             // the plain fill, because a state nobody can reach and a state that
             // happens to be invisible are different mistakes and only the first
@@ -10354,7 +10732,7 @@ mod tests {
             for state in [
                 design::row_focus_bg(cx),
                 design::row_hover_bg(cx),
-                design::row_selected_bg(cx),
+                row_selection_bg(cx),
             ] {
                 assert_ne!(
                     state,
@@ -10404,7 +10782,8 @@ mod tests {
 
         let grid = cx.debug_bounds("resource-grid").expect("resource grid");
         // `UI-REDESIGN` D16 deleted the pill toolbar, and `UI-SPEC` §4.2 moved the
-        // query box into the 44px resource header, which `shell/panels.rs` owns.
+        // query box into the [`design::size::RESOURCE_HEADER`] band, which
+        // `shell/panels.rs` owns.
         // What this file can still be held to is the part that is its own: the
         // table fills the 960px window it was given, and its own bands fit inside
         // it. The filter's position is Wave 2's to assert.
@@ -10805,6 +11184,36 @@ mod tests {
         assert!(
             cx.debug_bounds("resource-column-rail-0").is_none(),
             "the header has no column rail; it owns a bottom rule and a label"
+        );
+    }
+
+    // Focus has to be visible after the hue is taken away, so it is drawn as a
+    // shape — a hairline around the row the keyboard is on — rather than as
+    // another wash of the accent the selection already uses. A test can only
+    // check that the edge is there and that it lands on the keyboard's row; that
+    // it is a *shape* rather than a tint is the reason it is a border at all.
+    #[gpui_kit::test]
+    fn the_keyboard_row_carries_a_focus_edge_and_the_rest_do_not(cx: &mut TestAppContext) {
+        init_app(cx);
+        let subscribes = Arc::new(AtomicUsize::new(0));
+        let (view, cx) =
+            cx.add_window_view(|_window, cx| PodsView::new(test_factory(subscribes), None, cx));
+        cx.simulate_resize(gpui_kit::size(px(1440.), px(900.)));
+        cx.run_until_parked();
+        focus_table(cx, &view);
+        cx.simulate_keystrokes("down");
+        cx.run_until_parked();
+        let edge = cx
+            .debug_bounds("resource-row-focus-edge-0")
+            .expect("the keyboard row's focus edge");
+        let row = cx.debug_bounds("resource-row-0").expect("the row");
+        assert!(
+            edge.size.width >= row.size.width,
+            "the edge bounds the whole row, not one cell of it"
+        );
+        assert!(
+            cx.debug_bounds("resource-row-focus-edge-1").is_none(),
+            "only the row the keyboard is on carries the edge"
         );
     }
 
@@ -11289,10 +11698,10 @@ mod tests {
             cx.debug_bounds("MENU_ITEM-Wider").is_none(),
             "an unnamed width entry leaves the reader guessing"
         );
-        assert!(cx.debug_bounds("MENU_ITEM-Reset Column Widths").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Reset column widths").is_some());
         // The Status header owns the filter, so the menu keeps it keyboard
         // reachable under a group of its own.
-        assert!(cx.debug_bounds("MENU_ITEM-Show Only Problems").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Show only problems").is_some());
     }
 
     #[gpui_kit::test]
@@ -11650,7 +12059,7 @@ mod tests {
         cx.run_until_parked();
 
         let item = cx
-            .debug_bounds("MENU_ITEM-Open Details")
+            .debug_bounds("MENU_ITEM-Open details")
             .expect("the row menu opens details");
         assert!(item.size.width > px(0.0));
         assert!(
@@ -11676,7 +12085,7 @@ mod tests {
         focus_table(cx, &view);
         cx.simulate_keystrokes("f10");
         cx.run_until_parked();
-        assert!(cx.debug_bounds("MENU_ITEM-Open Details").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Open details").is_some());
         assert!(
             cx.debug_bounds("MENU_ITEM-Describe").is_none(),
             "two labels for one action is a duplicate path"
@@ -11778,8 +12187,8 @@ mod tests {
     /// spec fixes, in both appearances, because that is what a code review can
     /// check and what a reader feels.
     ///
-    /// `§4.13`: a 24px `fg.tertiary` icon and a 15px semibold title, vertically
-    /// centred with 48px of slack rather than pinned to the top.
+    /// `§4.13`: a 24px lead mark in the resting ink and a 15px semibold title,
+    /// vertically centred with 48px of slack rather than pinned to the top.
     #[gpui_kit::test]
     fn the_empty_state_is_a_24px_icon_over_a_15px_title(cx: &mut TestAppContext) {
         init_app(cx);
@@ -11796,7 +12205,7 @@ mod tests {
             .expect("the empty state's title");
         assert_eq!(
             f32::from(icon.size.height),
-            f32::from(design::size::ICON_LARGE),
+            f32::from(design::icon::LEAD),
             "§4.13: a 24px icon, and not a coloured large one"
         );
         assert!(
@@ -11943,10 +12352,18 @@ mod tests {
         );
     }
 
-    /// `§4.15`: the error is a 32px bar at the top of the table body, with a 3px
-    /// `danger` rule on the left and the rows still underneath it. The old shape
-    /// replaced the whole table with a 40px coloured disc and stole focus, so a
-    /// watch that stopped threw away data the reader could still read.
+    /// `§4.15`: the error is a 32px band under the table body, with a 3px
+    /// `danger` rule across its top edge and the rows still on screen. The old
+    /// shape replaced the whole table with a 40px coloured disc and stole focus,
+    /// so a watch that stopped threw away data the reader could still read.
+    ///
+    /// The band was above the body and this test asserted it: `bar.bottom()` was
+    /// required to land at or above the first row's `top()`, "the bar is inside
+    /// the table body and the rows begin below it". That assertion pinned the
+    /// defect — the band above the body is the band that pushes the header and
+    /// every row down 32px when a watch stops and back up when it starts — so it
+    /// is inverted here rather than kept. The rows are above the bar now, and
+    /// they hold their y.
     #[gpui_kit::test]
     fn the_error_is_a_32px_bar_and_the_rows_stay(cx: &mut TestAppContext) {
         init_app(cx);
@@ -11973,7 +12390,7 @@ mod tests {
             f32::from(INLINE_ERROR_HEIGHT),
             "§4.15 fixes the bar at 32px"
         );
-        assert_eq!(f32::from(rule.size.width), 3.0, "and the rule at 3px");
+        assert_eq!(f32::from(rule.size.height), 3.0, "and the rule at 3px");
         // §7: one left edge across everything in the region. The error bar, the
         // summary strip above it and the table's first column all put their text at
         // the table's own padding-x, and the bar used to be the exception at 11 —
@@ -11982,7 +12399,7 @@ mod tests {
         assert_eq!(
             rule.left(),
             bar.left(),
-            "the danger rule marks the region's edge, so it starts at 0 and the \\
+            "the danger rule spans the band's own width, so it starts at 0 and the \\
              content pads to the table's own padding-x inboard of it"
         );
         for (what, selector) in [
@@ -12002,8 +12419,11 @@ mod tests {
             );
         }
         assert!(
-            bar.bottom() <= cx.debug_bounds("resource-row-0").unwrap().top(),
-            "the bar is inside the table body and the rows begin below it"
+            f32::from(bar.top())
+                >= f32::from(cx.debug_bounds("resource-row-0").unwrap().bottom())
+                    - f32::from(design::border::LINE),
+            "the bar is under the rows, not over them: a band above the body moves \
+             the header and every row down 32px when a watch stops"
         );
         assert!(
             cx.debug_bounds("resource-row-0").is_some(),
@@ -12024,6 +12444,123 @@ mod tests {
         // and the 32px band is there — and the skeleton half is covered where the
         // skeleton is actually on screen, by
         // `the_loading_skeleton_follows_the_visible_columns_and_widths`.
+    }
+
+    /// A transient band must never displace the content a reader is looking at.
+    ///
+    /// The notice banner and the error bar are both transient and both used to
+    /// sit *above* the table body, so the header and every row moved 28px or 32px
+    /// when one appeared and moved back when it cleared — and the notice clears
+    /// itself on an eight-second timer, so the window rearranged itself twice
+    /// while somebody was reading rows. They now stack upward from the body,
+    /// which is the direction the selection bar has always used, so nothing in
+    /// the header stack is conditional at all.
+    ///
+    /// The invariant is the one the window's contract names: for every band that
+    /// exists in more than one of these states, the y it starts at is the same y.
+    /// Four states — neither band, the notice only, the error only, both — and one
+    /// number per anchor. The anchors are the header and the first three body
+    /// rows, because those are the four bands a reader's eye is actually resting
+    /// on when a watch stops.
+    #[gpui_kit::test]
+    fn a_transient_band_never_moves_the_header_or_the_rows(cx: &mut TestAppContext) {
+        init_app(cx);
+        let subscribes = Arc::new(AtomicUsize::new(0));
+        let (view, cx) =
+            cx.add_window_view(|_, cx| PodsView::new(test_factory(subscribes), None, cx));
+        cx.simulate_resize(gpui_kit::size(px(1440.), px(900.)));
+        cx.run_until_parked();
+
+        let anchors = |cx: &mut gpui_kit::VisualTestContext| {
+            [
+                "pod-header-name",
+                "resource-row-0",
+                "resource-row-1",
+                "resource-row-2",
+            ]
+            .map(|selector| {
+                let bounds = cx
+                    .debug_bounds(selector)
+                    .unwrap_or_else(|| panic!("{selector} is on screen"));
+                (selector, bounds.origin.y)
+            })
+        };
+
+        let resting = anchors(cx);
+        assert!(
+            cx.debug_bounds("table-error-bar").is_none()
+                && cx.debug_bounds("table-notice").is_none(),
+            "the fixture starts with neither band"
+        );
+
+        // The notice only. `Severity::Error` is the one severity that does not arm
+        // the eight-second dismissal, so the band stays up for as long as the
+        // test needs it without a timer the harness would have to wait out.
+        view.update(cx, |view, cx| {
+            view.notify(
+                "Column widths could not be saved.".to_owned(),
+                Severity::Error,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("table-notice").is_some(),
+            "the notice is up"
+        );
+        assert_eq!(
+            anchors(cx),
+            resting,
+            "a notice is a band under the table, so the header and the first three \
+             rows hold their y"
+        );
+
+        // The error only.
+        view.update(cx, |view, cx| {
+            view.notice = None;
+            view.host.update(cx, |host, cx| {
+                host.report_watch_error("watch ended".to_owned(), cx)
+            });
+            cx.notify();
+        });
+        cx.run_until_parked();
+        assert!(
+            cx.debug_bounds("table-notice").is_none(),
+            "the notice is gone"
+        );
+        assert!(
+            cx.debug_bounds("table-error-bar").is_some(),
+            "the fault is up"
+        );
+        assert_eq!(
+            anchors(cx),
+            resting,
+            "a watch that stopped never moves the header or the first three rows"
+        );
+
+        // Both at once. They stack upward from the body: the fault is about the
+        // data on screen and sits against it, the message is about something the
+        // reader just did and sits under it, and the selection bar is the
+        // reader's own committed state and is last.
+        view.update(cx, |view, cx| {
+            view.notify(
+                "Exec is available only for Pods.".to_owned(),
+                Severity::Error,
+                cx,
+            )
+        });
+        cx.run_until_parked();
+        let bar = cx.debug_bounds("table-error-bar").expect("the fault");
+        let notice = cx.debug_bounds("table-notice").expect("the message");
+        assert!(
+            bar.bottom() <= notice.top(),
+            "both bands up at once: the fault against the rows, the message under it"
+        );
+        assert_eq!(
+            anchors(cx),
+            resting,
+            "two transient bands at once still move nothing above the body"
+        );
     }
 
     /// The rail is not allowed to be a proportion, and this is the case that
@@ -12712,7 +13249,7 @@ mod tests {
         cx.run_until_parked();
 
         let open_details = cx
-            .debug_bounds("MENU_ITEM-Open Details")
+            .debug_bounds("MENU_ITEM-Open details")
             .expect("Open Details menu item");
         let service_account = cx
             .debug_bounds("MENU_ITEM-Open Service Account")
@@ -12739,7 +13276,7 @@ mod tests {
         focus_table(cx, &view);
         cx.simulate_keystrokes("f10");
         cx.run_until_parked();
-        assert!(cx.debug_bounds("MENU_ITEM-Open Details").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Open details").is_some());
         assert!(cx.debug_bounds("MENU_ITEM-Open Service Account").is_none());
     }
 
@@ -12801,7 +13338,7 @@ mod tests {
         focus_table(cx, &view);
         cx.simulate_keystrokes("f10");
         cx.run_until_parked();
-        assert!(cx.debug_bounds("MENU_ITEM-Open Details").is_some());
+        assert!(cx.debug_bounds("MENU_ITEM-Open details").is_some());
         assert!(cx.debug_bounds("MENU_ITEM-Open Service Account").is_none());
     }
 

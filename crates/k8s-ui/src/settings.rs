@@ -18,6 +18,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use gpui_kit::actions;
 use gpui_kit::{App, Font, FontFeatures, Global, Pixels, Task, TaskExt, font, px};
 use k8s_core::atomic_file::{path_task_queue, write_atomic};
+use k8s_core::cluster::ClusterId;
 #[cfg(not(test))]
 use k8s_core::paths::config_file;
 use serde::{Deserialize, Serialize};
@@ -504,6 +505,17 @@ pub struct UserSettings {
     /// Disk cache setting. Defaults to enabled.
     #[serde(default, rename = "diskCache", skip_serializing_if = "Option::is_none")]
     pub disk_cache: Option<bool>,
+    /// The cluster the reader was last on, so the next run opens it again.
+    ///
+    /// A reader with six clusters does not choose one; they come back to one. This is
+    /// where that one is written, so it belongs here rather than in a surface that
+    /// happens to be on screen when the choice is made.
+    #[serde(
+        default,
+        rename = "lastCluster",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub last_cluster: Option<ClusterId>,
     /// Remembered column widths by kind, such as `{"Pod": {"name": 320.0}}`.
     #[serde(
         default,
@@ -578,6 +590,26 @@ where
         None => serializer.serialize_none(),
         Some(size) if size.fract() == 0.0 => serializer.serialize_u64(*size as u64),
         Some(size) => serializer.serialize_f32(*size),
+    }
+}
+
+/// The cluster the reader was last on, when the settings file still names one.
+///
+/// Read straight from the file because the session that needs it is built before the
+/// app exists to hand a store to. A file that is missing or will not parse leaves the
+/// kubeconfig's own answer in place.
+pub fn last_cluster() -> Option<ClusterId> {
+    load().last_cluster
+}
+
+/// Remembers the cluster the reader is on, so the next run opens it again.
+///
+/// A failure is logged and nothing else: the resource tree still works from memory, and
+/// a settings file that cannot be written is the Settings panel's report to make rather
+/// than a toast over the tree.
+pub fn remember_cluster(cx: &mut App, cluster: ClusterId) {
+    if let Err(error) = update(cx, |settings| settings.last_cluster = Some(cluster)) {
+        eprintln!("k8s-gpui: could not remember the selected cluster: {error}");
     }
 }
 
@@ -1757,10 +1789,13 @@ pub fn save_with_outcome(
 /// beside the button says "Not saved", and that is the value a retry is about: the one
 /// the file took.
 pub fn retry_rejected_save(cx: &mut App) -> Result<(), String> {
-    match save_status(cx).rejected {
-        Some(rejected) => save(cx, &rejected),
-        None => update(cx, |_| {}),
-    }
+    let Some(rejected) = save_status(cx).rejected else {
+        // Nothing was refused, so there is nothing to retry. Writing the store here
+        // would save the value the reader is trying to change away from and report
+        // success, which is the one answer a Retry must never give.
+        return Ok(());
+    };
+    save(cx, &rejected)
 }
 
 /// Save settings and update the settings store.
@@ -2449,6 +2484,7 @@ mod tests {
             )]),
             hidden_columns: BTreeMap::from([("Node".to_owned(), vec!["version".to_owned()])]),
             buffer_font_size: Some(14.),
+            last_cluster: None,
             extra: serde_json::Map::new(),
         };
         let text = serde_json::to_string_pretty(&settings).expect("serialize");

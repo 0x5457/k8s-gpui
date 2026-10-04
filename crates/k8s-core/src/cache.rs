@@ -17,8 +17,20 @@ use crate::atomic_file::{create_private_dir_all, write_atomic as write_atomic_by
 use crate::cluster::ClusterId;
 use crate::discovery::ResourceCatalog;
 
-/// TTL for snapshot and discovery caches. Older entries are stale.
-pub const CACHE_TTL: Duration = Duration::from_hours(24);
+/// How long a cached list still counts as a stand-in for the live one.
+///
+/// Five minutes, not the day this used to be, and the day was nobody's decision:
+/// a Kubernetes cluster's object list is minutes from wrong, not hours. Pods are
+/// replaced, rollouts finish, nodes drain — a snapshot from this morning names
+/// objects that may no longer exist, and a reader who scaled from it would be
+/// acting on a memory.
+///
+/// What the TTL is really for is the first paint. The live list arrives in
+/// milliseconds on a healthy cluster, so the window this protects is the one
+/// where the app has painted rows and is still connecting. Past it the snapshot
+/// is a record rather than a cache, and the table now says so on its summary
+/// band instead of leaving stale rows wearing live ink.
+pub const CACHE_TTL: Duration = Duration::from_secs(5 * 60);
 
 /// Disk format version. A structural change increments it. Old files are misses.
 const FORMAT_VERSION: u32 = 1;

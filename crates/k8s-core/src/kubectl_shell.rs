@@ -86,18 +86,9 @@ pub fn write_session_kubeconfig_from_with_namespace(
     }
 }
 
-pub fn write_session_kubeconfig_from_all_namespaces(
-    cluster: &Cluster,
-    source: &Kubeconfig,
-    dir: &Path,
-) -> Result<SessionKubeconfig, ShellError> {
-    write_session_kubeconfig_from_inner(cluster, source, dir, NamespaceMode::All)
-}
-
 enum NamespaceMode<'a> {
     Preserve,
     Set(&'a str),
-    All,
 }
 
 fn write_session_kubeconfig_from_inner(
@@ -119,11 +110,6 @@ fn write_session_kubeconfig_from_inner(
         NamespaceMode::Set(namespace) => {
             let mut context = named_context.context.clone().unwrap_or_default();
             context.namespace = Some(namespace.to_owned());
-            named_context.context = Some(context);
-        }
-        NamespaceMode::All => {
-            let mut context = named_context.context.clone().unwrap_or_default();
-            context.namespace = None;
             named_context.context = Some(context);
         }
         NamespaceMode::Preserve => {}
@@ -317,15 +303,24 @@ current-context: alpha-ctx
         );
     }
 
+    /// The scope a reader picked is a filter on the list, not a namespace to un-set.
+    ///
+    /// The Dock asks for a session under the scope `All namespaces`, which means "the shell is in
+    /// whatever namespace this context already names". There used to be a third mode that *removed*
+    /// the namespace from the context instead, which hands kubectl no namespace at all and drops
+    /// the shell into `default` — a reader who chose `All namespaces` and got a shell in
+    /// `default`, with the chip still naming the context. Nothing called it and nothing can call
+    /// it now; the shell's own prompt is the place that namespace belongs.
     #[tokio::test]
-    async fn session_kubeconfig_all_namespaces_removes_context_namespace() {
+    async fn a_session_under_the_all_namespaces_scope_keeps_the_context_namespace() {
         let registry = registry_from(TWO_CONTEXTS).await;
         let cluster = registry.clusters().first().expect("alpha-ctx");
         let source = Kubeconfig::from_yaml(TWO_CONTEXTS).expect("parse");
-        let session = write_session_kubeconfig_from_all_namespaces(
+        let session = write_session_kubeconfig_from_with_namespace(
             cluster,
             &source,
             &temp_dir("all-namespaces"),
+            None,
         )
         .expect("write");
         let written = Kubeconfig::read_from(session.path()).expect("read written");
@@ -335,7 +330,8 @@ current-context: alpha-ctx
                 .context
                 .as_ref()
                 .and_then(|context| context.namespace.as_deref()),
-            None
+            Some("alpha-ns"),
+            "no scope means the context's own namespace, never kubectl's default"
         );
     }
 

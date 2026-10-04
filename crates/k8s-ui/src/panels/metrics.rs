@@ -132,109 +132,28 @@ pub const RANGE_OPTIONS: [(i64, &str); 6] = [
 /// Longest selectable chart range in milliseconds.
 pub const MAX_RANGE_MS: i64 = RANGE_OPTIONS[RANGE_OPTIONS.len() - 1].0;
 
-/// Why a Pod has no metrics, in the four words a reader can act on.
+/// What a node that reports nothing means, in a sentence a reader can act on.
 ///
-/// `UI-SPEC` §16.5 asks for the empty state to carry the *reason* and not only the fact, and the
-/// reason is not knowable from the absence: a Pod that is still Pending and a cluster with no
-/// scrape configured both answer with nothing, and the second one is a cluster problem while the
-/// first clears on its own.
+/// `UI-SPEC` §16.5 asks the empty state to carry the *reason* and not only the fact, and the
+/// reason is not knowable from the absence: a Pod that is still Pending and a cluster with
+/// nothing reporting both answer with no sample, and the second one is a cluster problem while
+/// the first clears on its own.
 ///
-/// This is the same four-class shape `panels::logs::LogFailure` uses for the log stream, and for
-/// the same reason: two failures that need opposite answers must not be flattened into one
-/// sentence, or half of the readers are sent to fix the wrong thing.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MetricsAbsence {
-    /// The cluster has no metrics pipeline at all.
-    NotConfigured,
-    /// The Pod exists but is not running, so nothing is reporting from it yet.
-    NotRunning,
-    /// The credentials are not allowed to read Pod metrics.
-    AccessDenied,
-    /// The request failed and the reason narrows it no further.
-    RequestFailed,
-}
+/// These are two sentences rather than a classifier, and the classifier is gone on purpose.
+/// `MetricsError` already carries the answer — a 404, a 403, a timeout, an answer with no
+/// sample — so the four classes that used to sit beside it were read back out of the English
+/// sentence they had just been written into, three word lists deep, and could only ever be as
+/// right as the wording. A class that is decided once, from the typed error, cannot drift from
+/// the copy that states it.
+const METRICS_NOT_REPORTED: &str =
+    "No metrics are being reported for this node. Install or enable metrics-server, then retry.";
 
-impl MetricsAbsence {
-    /// Reads the class out of the reason the request failed with.
-    ///
-    /// The order is the answer, and it is the same order `LogFailure::classify` uses: a
-    /// permission problem arrives as a 403 rather than a 404, and a Pod waiting for its first
-    /// container is still a Pod.
-    pub fn classify(reason: &str) -> Self {
-        let reason = reason.to_ascii_lowercase();
-        if mentions(&reason, ACCESS_DENIED_WORDS) {
-            Self::AccessDenied
-        } else if mentions(&reason, SCRAPE_MISSING_WORDS) {
-            Self::NotConfigured
-        } else if mentions(&reason, NOT_RUNNING_WORDS) {
-            Self::NotRunning
-        } else {
-            Self::RequestFailed
-        }
-    }
-
-    /// The class name, for a chip or a heading with no room for a sentence.
-    pub fn word(self) -> &'static str {
-        match self {
-            Self::NotConfigured => "Metrics Not Configured",
-            Self::NotRunning => "Pod Not Running",
-            Self::AccessDenied => "Access Denied",
-            Self::RequestFailed => "Metrics Request Failed",
-        }
-    }
-
-    /// What happened and what to do next, in one sentence.
-    ///
-    /// Every class ends in the step that moves the request forward, and only the class that means
-    /// the cluster has no pipeline says to install anything — telling a reader whose Pod started
-    /// ninety seconds ago to install metrics-server sends them out of the incident.
-    pub fn guidance(self) -> &'static str {
-        match self {
-            Self::NotConfigured => {
-                "No scrape is configured for this cluster. Install or enable metrics-server, then retry."
-            }
-            Self::NotRunning => {
-                "The pod is not running, so it has nothing to report. Wait for it to start, then retry."
-            }
-            Self::AccessDenied => {
-                "Access to pod metrics is denied. Grant the permission below, then retry."
-            }
-            Self::RequestFailed => {
-                "The metrics request failed. Check the cluster connection, then retry."
-            }
-        }
-    }
-}
-
-/// Words the API server writes for each class. They are the same words the log classifier reads,
-/// spelled out here rather than imported, because `panels::logs` is a sibling module and a shared
-/// word list between two failure classifiers is a change to one of them.
-const ACCESS_DENIED_WORDS: &[&str] = &[
-    "forbidden",
-    "unauthorized",
-    "cannot get resource",
-    "cannot list resource",
-    "permission denied",
-];
-const SCRAPE_MISSING_WORDS: &[&str] = &[
-    "not found",
-    "no metrics",
-    "metrics-server is not installed",
-    "the server could not find the requested resource",
-];
-const NOT_RUNNING_WORDS: &[&str] = &[
-    "containerstatuses",
-    "waiting to start",
-    "no container",
-    "does not contain container",
-    "pod is not running",
-    "pod is pending",
-];
-
-/// True when the reason carries one of the words the API server writes for this class.
-fn mentions(reason: &str, words: &[&str]) -> bool {
-    words.iter().any(|word| reason.contains(word))
-}
+/// What a Pod with no sample means: it has nothing to report yet.
+///
+/// Telling this reader to install metrics-server sends them out of the middle of an incident
+/// for a Pod that was started ninety seconds ago.
+const POD_NOT_RUNNING: &str =
+    "The pod is not running, so it has nothing to report. Wait for it to start, then retry.";
 
 /// Maps errors to user-facing copy and logs the original detail.
 fn map_error(error: MetricsError) -> String {
@@ -315,10 +234,9 @@ impl MetricsHandle {
             .map_err(request_failure)?
             .map_err(map_error)?;
             metric.map(SamplePayload::from_node).ok_or_else(|| {
-                // A node with no sample and a cluster with no metrics pipeline are the same
-                // absence, and the two need opposite answers, so the copy names the class rather
-                // than assuming metrics-server is missing.
-                MetricsAbsence::NotConfigured.guidance().to_owned()
+                // A node with no sample and a cluster with nothing reporting are the same
+                // absence, and the one sentence that names it is the one that fixes it.
+                METRICS_NOT_REPORTED.to_owned()
             })
         })
     }
@@ -338,14 +256,11 @@ impl MetricsHandle {
             .map_err(request_failure)?
             .map_err(map_error)?;
             // A Pod that is still Pending has no sample and is not a cluster problem. The
-            // request itself succeeded, so the class has to come from what the request said, and
-            // a surface that reports a Pending Pod as a missing metrics-server sends the reader
-            // out of the incident to install something they do not need.
+            // request itself succeeded, so a surface that reports a Pending Pod as a missing
+            // metrics-server sends the reader out of the incident to install something they do
+            // not need.
             metric.map(SamplePayload::from_pod).ok_or_else(|| {
-                format!(
-                    "The pod {namespace}/{name} reported no metrics. {}",
-                    MetricsAbsence::NotRunning.guidance()
-                )
+                format!("The pod {namespace}/{name} reported no metrics. {POD_NOT_RUNNING}")
             })
         })
     }
@@ -769,34 +684,6 @@ mod tests {
             "the buffer has to cover the longest step at the fastest cadence, or picking 7d shows \
              only the samples that happen to still be in memory"
         );
-    }
-
-    /// A Pod that has not started and a cluster with no metrics pipeline both answer with
-    /// nothing, and they need opposite answers. The classifier is what keeps the first from being
-    /// reported as the second, and a Pending Pod is the case that regresses first.
-    #[test]
-    fn an_absent_metric_is_classified_before_it_is_reported() {
-        for (reason, expected) in [
-            (
-                "pods \"api-7d2f\" is forbidden: User cannot get resource",
-                MetricsAbsence::AccessDenied,
-            ),
-            (
-                "the server could not find the requested resource",
-                MetricsAbsence::NotConfigured,
-            ),
-            (
-                "containerstatuses is empty: waiting to start",
-                MetricsAbsence::NotRunning,
-            ),
-            ("connection reset by peer", MetricsAbsence::RequestFailed),
-        ] {
-            assert_eq!(
-                MetricsAbsence::classify(reason),
-                expected,
-                "classified wrong: {reason}"
-            );
-        }
     }
 
     #[tokio::test]

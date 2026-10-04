@@ -126,11 +126,26 @@ pub enum OpsError {
     )]
     MissingForwardStream { port: u16 },
 
+    /// The local port the reader asked for could not be opened.
+    ///
+    /// `port` is the *local* one, which is the number the reader typed and the only one they
+    /// can change. This message used to print the remote port under the words "the local port",
+    /// which named a number the reader cannot edit.
     #[error(
-        "Failed to bind the local port for remote port {port}: {source}. Choose another local port and try again."
+        "Local port {port} could not be opened: {source}. Choose another local port and try again."
     )]
     BindLocalPort {
         port: u16,
+        #[source]
+        source: std::io::Error,
+    },
+
+    /// The system could not assign a local port, so there is no address to hand back.
+    #[error(
+        "Could not open a local port for remote port {remote}: {source}. Check that this machine can open local ports, then try again."
+    )]
+    AssignLocalPort {
+        remote: u16,
         #[source]
         source: std::io::Error,
     },
@@ -1390,34 +1405,9 @@ pub struct PortForwardError {
     pub reason: String,
 }
 
-/// A requested local port that was already taken, and the free port bound instead.
-///
-/// A port the user pointed something at must not change without a word: the substitution is
-/// carried out of the session so the caller can say which port answers now.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PortFallback {
-    /// Remote port the forward targets.
-    pub remote_port: u16,
-    /// Local port the caller asked for.
-    pub requested_local_port: u16,
-    /// Local port the forward listens on instead.
-    pub local_port: u16,
-}
-
-impl PortFallback {
-    /// One sentence for the user, in the same words as the request.
-    pub fn notice(&self) -> String {
-        format!(
-            "Local port {} was already in use. The port forward for remote port {} listens on local port {} instead.",
-            self.requested_local_port, self.remote_port, self.local_port
-        )
-    }
-}
-
 /// Port-forward session with one local listener per remote port.
 pub struct PortForwardSession {
     forwards: Vec<PortForward>,
-    fallbacks: Vec<PortFallback>,
     errors: mpsc::UnboundedReceiver<PortForwardError>,
     tasks: Vec<JoinHandle<()>>,
     forwarder: Portforwarder,
@@ -1437,9 +1427,13 @@ impl PortForwardSession {
 
     /// Start port forwarding with an optional requested local port per remote port.
     /// `local_ports` is read by position: entry `i` asks for the local port of `ports[i]`, and
-    /// a missing entry or `None` leaves that port to the system. A requested port that is already
-    /// taken falls back to a free port, because failing the forward would leave the user with
-    /// no address at all. The substitution is reported by [`Self::fallbacks`], never silent.
+    /// a missing entry or `None` leaves that port to the system.
+    ///
+    /// A requested port that is taken fails the forward rather than moving to a free one. The
+    /// reader asked for an address, and whatever is already pointed at that address is pointed at
+    /// nothing after a substitution — which is the same refusal `kubectl port-forward` gives, and
+    /// the one the port-forward form already gives before it submits, so one collision has one
+    /// answer instead of two that depend on who got there first.
     pub async fn start_with_local_ports(
         client: &Client,
         resource: &ApiResource,
@@ -1461,7 +1455,6 @@ impl PortForwardSession {
                 let (error_sender, errors) = mpsc::unbounded_channel();
                 let mut session = Self {
                     forwards: Vec::with_capacity(ports.len()),
-                    fallbacks: Vec::new(),
                     errors,
                     tasks: Vec::with_capacity(ports.len() * 2),
                     forwarder,
@@ -1472,13 +1465,17 @@ impl PortForwardSession {
                         return Err(OpsError::MissingForwardStream { port });
                     };
                     let requested = local_ports.get(index).copied().flatten();
-                    let (listener, fallback) = bind_local_listener(requested, port).await?;
-                    if let Some(fallback) = fallback {
-                        session.fallbacks.push(fallback);
-                    }
+                    let listener = bind_local_listener(requested, port).await?;
                     let local_port = match listener.local_addr() {
                         Ok(address) => address.port(),
-                        Err(source) => return Err(OpsError::BindLocalPort { port, source }),
+                        // The listener is open; there is simply no port to report, so the
+                        // failure cannot name one it never bound.
+                        Err(source) => {
+                            return Err(OpsError::AssignLocalPort {
+                                remote: port,
+                                source,
+                            });
+                        }
                     };
                     session.forwards.push(PortForward {
                         remote_port: port,
@@ -1511,12 +1508,6 @@ impl PortForwardSession {
             .iter()
             .map(|forward| forward.local_port)
             .collect()
-    }
-
-    /// Requested local ports that were taken, with the free port bound instead. Empty when every
-    /// forward listens on the port the caller asked for, or on a port the system assigned.
-    pub fn fallbacks(&self) -> &[PortFallback] {
-        &self.fallbacks
     }
 
     /// Return the next runtime error. `None` means no more errors.
@@ -1557,51 +1548,27 @@ fn abort_all(tasks: &[JoinHandle<()>]) {
 
 /// Bind the local listener for one forward.
 ///
-/// A requested port that is taken is reported as a [`PortFallback`] and the forward still runs on
-/// a free port, so an occupied port does not leave the user without a forward. Every other bind
-/// error is a real failure and keeps the existing message.
+/// A requested port that is taken is the reader's answer, not a detail to work around: the
+/// forward refuses it and names the port, which is the same sentence the port-forward form
+/// shows before it submits.
 async fn bind_local_listener(
     requested: Option<u16>,
     remote_port: u16,
-) -> Result<(TcpListener, Option<PortFallback>), OpsError> {
+) -> Result<TcpListener, OpsError> {
     let Some(port) = requested else {
-        return Ok((bind_free_local_port(remote_port).await?, None));
+        return bind_free_local_port(remote_port).await;
     };
-    match TcpListener::bind((Ipv4Addr::LOCALHOST, port)).await {
-        Ok(listener) => Ok((listener, None)),
-        Err(source) if source.kind() == std::io::ErrorKind::AddrInUse => {
-            let listener = bind_free_local_port(remote_port).await?;
-            let local_port = match listener.local_addr() {
-                Ok(address) => address.port(),
-                Err(source) => {
-                    return Err(OpsError::BindLocalPort {
-                        port: remote_port,
-                        source,
-                    });
-                }
-            };
-            Ok((
-                listener,
-                Some(PortFallback {
-                    remote_port,
-                    requested_local_port: port,
-                    local_port,
-                }),
-            ))
-        }
-        Err(source) => Err(OpsError::BindLocalPort {
-            port: remote_port,
-            source,
-        }),
-    }
+    TcpListener::bind((Ipv4Addr::LOCALHOST, port))
+        .await
+        .map_err(|source| OpsError::BindLocalPort { port, source })
 }
 
 /// Let the system pick a free local port.
 async fn bind_free_local_port(remote_port: u16) -> Result<TcpListener, OpsError> {
     TcpListener::bind((Ipv4Addr::LOCALHOST, 0))
         .await
-        .map_err(|source| OpsError::BindLocalPort {
-            port: remote_port,
+        .map_err(|source| OpsError::AssignLocalPort {
+            remote: remote_port,
             source,
         })
 }
@@ -2206,10 +2173,9 @@ mod tests {
         let reserved =
             std::net::TcpListener::bind(("127.0.0.1", 0)).expect("find a free local port");
         let port = reserved.local_addr().expect("local address").port();
-        // Release the port first: holding it here would make the request a taken
-        // port, which is the fallback case and not what this test is about.
+        // Release the port first: holding it here would make the request a taken port.
         drop(reserved);
-        let (listener, fallback) = bind_local_listener(Some(port), 8080)
+        let listener = bind_local_listener(Some(port), 8080)
             .await
             .expect("a free requested port binds as asked");
         assert_eq!(
@@ -2217,50 +2183,47 @@ mod tests {
             port,
             "the user asked for this port, so the forward must not move"
         );
-        assert_eq!(fallback, None, "an honored request is not a fallback");
         drop(listener);
     }
 
+    /// A taken local port ends the forward instead of moving it.
+    ///
+    /// It used to bind a free port instead and report the substitution, which gave one
+    /// collision two answers: the port-forward form refuses the port before it submits, and
+    /// the runtime accepted it and answered on a different one. Whatever was pointed at the
+    /// port the reader typed was pointed at nothing either way, and the refusal is what
+    /// `kubectl port-forward` does.
     #[tokio::test]
-    async fn a_taken_local_port_falls_back_and_names_the_substitution() {
+    async fn a_taken_local_port_refuses_the_forward_and_names_the_port() {
         let occupied = std::net::TcpListener::bind(("127.0.0.1", 0)).expect("occupy a local port");
         let port = occupied.local_addr().expect("local address").port();
-        let (listener, fallback) = bind_local_listener(Some(port), 8080)
+        let error = bind_local_listener(Some(port), 8080)
             .await
-            .expect("a taken port falls back instead of failing the forward");
-        let fallback = fallback.expect("the substitution must be reported");
-        assert_eq!(fallback.remote_port, 8080);
-        assert_eq!(fallback.requested_local_port, port);
-        assert_ne!(
-            fallback.local_port, port,
-            "the fallback port must differ from the occupied one"
-        );
-        assert_eq!(
-            listener.local_addr().expect("local address").port(),
-            fallback.local_port,
-            "the forward must listen on the port it reported"
-        );
-        let notice = fallback.notice();
+            .expect_err("a taken port must not move the forward to another one");
+        let sentence = error.to_string();
+        match &error {
+            OpsError::BindLocalPort { port: named, .. } => assert_eq!(
+                *named, port,
+                "the failure carries the port the reader typed, not the remote one"
+            ),
+            other => panic!("expected BindLocalPort, got {other:?}"),
+        }
         assert!(
-            notice.contains(&port.to_string()),
-            "notice names the request: {notice}"
+            sentence.contains(&port.to_string()),
+            "the sentence names the port: {sentence}"
         );
         assert!(
-            notice.contains(&fallback.local_port.to_string()),
-            "notice names the answer: {notice}"
+            sentence.contains("Choose another local port"),
+            "the refusal says what to do: {sentence}"
         );
     }
 
     #[tokio::test]
     async fn no_requested_local_port_leaves_the_choice_to_the_system() {
-        let (listener, fallback) = bind_local_listener(None, 9090)
+        let listener = bind_local_listener(None, 9090)
             .await
             .expect("an automatic port always binds");
         assert!(listener.local_addr().expect("local address").port() > 0);
-        assert_eq!(
-            fallback, None,
-            "nothing was requested, so nothing was substituted"
-        );
     }
 
     #[tokio::test]

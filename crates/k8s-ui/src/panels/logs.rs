@@ -134,8 +134,14 @@ impl LogPhase {
                 format!("Connection lost. Reconnecting, attempt {attempt}")
             }
             Self::Failed { reason } => {
-                let next = LogFailure::classify(reason).guidance();
-                format!("The log stream stopped. {next}")
+                let failure = LogFailure::classify(reason);
+                // "The log stream stopped" is the wrong sentence for the one class where nothing
+                // stopped that the reader was watching: the container finished, which is what they
+                // opened the logs to see happen.
+                if failure == LogFailure::ContainerFinished {
+                    return failure.guidance().to_owned();
+                }
+                format!("The log stream stopped. {}", failure.guidance())
             }
             Self::Unavailable(reason) => {
                 format!("No log source is available. {reason}")
@@ -186,7 +192,7 @@ impl LogPhase {
 /// silence. A surface that cannot tell them apart tells the user the Pod is gone, which sends
 /// people looking for a Pod that is still there.
 ///
-/// Four classes, four words, four next steps: a chip and a heading must not blur into one another.
+/// Five classes, five words, five next steps: a chip and a heading must not blur into one another.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogFailure {
     /// The API server does not know the Pod, or its namespace.
@@ -197,6 +203,13 @@ pub enum LogFailure {
     AccessDenied,
     /// The request failed, and the reason narrows it no further.
     RequestFailed,
+    /// The container stopped and the stream closed after its last line.
+    ///
+    /// Not a failure and the only class with nothing to recover: a `--follow` stream ends because
+    /// the process ended, which for a Job or a one-shot container is the answer the reader asked
+    /// for. Classifying it as a request failure spent half a minute of backoff telling them to
+    /// check their cluster connection about a container that exited cleanly.
+    ContainerFinished,
 }
 
 /// Words the API server writes for each class. Every failure arrives wrapped in the same
@@ -220,6 +233,13 @@ const NO_CONTAINER_WORDS: &[&str] = &[
     "select a container",
 ];
 const POD_MISSING_WORDS: &[&str] = &["not found"];
+/// The one sentence the app itself writes when a `--follow` stream closed after its last line.
+///
+/// A stream that ends is not a stream that failed, and this is the only place the difference is
+/// stated. Guessing at the phrasings the API server might use instead would be a word list that
+/// decides a class from wording nobody has seen, which is the failure `classify`'s own comment
+/// names.
+const CONTAINER_FINISHED_WORDS: &[&str] = &["the log stream ended"];
 
 /// True when the reason carries one of the words the API server writes for this class.
 fn mentions(reason: &str, words: &[&str]) -> bool {
@@ -244,6 +264,8 @@ impl LogFailure {
             Self::NoContainer
         } else if mentions(&reason, POD_MISSING_WORDS) {
             Self::PodMissing
+        } else if mentions(&reason, CONTAINER_FINISHED_WORDS) {
+            Self::ContainerFinished
         } else {
             Self::RequestFailed
         }
@@ -252,30 +274,58 @@ impl LogFailure {
     /// The class name, for a chip or a heading that has no room for a sentence.
     pub fn word(self) -> &'static str {
         match self {
-            Self::PodMissing => "Pod Missing",
-            Self::NoContainer => "No Container",
-            Self::AccessDenied => "Access Denied",
-            Self::RequestFailed => "Log Request Failed",
+            Self::PodMissing => "Pod missing",
+            Self::NoContainer => "No container",
+            Self::AccessDenied => "Access denied",
+            Self::RequestFailed => "Log request failed",
+            Self::ContainerFinished => "Container finished",
         }
     }
 
     /// What happened and what to do next, in one sentence. Every class ends in the step that
     /// moves the request forward, and only the class that means the Pod is gone says so.
+    ///
+    /// The final word is `Reconnect`, the name on the control, not `Retry`. The Dock renamed the
+    /// button when it decided a reconnect is what it does — the same target, the same options —
+    /// and left the sentences here calling it `Retry`, so a reader following the guidance was
+    /// looking for a word that is not on the screen.
     pub fn guidance(self) -> &'static str {
         match self {
             Self::PodMissing => {
-                "The cluster no longer has this Pod. Refresh the list, then open Logs."
+                "The cluster no longer has this Pod. Refresh the list, then open Logs again."
             }
             Self::NoContainer => {
-                "No container can stream yet. Pick a container, or wait, then select Retry."
+                "No container can stream yet. Pick a container, or wait, then reconnect."
             }
             Self::AccessDenied => {
-                "Access to Pod logs is denied. Ask for log access, then select Retry."
+                "Access to Pod logs is denied. Ask for log access, then reconnect."
             }
             Self::RequestFailed => {
-                "The log request failed. Check the cluster connection, then select Retry."
+                "The log request failed. Check the cluster connection, then reconnect."
+            }
+            Self::ContainerFinished => {
+                "This container stopped, so the lines above are all it wrote. Select Reconnect to \
+                 follow it again."
             }
         }
+    }
+
+    /// True when asking the same question again cannot change the answer.
+    ///
+    /// A Pod the API server no longer has, a request it refused, and a container that exited are
+    /// all verdicts rather than interruptions: the request reached a server and the server
+    /// answered. Re-sending it spends half a minute of backoff telling the reader "Reconnecting,
+    /// attempt 3" about something that is not coming back, which is the one thing a stopped stream
+    /// must never do.
+    ///
+    /// `NoContainer` is deliberately *not* terminal — a Pending Pod starts on its own and the
+    /// retry is the thing that catches it — and neither is `RequestFailed`, which is the class a
+    /// genuinely transient network failure lands in.
+    pub fn is_terminal(self) -> bool {
+        matches!(
+            self,
+            Self::PodMissing | Self::AccessDenied | Self::ContainerFinished
+        )
     }
 
     /// A Pod that has not started yet clears on its own, so it is a warning and not an error.
@@ -283,6 +333,9 @@ impl LogFailure {
         match self {
             Self::PodMissing | Self::NoContainer => Severity::Warning,
             Self::AccessDenied | Self::RequestFailed => Severity::Error,
+            // Not a failure: a container that exited on its own did the thing the reader opened
+            // its logs to watch, and an alert-coloured verdict on a completed Job is a lie.
+            Self::ContainerFinished => Severity::Muted,
         }
     }
 }
