@@ -4820,9 +4820,9 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
                     terminals: Rc::new(|_request, _sink, _cx| {
                         Err("terminals unavailable".to_owned())
                     }),
-                    forwards: Rc::new(|_request, _cx| {
-                        Err("port forwarding unavailable".to_owned())
-                    }),
+                    forwards: Rc::new(
+                        |_request, _cx| Err("port forwarding unavailable".to_owned()),
+                    ),
                     context: Some("kind-k8s-gpui-dev".to_owned()),
                     namespace: None,
                 }),
