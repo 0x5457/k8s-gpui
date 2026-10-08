@@ -1,6 +1,28 @@
 //! Design tokens and semantic mappings for dimensions, typography, status, and resource icons.
 //!
 //! View code uses theme colors and shared tokens instead of raw colors or one-off spacing.
+//!
+//! # A product-owned px scale, on purpose
+//!
+//! Every token in [`space`], [`size`], [`radius`], [`text`] and [`icon`] is a
+//! fixed pixel, which is the deliberate product choice rather than a shortcut.
+//! GPUI Component projects one fixed `SpacingTokens` scale from its global
+//! theme and does not persist a custom one (its own design guide says an
+//! application that needs different spacing must *own that full token snapshot
+//! and use it consistently*) — and this product needs one: it is a desktop
+//! client with a defined minimum window ([`size::WINDOW_MIN`]), and the chrome
+//! budget [`size`] exists to protect is stated in the same pixels the window is
+//! clamped to. `px()` in a view is the spelling of "read the token", and
+//! `scripts/uiaudit.sh` is what keeps every one of these modules the only place
+//! a number is written down.
+//!
+//! The cost is recorded, not hidden: nothing here follows the base font size,
+//! so interface zoom does not scale layout. The concrete zoom-crop sites the
+//! visual audit found — the fixed lane widths that truncate names, the fixed
+//! chart heights, the fixed key-column width — are targeted fixes at those
+//! call sites rather than a token-layer change, and a wholesale rem-resolving
+//! migration with zoom testing at several base-font sizes is filed as a
+//! follow-up rather than attempted in a polish pass.
 
 use gpui_kit::assets::IconName;
 use gpui_kit::{App, Hsla, Pixels, SharedString};
@@ -14,6 +36,17 @@ use gpui_kit::{App, Hsla, Pixels, SharedString};
 // function reads the active pair through [`colors`] / [`status_colors`].
 
 /// The product theme file, compiled into the binary.
+///
+/// The values in the file are *starting points*, not rendered values: both
+/// appearances are solved at parse time (see [`Roles::parse`] and
+/// [`refine_theme_with_contrast`]), which is the deliberate contract the file
+/// ships under. Light `fg.disabled` is the standing example — it is written at
+/// a measured 1.78:1 against the white content surface, and it only reaches
+/// the 3:1 floor because the parse re-solves it, with the reason recorded at
+/// the role's own solve below. A tool that reads the raw JSON — an exporter,
+/// a test, a viewer — therefore sees *pre-refine* colours, and a skin that
+/// edits it declares intent the parse then holds to the floors; the parse, not
+/// the file, is the authority on what the interface draws.
 pub const PRODUCT_THEME_JSON: &str = include_str!("../../k8s-app/assets/themes/k8s-studio.json");
 
 /// Keys the product theme must not carry, because nothing reads them.
@@ -1800,6 +1833,15 @@ pub mod role {
 /// signal that a product was decorated rather than designed, and the light
 /// appearance punishes it hardest because a light shadow on a light surface turns
 /// to dirt.
+///
+/// **The single overlay-elevation source.** Every floating surface in the
+/// product reads one of the three shadows below — there is no shadow logic
+/// anywhere else, and there must not be: a toast and a dialog once cast
+/// different shadows because one author read this module and three others read
+/// gpui-kit's `shadow_tokens().lg`, and two elevations for the same surface
+/// role is how a flat product starts to look decorated. [`host`] pairs every
+/// one of them with the surface it lands on so a component reads the pair and
+/// never decides the surface half for itself.
 pub mod shadow {
     use super::{Appearance, appearance, role};
     use gpui_kit::{App, BoxShadow, Hsla, black, px};
@@ -1962,8 +2004,22 @@ pub mod text {
     pub const TITLE_LINE_HEIGHT: Pixels = px(20.);
 
     /// A table's primary field, and a button's label.
-    pub const SUBTITLE: Pixels = px(13.);
-    pub const SUBTITLE_LINE_HEIGHT: Pixels = px(18.);
+    ///
+    /// **One geometry, two intents.** The value *is* [`BODY`] — the two rungs
+    /// were 13/18 twice, two tokens carrying one size and leaning on weight
+    /// alone for separation, which is the smallest gap in the scale and the
+    /// exact dilution the "one rung = one level" promise rules out. The audit
+    /// offered collapse or differentiate, and collapse is the honest answer:
+    /// a primary field is told apart from running prose by its *weight*
+    /// ([`MEDIUM`] vs [`REGULAR`]), so the size was never carrying the
+    /// distinction. The name survives as an alias rather than being edited out
+    /// of its call sites, because the call site is stating an intent — "this
+    /// is the row's primary field", "this is a button's label" — and intent
+    /// is what a future differentiation would key on. When the design ever
+    /// wants the field apart from the prose, this one constant is the place
+    /// that wants a new number.
+    pub const SUBTITLE: Pixels = BODY;
+    pub const SUBTITLE_LINE_HEIGHT: Pixels = BODY_LINE_HEIGHT;
 
     /// Running prose, and any label that is neither of the above.
     pub const BODY: Pixels = px(13.);
@@ -2799,6 +2855,15 @@ pub mod size {
     /// The kind icon in the sidebar. Fourteen pixels is the size the kind set
     /// was drawn and judged at, and a family that is legible at fourteen is
     /// legible everywhere.
+    ///
+    /// **The smallest icon lane the product sanctions.** A glyph drawn under
+    /// fourteen is not an icon in the design's sense — it is control geometry:
+    /// a check inside its own tick box, inset so the stroke clears the box's
+    /// hairline and stated in the control's own terms (a fraction of the box),
+    /// not read from [`icon`]'s lanes. That is the difference between a mark a
+    /// reader scans a column for and a stroke whose size follows the control it
+    /// confirms, and conflating them is how a control starts drifting a third
+    /// optometry onto a lane.
     pub const KIND_ICON: Pixels = px(14.);
     /// The kind icon beside a resource title, where there is room for it.
     pub const KIND_ICON_TITLE: Pixels = px(16.);
@@ -3859,10 +3924,36 @@ impl Severity {
         crate::design::role::status_for(self, cx)
     }
 
+    /// The product's single severity-**mark** resolver, on the app's own
+    /// surface.
+    ///
+    /// Read this — and not [`Severity::color`] or a channel ink — for the dot,
+    /// bar, segment or rail that reports a severity, and [`marker_on`] when the
+    /// mark is painted on any surface other than the app's. The resolver
+    /// answers the healthy-vs-signal split the way the whole product agreed to:
+    /// a mark carrying a *claim* (`Warning`, `Error`, `Info`) wears its channel
+    /// ink, solved to the mark floor on the surface it lands on; a mark that
+    /// only says *healthy* (`Success`) stays grey, because healthy is the
+    /// absence of a signal and ten thousand green dots is a signal field with
+    /// nothing in it.
+    ///
+    /// The one sanctioned exception is a **distribution**: a summary rail whose
+    /// segments are a proportion, where `Success` is one category out of four
+    /// and a grey slice beside three coloured ones is an unlabelled part.
+    /// There the healthy segment wears `role::success` as *data* — the channel
+    /// ink read as a chart series, never as a claim — while the healthy
+    /// *figure* beside it stays grey through this resolver.
     pub fn marker(self, cx: &App) -> Hsla {
         self.marker_on(cx, role::surface_app(cx))
     }
 
+    /// The same resolver, solved against the surface the mark is painted on.
+    ///
+    /// A mark that clears [`STATUS_MARK_MIN_CONTRAST`] on the app surface can
+    /// smudge into a wash or a raised card, so the background is an argument
+    /// rather than an assumption: the resolver reads the channel ink through
+    /// [`marker_for_background`], which walks the ink only as far as the floor
+    /// on *that* surface requires.
     pub fn marker_on(self, cx: &App, background: Hsla) -> Hsla {
         marker_for_background(self.color(cx), background)
     }
@@ -3981,6 +4072,16 @@ pub fn pod_severity(status: &str) -> Severity {
 /// files themselves belong to the app, which is the crate that embeds them; this
 /// table is the one place that says which file answers for which kind, so a
 /// panel and the asset source cannot disagree about it.
+///
+/// **This table, read through [`kind_icon_path`], is the product's one
+/// kind-icon API.** A caller that knows the *specific* kind — a resource row,
+/// a search hit, an inspector header, a sidebar entry — draws the bespoke
+/// duotone SVG from here at one of the lanes [`size::KIND_ICON`],
+/// [`size::KIND_ICON_TITLE`] or [`size::NAV_MARK`] names. [`kind_icon`] is a
+/// *different* function answering a different question (which chrome
+/// *category*), and a kind with an entry here must never be drawn from it:
+/// two silhouettes for one noun across panes is the split this table exists
+/// to end.
 pub const KIND_ICON_PATHS: [(&str, &str); 12] = [
     ("Pod", "icons/k8s-pod.svg"),
     ("Deployment", "icons/k8s-deployment.svg"),
@@ -4003,6 +4104,14 @@ pub const KIND_ICON_PATHS: [(&str, &str); 12] = [
 /// own bespoke shape, or a missing one, is how a set of seventy-one kinds ends
 /// up looking like seventy-one separate decisions. Its identity is the first
 /// letter, which the caller draws.
+///
+/// The returned SVG is drawn at exactly one of the lanes [`size::KIND_ICON`]
+/// (the row and sidebar default), [`size::KIND_ICON_TITLE`] (beside a resource
+/// title) or [`size::NAV_MARK`] (a navigation lane — the same fourteen pixels,
+/// named for the spine it sits on). Fourteen is the size the family was drawn
+/// and judged at and therefore the smallest lane the product sanctions; a mark
+/// that wants to be smaller is not a kind icon but control geometry, and it
+/// is documented at its own control rather than instituting a fourth size.
 pub fn kind_icon_path(kind: &str) -> SharedString {
     let matches = |canonical: &str| {
         // Kubernetes pluralises in a list and a caller may hand over either, and
@@ -4030,6 +4139,14 @@ pub const KIND_ICON_COUNT: usize = 12;
 /// [`kind_icon_path`], and a caller that means "which kind is this" must use
 /// that one: this one answers "which category", and a Deployment and a
 /// ReplicaSet are the same category and must look the same here.
+///
+/// The split the call sites are still converging on: a caller that knows the
+/// *specific* kind draws the bespoke SVG (table, search, inspector, sidebar),
+/// and this Lucide map is reserved for chrome categories that name no kind —
+/// an API group, an event, a fleet. A specific kind that still arrives here is
+/// a migration straggler being finished at the call sites, and the answer it
+/// gets is deliberately the *category* glyph rather than an identity: better
+/// one generic silhouette everywhere than a third bespoke form.
 ///
 /// A node is a machine and a cluster is a fleet of them, so the two do not share
 /// a shape: the title bar names the fleet on every screen and the sidebar names

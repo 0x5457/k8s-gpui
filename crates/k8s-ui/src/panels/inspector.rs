@@ -6558,7 +6558,10 @@ impl InspectorPanel {
             .debug_selector(|| "inspector-describe-body".to_owned())
             .w_full()
             .min_w(px(0.))
-            .px(space::SM)
+            // `common::CONTENT_INSET`, the panel spine: the body used to inset 8px while the
+            // Forwards and Overview toolbars sat at 16, which is two left spines across panels
+            // that dock side by side.
+            .px(common::CONTENT_INSET)
             .py(space::SM)
             .gap(space::MD)
             .children(sections)
@@ -7344,7 +7347,9 @@ impl InspectorPanel {
             .min_h(px(0.))
             .overflow_y_scroll()
             .track_scroll(&self.metrics_scroll)
-            .p(space::SM)
+            .py(space::SM)
+            // The same leading spine the Describe body and the toolbar take.
+            .px(common::CONTENT_INSET)
             .gap(space::MD);
         match self.metrics_probe.clone() {
             MetricsProbeState::Checking => {
@@ -7983,7 +7988,10 @@ fn inspector_toolbar(
         .w_full()
         .min_w(px(0.))
         .h(design::size::TOOLBAR)
-        .px(space::SM)
+        // `common::CONTENT_INSET`, the shared content spine: the toolbar's first control now
+        // starts on the same x as the body below it and the Forwards/Overview toolbars beside
+        // this panel, where it used to sit 8px in from their leading edge.
+        .px(common::CONTENT_INSET)
         .gap(space::SM)
         .items_center()
         .justify_end()

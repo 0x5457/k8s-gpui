@@ -5711,8 +5711,15 @@ fn problems_row(problems_only: bool, cx: &App) -> AnyElement {
 /// that used the menu's own check would have a control 2px narrower than §4.10 says and
 /// no box at all on the unticked rows — a check that appears is a check, and a
 /// missing one reads as "no value here" rather than "not chosen".
+///
+/// The geometry is the control's own, not an icon lane's: [`design::size::KIND_ICON`]
+/// fixes fourteen as the smallest mark lane the product sanctions, and its own note
+/// files a check inside its box as control geometry rather than an icon — stated in
+/// the box's terms, four pixels of inset so the tick's stroke clears the box's 1px
+/// hairline with air to spare where the corner of the check turns.
 fn filter_checkbox(checked: bool, cx: &App) -> AnyElement {
-    let box_size = px(14.);
+    let box_size = design::size::KIND_ICON;
+    let tick_size = box_size - design::space::XS;
     let ink = if checked {
         design::role::accent_fg(cx)
     } else {
@@ -5740,7 +5747,7 @@ fn filter_checkbox(checked: bool, cx: &App) -> AnyElement {
         .when(checked, |box_mark| {
             box_mark.child(
                 Icon::new(IconName::Check)
-                    .with_size(Size::Size(px(10.)))
+                    .with_size(Size::Size(tick_size))
                     .text_color(ink),
             )
         })
@@ -8822,8 +8829,22 @@ fn loading_table(
     // per-frame cost for a motion most readers will not notice and some will
     // find distracting. The placeholder therefore breathes on the same clock the
     // wait runs on, which is one value per frame instead of one per row.
-    let placeholder =
-        design::role::fg_tertiary(cx).opacity(design::skeleton_alpha(waited, SKELETON_BREATHE));
+    //
+    // Under reduced motion the breathe does not run at all: an opacity pulse
+    // is motion, and the convention overview.rs documents for its own loading
+    // ladder is that the *spinner* owns the preference while the skeleton
+    // stays visible — a placeholder that froze entirely would read as a
+    // stalled render rather than as content that has not arrived. The static
+    // answer is a frozen frame of the pulse, taken at mid-swing (a quarter of
+    // the triangle's own cycle) through the same resolver rather than as a
+    // picked number: the floor and the peak are the band's private constants,
+    // and a literal here would be a third owner of them.
+    let breathe = if cx.reduce_motion() {
+        design::skeleton_alpha(SKELETON_BREATHE / 4, SKELETON_BREATHE)
+    } else {
+        design::skeleton_alpha(waited, SKELETON_BREATHE)
+    };
+    let placeholder = design::role::fg_tertiary(cx).opacity(breathe);
     let skeleton_rows = (0..rows).map(|row_index| {
         h_flex()
             .id(ElementId::NamedInteger(

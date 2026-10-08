@@ -16,7 +16,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Div, Hsla, Pixels, Role, SharedString, Stateful, Styled, Window, div, px};
 
 use crate::design::{self, space};
-use crate::panels::common::empty_state;
+use crate::panels::common::{empty_state, section_heading};
 use crate::settings::{self, DataTypography};
 
 use super::ChartData;
@@ -207,15 +207,15 @@ impl ChartTableDelegate {
         }
     }
 
-    /// One cell's text, and whether it stands in for a sample the series did not
-    /// take. An em dash is a gap in the data, so it reads as muted prose rather
-    /// than as a number.
+    /// One cell's text, and whether it is the em dash that stands in for a
+    /// sample the series did not take. An em dash is a gap in the data, so it
+    /// reads as quiet prose rather than as a number.
     fn cell(&self, row_ix: usize, col_ix: usize) -> (String, bool) {
         let Some(row) = self.rows.get(row_ix) else {
             return ("—".to_owned(), true);
         };
         if col_ix == ORDER_COLUMN {
-            return (row.time.clone(), true);
+            return (row.time.clone(), false);
         }
         match row.cells.get(col_ix - 1) {
             Some(value) => (value.clone(), value == "—"),
@@ -225,11 +225,20 @@ impl ChartTableDelegate {
 
     /// The ink one cell's text is drawn in.
     ///
-    /// Three cases, and the third is the one the table did not have. A selected
-    /// cell is painted with the selection fill by the component, and the content
-    /// ink is solved against the *content* surface — so a value on a selection
-    /// wash is a value read at whatever contrast the two happen to meet at. The
-    /// product already owns the answer in
+    /// The same three-rung ladder the resource table runs: identity on the
+    /// primary rung, data one rung down, and the quietest rung for text that
+    /// stands in for an absence. The time column is the identity — it is the
+    /// row's order and its name — so it takes `fg.primary`; the values are the
+    /// metadata of that timestamp, and a wall of them in `fg.primary` made the
+    /// table louder than the resource list beside it, so they sit one rung
+    /// down at `fg.secondary`; and an em dash is not a value at all, so it
+    /// takes `fg.tertiary`.
+    ///
+    /// A selected cell is the exception, and it is the case the table did not
+    /// used to have. The component paints the cursor cell with the selection
+    /// fill, and the content ink is solved against the *content* surface — so
+    /// a value on a selection wash is a value read at whatever contrast the two
+    /// happen to meet at. The product already owns the answer in
     /// [`design::text_selection::foreground`], which composites the fill first
     /// and then solves the ink against it, and it is the same role the resource
     /// list and the editor use, so all three agree.
@@ -237,10 +246,13 @@ impl ChartTableDelegate {
         if self.selection == Some((row_ix, col_ix)) {
             return design::text_selection::foreground(cx);
         }
+        if col_ix == ORDER_COLUMN {
+            return design::role::fg_primary(cx);
+        }
         if muted {
             design::role::fg_tertiary(cx)
         } else {
-            design::role::fg_primary(cx)
+            design::role::fg_secondary(cx)
         }
     }
 
@@ -306,11 +318,13 @@ impl TableDelegate for ChartTableDelegate {
 
     /// Column heading for the value table.
     ///
-    /// `text::CAPTION` semibold in `fg.tertiary`, the treatment the resource
-    /// list's column headings use, and trailing for the numeric columns because
-    /// their cells are. The time column carries a marker for its fixed order
-    /// instead of a sort control the table cannot honour, in a lane of its own so
-    /// the word stays on the same edge in every row of the band.
+    /// The product's one caption treatment, [`section_heading`] — `CAPTION`
+    /// semibold, uppercased, in the tertiary ink, the same treatment the
+    /// resource list's column headings and every panel's section head use —
+    /// and trailing for the numeric columns because their cells are. The time
+    /// column carries a marker for its fixed order instead of a sort control
+    /// the table cannot honour, in a lane of its own so the word stays on the
+    /// same edge in every row of the band.
     ///
     /// The heading reads in the UI font while the cells below read in the data
     /// font, and the column *width* follows the data font so a raised size cannot
@@ -331,24 +345,19 @@ impl TableDelegate for ChartTableDelegate {
             .when(ChartTableDelegate::numeric(col_ix), |head| {
                 head.justify_end()
             })
-            .text_size(design::text::CAPTION)
-            .line_height(design::text::CAPTION_LINE_HEIGHT)
-            .font_weight(design::text::SEMIBOLD)
-            .text_color(design::role::fg_tertiary(cx))
             .aria_label(if ordered {
                 format!("{text}, {ORDER_SHORT}")
             } else {
                 text.clone()
             })
             .child(
-                div()
+                // One caption treatment for the whole product; the aria label
+                // above keeps the spoken sentence case.
+                section_heading(text)
                     .min_w_0()
                     .overflow_hidden()
                     .text_ellipsis()
-                    .whitespace_nowrap()
-                    // The resource table's header treatment: CAPTION uppercased.
-                    // The aria label above keeps the spoken sentence case.
-                    .child(text.to_uppercase()),
+                    .whitespace_nowrap(),
             );
         if ordered {
             head = head.aria_description(ORDER_DESCRIPTION).child(

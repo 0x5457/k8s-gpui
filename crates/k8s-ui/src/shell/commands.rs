@@ -714,9 +714,12 @@ pub fn demo_commands_with_capabilities(
                 IconName::Check,
                 Run::Action(apply_yaml_action as fn() -> Box<dyn Action>),
             ),
+            // One verb for one result: the Inspector's own commit says "Apply to
+            // cluster", and a palette row that asks the user to "Confirm" something
+            // they already staged is a ritual word the copy lexicon dropped.
             (
                 "inspector.confirm_apply",
-                "Confirm and apply changes",
+                "Apply to cluster",
                 IconName::CheckCheck,
                 Run::Action(confirm_apply_action as fn() -> Box<dyn Action>),
             ),
@@ -1798,7 +1801,7 @@ mod tests {
             ("inspector.metrics_1m", "Metrics: last minute"),
             ("inspector.metrics_15m", "Metrics: last 15 minutes"),
             ("inspector.metrics_1h", "Metrics: last hour"),
-            ("inspector.confirm_apply", "Confirm and apply changes"),
+            ("inspector.confirm_apply", "Apply to cluster"),
             ("inspector.revert_yaml", "Revert YAML"),
             ("inspector.copy_yaml", "Copy YAML"),
             ("inspector.toggle_value", "Expand or collapse value"),

@@ -25,13 +25,18 @@ use gpui_kit::{
 use k8s_core::metrics::NormalizedPoint;
 
 use crate::design::{self, role, space, text};
-use crate::panels::common::empty_state;
+use crate::panels::common::{empty_state, hover_hint};
 
 use super::ChartData;
 use super::geometry::{self, PlotRect};
 use super::{SeriesColor, SeriesStroke};
 
-/// Y tick labels use compact units, so `1023Gi` is the longest label possible.
+/// Y tick labels are held to six characters by [`super::Unit::axis_label`] —
+/// `1023Gi` is the longest label possible, and the module test in `mod` keeps
+/// the cap honest — so the gutter is sized from the claim. The alternative it
+/// lost to is measuring the widest tick each frame, which re-lays the chart out
+/// whenever the magnitude of the data changes: a plot that jumps sideways when
+/// memory crosses 100Gi is worse than a formatter that keeps its budget.
 const Y_LABEL_COLUMNS: f32 = 6.0;
 /// Line width of every series' stroke.
 const LINE_WIDTH: f32 = 1.5;
@@ -482,7 +487,8 @@ impl MetricsPlot {
             .gap(space::SM)
             .cross_line(
                 CrossLine::new(point(px(x), px(plot.y)))
-                    .band(px(1.))
+                    // One device hairline: the crosshair is a rule, not a mark.
+                    .band(design::border::LINE)
                     .span(plot.y, plot.height),
             )
             .dots(
@@ -521,6 +527,13 @@ impl MetricsPlot {
     /// The names are prose, not numbers, so they read in the UI font at the
     /// caption role — the role the series names use everywhere else in the panel
     /// — instead of the data font the axis labels use.
+    ///
+    /// A narrow panel splits the centred band: each entry may shrink to its
+    /// ellipsis rather than being clipped whole at the band's far end — a name
+    /// that vanishes without a trace is the one lie a legend cannot afford —
+    /// and a clipped name recovers in full on hover. The numeric table below
+    /// prints every label too, so nothing is ever only reachable through the
+    /// pointer.
     fn legend(&self, cx: &App) -> AnyElement {
         let band = self.scale().plot.y;
         h_flex()
@@ -537,14 +550,20 @@ impl MetricsPlot {
             .items_center()
             .justify_center()
             .gap(space::LG)
-            .children(self.data.series.iter().map(|series| {
+            .children(self.data.series.iter().enumerate().map(|(index, series)| {
                 h_flex()
-                    .flex_none()
+                    // An id of its own is what lets the entry carry the hint.
+                    .id(("chart-legend-entry", index))
+                    .min_w_0()
                     .items_center()
                     .gap(space::XS)
+                    .tooltip(hover_hint(series.label.clone()))
                     .child(stroke_sample(series.color, cx))
                     .child(
                         div()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_ellipsis()
                             .text_size(text::CAPTION)
                             .line_height(text::CAPTION_LINE_HEIGHT)
                             .text_color(role::fg_secondary(cx))

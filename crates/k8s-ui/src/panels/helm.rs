@@ -3813,10 +3813,13 @@ fn section_placeholder(title: &'static str, hint: &'static str, cx: &App) -> Any
 }
 
 /// The one group heading, so a section and its placeholder cannot drift apart again.
-fn section_heading(title: &str, cx: &App) -> impl IntoElement {
-    common::label_metadata(title.to_uppercase())
-        .font_weight(FontWeight::SEMIBOLD)
-        .text_color(role::fg_tertiary(cx))
+///
+/// The treatment is `common::section_heading`'s — the shared `CAPTION` uppercase caption —
+/// so this panel's heads cannot drift from the Inspector's, the Search panel's, the Forwards
+/// list's or the Overview's. That drift already happened once: see the comment above
+/// [`section`].
+fn section_heading(title: &str, _cx: &App) -> impl IntoElement {
+    common::section_heading(title.to_owned())
 }
 
 /// Width of a detail row's key column, so every value in the panel starts at the same x.

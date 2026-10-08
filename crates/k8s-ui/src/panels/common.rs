@@ -232,6 +232,64 @@ pub(super) fn buffer_font(cx: &App) -> Font {
 }
 
 // ---------------------------------------------------------------------------
+// Content spine
+// ---------------------------------------------------------------------------
+
+/// The one leading inset the docked panels share.
+///
+/// `UI-SPEC` §2.1's `space::LG` value, named because the panels that dock side
+/// by side must not each invent a leading edge: the Inspector's body and
+/// toolbar inset theirs at `space::SM`, the Search group heads at `space::MD`
+/// and the Forwards panel at `space::LG`, so a window with two panels open
+/// drew two left spines 4–8px apart. `Design guides > Alignment details` is
+/// the rule — "give sibling regions a shared content inset" — and Forwards is
+/// the panel that argued for 16 inside its own comment, so 16 is the value
+/// every panel's body, toolbar and section heading now reads from one place.
+///
+/// It is the *content* inset: a tab pill's own inner padding, a chip, a rule,
+/// or the air above an empty state is a different relationship and keeps its
+/// own token.
+pub(crate) const CONTENT_INSET: Pixels = space::LG;
+
+// ---------------------------------------------------------------------------
+// Section heading
+// ---------------------------------------------------------------------------
+
+/// The one section-heading treatment: `CAPTION`, semibold, uppercased, in the
+/// tertiary ink.
+///
+/// A section head labels a *set*, so it sits a rung below the panel title and
+/// does not compete with the body copy it introduces. `UI-SPEC.md` §2.3
+/// reserves this caption exactly for 分区标题和表头, and the design guide's
+/// ALL CAPS clause sets the boundaries the treatment already keeps: restrained
+/// emphasis for very short section labels, never bold *and* strong colour
+/// *and* uppercase in one region — which is why the mark and the ink a failed
+/// section wants belong to the caller (see `forwards.rs`), never to this
+/// helper.
+///
+/// The casing is applied here rather than left to each call site — gpui-pre
+/// 0.3.6 has no `text-transform` and no `letter-spacing`, so the transform is
+/// this function's job and the `design::text::CAPTION` token carries the
+/// "tracked out" half of the role as documentation until the renderer grows a
+/// tracking API. A caller that wants an accessible name in sentence case keeps
+/// passing the untransformed title for ids, aria and selectors, as the
+/// Forwards panel's heading did before this treatment was shared.
+///
+/// The *count* a section shows is not part of the word: the Overview trails it
+/// on the heading's far edge and the Inspector puts it in its own lane, so a
+/// caller composes rather than decorating the caption.
+pub(crate) fn section_heading(title: impl Into<SharedString>) -> RoleLabel {
+    let title: SharedString = title.into();
+    RoleLabel::new(
+        SharedString::from(title.to_uppercase()),
+        design::text::CAPTION,
+        design::text::CAPTION_LINE_HEIGHT,
+        Some(design::text::SEMIBOLD),
+        Ink::Tertiary,
+    )
+}
+
+// ---------------------------------------------------------------------------
 // Controls
 // ---------------------------------------------------------------------------
 

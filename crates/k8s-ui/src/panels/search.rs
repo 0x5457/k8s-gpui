@@ -289,22 +289,19 @@ fn result_lanes(icon: AnyElement, namespace: AnyElement, name: AnyElement) -> An
 /// screen reader. The space above every head is the same `space::SM`, the first
 /// one included, so the groups read as groups and the first is not welded to the
 /// column header above it.
-fn group_heading(id: &str, label: &str, cx: &App) -> AnyElement {
+fn group_heading(id: &str, label: &str, _cx: &App) -> AnyElement {
     let heading = id.to_owned();
     h_flex()
         .flex_none()
         .mt(design::space::SM)
         .h(design::size::GROUP_HEAD)
-        .px(design::space::MD)
+        // `CONTENT_INSET`, the shared panel spine: the heads used to sit at
+        // `space::MD`, two steps inside the 16px edge the Forwards and Overview
+        // panels beside this one start their content at.
+        .px(common::CONTENT_INSET)
         .items_center()
         .debug_selector(move || format!("{heading}-heading"))
-        .child(
-            Label::new(label.to_uppercase())
-                .text_size(design::text::CAPTION)
-                .line_height(design::text::CAPTION_LINE_HEIGHT)
-                .font_weight(FontWeight::SEMIBOLD)
-                .text_color(design::role::fg_tertiary(cx)),
-        )
+        .child(common::section_heading(label.to_owned()))
         .into_any_element()
 }
 

@@ -13,7 +13,7 @@ use std::cmp::Ordering;
 use gpui_kit::assets::IconName;
 use gpui_kit::component::button::{Button, ButtonVariants as _};
 use gpui_kit::component::label::Label;
-use gpui_kit::component::{ActiveTheme, Icon, RoleOverride, Sizable, Size, h_flex, v_flex};
+use gpui_kit::component::{Icon, RoleOverride, Sizable, Size, h_flex, v_flex};
 use gpui_kit::prelude::*;
 use gpui_kit::{
     AnyElement, App, ClickEvent, Context, FocusHandle, Hsla, InteractiveElement, IntoElement,
@@ -834,8 +834,10 @@ impl Shell {
             // number in the bar and stopped on the one button: a keyboard user arrived and found
             // unfocusable text on both sides of it. One handle for the group is enough, because
             // the metrics are read rather than operated, and the port-forward link keeps its own
-            // stop inside it. The focus colour goes on the top rule, which is the bar's only edge,
-            // so the state is visible without moving anything.
+            // stop inside it. The ring is the product's one focus treatment — a recoloured top
+            // rule used to be the cue, and a 1px line changing hue is colour-only information a
+            // reader cannot see; the rail is a shape, and `focus_visible` keeps it off pointer
+            // visits.
             //
             // The group needs a name of its own. A focusable element with no role is a generic
             // container, which is exactly the node an assistive technology drops, so the stop
@@ -844,7 +846,7 @@ impl Shell {
             .role(Role::Group)
             .aria_label("Connection and activity readouts")
             .track_focus(&self.status_bar_metrics_focus)
-            .focus_visible(|style| style.border_color(colors.border_focused))
+            .focus_visible(common::focus_ring(cx))
             // `UI-SPEC.md` §1 puts the title bar, the sidebar and the status bar on
             // `surface.chrome`. This used to read `colors.panel_background`, a different field that
             // happens to hold the same value in both shipped themes: the bar was on chrome by
@@ -1197,7 +1199,10 @@ impl Shell {
             .border_1()
             .border_color(popover_border(raised, colors.border))
             .bg(colors.elevated_surface_background.alpha(1.0))
-            .shadow(cx.theme().shadow_tokens().lg)
+            // The one elevation the product gives a popover, from the shadow scale:
+            // the kit's `shadow_tokens().lg` was a second source, and two answers to
+            // "how high does a popover float" was the drift it caused.
+            .shadow(design::shadow::popover(cx))
             .overflow_hidden()
             .flex()
             .flex_col()

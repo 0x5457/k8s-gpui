@@ -626,7 +626,7 @@ fn toolbar_glyph_box() -> Pixels {
 /// **Both switchers carry a chord and neither said so.** The bindings were there
 /// (`secondary-shift-c` / `secondary-shift-m`, and a dozen more in every preset) and
 /// the two most-used controls in the window named only what they currently hold —
-/// "Switch Context: prod · Live". A shortcut nobody can discover is not a
+/// "Switch context: prod · Live". A shortcut nobody can discover is not a
 /// shortcut, and these two are how every session starts: the first thing a person
 /// does is pick a context and a namespace.
 ///
@@ -1116,14 +1116,14 @@ impl Shell {
                     .gap(design::space::SM)
                     .items_center()
                     .role(Role::Status)
-                    .aria_label(format!("Download Progress: {percent}%"))
+                    .aria_label(format!("Download progress: {percent}%"))
                     .child(
                         Progress::new("update-progress-bar")
                             // `Progress` reads a percentage, not a fraction.
                             .value(progress * 100.0)
                             .color(colors.text_accent)
                             .w(design::size::UPDATE_PROGRESS)
-                            .accessibility_label(format!("Download Progress: {percent}%")),
+                            .accessibility_label(format!("Download progress: {percent}%")),
                     )
                     .child(text_small(format!("{percent}%")).text_color(colors.text_muted))
                     .into_any_element()
@@ -1312,7 +1312,7 @@ impl Shell {
             .flex_none()
             .py(design::space::XS)
             .role(Role::ListBox)
-            .aria_label("Update Actions")
+            .aria_label("Update actions")
             .child(
                 div()
                     .id("update-action-check-slot")
@@ -1419,7 +1419,10 @@ impl Shell {
             .border_1()
             .border_color(colors.border)
             .bg(colors.elevated_surface_background.alpha(1.0))
-            .shadow(cx.theme().shadow_tokens().lg)
+            // Anchored to the strip it expands, so it takes the popover elevation
+            // from the one shadow scale — not the kit's `shadow_tokens().lg`, which
+            // was the second source the command palette's comment already names.
+            .shadow(design::shadow::popover(cx))
             .track_focus(&self.update_overlay_focus)
             .tab_group()
             .tab_index(7isize)
@@ -1503,7 +1506,7 @@ impl Shell {
         // One compact step, one number. The bar sheds its *secondary* clusters below
         // [`super::chrome_compact_width`], the same width at which the sidebar becomes the rail and
         // the status bar sheds its optional readouts. Every one of the clusters that go has a
-        // palette command and a keymap behind it — `Toggle Inspector`, and the connection state the
+        // palette command and a keymap behind it — `Toggle inspector`, and the connection state the
         // status bar already prints — so nothing loses its last path.
         let narrow = width < super::chrome_compact_width();
         // The bar's own question is not "has the reader closed the tree" but "could this window
@@ -1646,12 +1649,12 @@ impl Shell {
             design::format::count_with_noun(summary.notifications, "notification", "notifications");
         let open = self.status_panel == super::StatusPanel::Notifications;
         let action = if open {
-            "Close Notifications"
+            "Close notifications"
         } else {
-            "Open Notifications"
+            "Open notifications"
         };
         // The name carries the figures the bar is drawing, in the order it draws them, and
-        // nothing else. Announced as "Open Notifications: 0 active notifications, 0 errors"
+        // nothing else. Announced as "Open notifications: 0 active notifications, 0 errors"
         // it describes a bar holding two readouts — the report this group exists to delete,
         // made to the one reader who cannot see that the bar is empty. The hover adds the
         // history total, which is the notification center's own figure and earns a line
@@ -1885,14 +1888,14 @@ impl Shell {
         let label = if compact {
             super::INSPECTOR_COMPACT_LABEL
         } else if open {
-            "Hide Inspector"
+            "Hide inspector"
         } else {
-            "Show Inspector"
+            "Show inspector"
         };
         let name = if compact {
             super::INSPECTOR_COMPACT_LABEL
         } else {
-            "Toggle Inspector"
+            "Toggle inspector"
         };
         let button = top_bar_icon_button(
             "toggle-inspector",
@@ -1917,9 +1920,10 @@ impl Shell {
             this.dispatch(ToggleRightPanel, window, cx);
         }));
         let button = if compact {
-            // A window too narrow for the Inspector cannot show it, so the hint is
-            // the only place the reader learns why.
-            button.tooltip(format!("{label}. {}", super::INSPECTOR_WIDTH_HINT))
+            // A window too narrow for the Inspector cannot show it, so the hint is the
+            // only place the reader learns why. The label is the hint: appending them
+            // once produced "show it.. show the Inspector", a phrase saying itself twice.
+            button.tooltip(super::INSPECTOR_COMPACT_LABEL)
         } else {
             button.tooltip_with_action(label, &ToggleRightPanel, Some("Shell"))
         };
@@ -2096,7 +2100,7 @@ impl Shell {
         let current = clusters
             .get(active)
             .cloned()
-            .unwrap_or_else(|| SharedString::from("No Context"));
+            .unwrap_or_else(|| SharedString::from("No context"));
         let status = self.connection.label();
         // `UI-SPEC.md` §4.1: the cluster name and a caret. The connection used to be appended to
         // it as `name · Live`, which put the same fact in the title bar and in the status bar
@@ -2104,8 +2108,8 @@ impl Shell {
         let label = current.clone();
         let tooltip = with_chord(
             match self.connection.detail() {
-                Some(reason) => format!("Switch Context: {current} · {status}. {reason}"),
-                None => format!("Switch Context: {current} · {status}"),
+                Some(reason) => format!("Switch context: {current} · {status}. {reason}"),
+                None => format!("Switch context: {current} · {status}"),
             },
             "k8s_shell::OpenContextSwitcher",
             cx,
@@ -2260,7 +2264,7 @@ impl Shell {
         let cluster = self
             .clusters
             .get(self.active_cluster)
-            .map_or("No Context", |name| name.as_ref());
+            .map_or("No context", |name| name.as_ref());
         let hint = if reason.is_empty() {
             format!("Connected to {cluster}")
         } else {
@@ -2317,7 +2321,7 @@ impl Shell {
                 NamespaceState::Failed(_) => {
                     "Namespace List Unavailable. Refresh the list, then try again.".to_owned()
                 }
-                _ => format!("Switch Namespace: {current}"),
+                _ => format!("Switch namespace: {current}"),
             },
             "k8s_shell::OpenNamespaceSwitcher",
             cx,
@@ -2430,6 +2434,11 @@ impl Shell {
     pub(super) fn render_tree(&self, window: &Window, cx: &Context<Self>) -> impl IntoElement {
         let colors = design::colors(cx);
         let focused = self.tree_focus_handle.is_focused(window);
+        // gpui resolves `focus_visible` only on the element that tracks the handle,
+        // so the row that shows the cue has to ask the window directly whether the
+        // focus arrived by key. A pointer visit keeps the cursor quiet: the wash
+        // and the frame are a keyboard state, not a souvenir of the last click.
+        let keyboard = window.last_input_was_keyboard();
         let rows = self.visible_tree_rows();
         let kind_label = tree_kind_label(&self.tree);
         let surface = design::role::surface_chrome(cx);
@@ -2464,7 +2473,7 @@ impl Shell {
                         );
                     }
                     children.push(
-                        self.render_tree_row(index, row, focused, cx)
+                        self.render_tree_row(index, row, focused && keyboard, cx)
                             .into_any_element(),
                     );
                 }
@@ -2495,7 +2504,7 @@ impl Shell {
             .id("resource-tree")
             .role(Role::Tree)
             .accessibility_id("resource-tree")
-            .aria_label("Kubernetes Resources")
+            .aria_label("Kubernetes resources")
             // The keys this tree actually answers, so the row menu, the disclosure and the two
             // ends of the list are all discoverable without trying them. `Home` and `End` are here
             // because the Dock strip and the Inspector tab strip both take them; a list that has
@@ -2514,12 +2523,15 @@ impl Shell {
             // The one boundary this region does own is *inside* it: the rule under the group head.
             // That is a structural divider between two bands of the same panel, not a seam between
             // panels, so it is a different thing and it stays.
+            //
+            // Keyboard focus on the panel itself used to "show" by recolouring a border nothing
+            // ever drew — the recolour is gone, and the answer lives where the reader looks: on
+            // the cursor row, which takes a wash plus a `border.strong` frame in `render_tree_row`.
             .bg(surface.alpha(1.0))
             .track_focus(&self.tree_focus_handle)
             .key_context("Tree")
             .tab_group()
             .tab_index(0isize)
-            .focus_visible(|style| style.border_color(colors.border_focused))
             .on_key_down(cx.listener(Self::on_tree_key_down))
             .child(
                 h_flex()
@@ -2664,7 +2676,7 @@ impl Shell {
             .id("tree-failure")
             .debug_selector(|| "tree-failure".to_owned())
             .role(Role::Alert)
-            .aria_label("Resource Load Failed")
+            .aria_label("Resource load failed")
             .aria_description(reason.to_owned())
             .w_full()
             .items_center()
@@ -2680,7 +2692,7 @@ impl Shell {
                     .small()
                     .text_color(design::status_colors(cx).error),
             )
-            .child(text("Resource Load Failed"))
+            .child(text("Resource load failed"))
             .child(
                 text_small(
                     "Load the resource tree. If loading fails, check the context connection.",
@@ -2694,14 +2706,14 @@ impl Shell {
                         .with_size(Size::Size(design::size::CONTROL))
                         .w(px(ACTION_BUTTON_WIDTH))
                         .tab_index(0isize)
-                        .tooltip("Retry Loading Resources")
+                        .tooltip("Retry loading resources")
                         .on_click(cx.listener(|this, _, _, cx| this.retry_catalog(cx))),
                     "Retry",
                 )
                 // The two words differ on purpose: the panel above this control names the
                 // failure as the *resource tree*, and the announced name carries that over
                 // for a reader who is not looking at the panel.
-                .accessibility_label("Retry Loading Resources"),
+                .accessibility_label("Retry loading resources"),
             )
             .into_any_element()
     }
@@ -2723,6 +2735,9 @@ impl Shell {
     /// the kind mark — so a row's label starts at the same x whether or not it has a triangle and
     /// whether or not it is selected. A lane that moved with its contents would put every label at a
     /// different x, which is the one thing a 71-row column cannot afford.
+    /// `tree_focused` answers with the keyboard: it is true only while the tree's
+    /// focus arrived by key, so the cursor the row can paint from it is the state
+    /// a keyboard reader is in, never a mark left behind by a click.
     fn render_tree_row(
         &self,
         index: usize,
@@ -3017,8 +3032,8 @@ impl Shell {
             // fill (`.when(selected, …row_selected_bg)`) and the mark and detail
             // already step up to `fg_primary` / `fg_secondary` above, so the state
             // is carried twice over and the third signal was never information.
-            // The keyboard cursor is a ring around the row, drawn by the tree's own
-            // focus handling rather than by a mark inside the row.
+            // The keyboard cursor adds a shape on top of its wash — the frame child
+            // below, appended after the row's content so the hairline paints over it.
             .child(
                 h_flex()
                     .flex_1()
@@ -3081,6 +3096,24 @@ impl Shell {
                     })
                     .when(cursor, |this| this.aria_active_descendant()),
             )
+            // The same 1px `border.strong` frame the table's focused row draws over
+            // itself, laid out absolutely so it moves nothing, because the cursor's
+            // wash alone is colour-only and the sidebar owes the keyboard the one
+            // focus answer the rest of the window gives it. `cursor` is gated on
+            // keyboard origin at the tree's root, so a click never leaves it behind.
+            .when(cursor, |this| {
+                this.child(
+                    div()
+                        .debug_selector(move || format!("tree-row-focus-edge-{index}"))
+                        .absolute()
+                        .left_0()
+                        .right_0()
+                        .top_0()
+                        .bottom_0()
+                        .border_1()
+                        .border_color(design::role::border_strong(cx)),
+                )
+            })
     }
 
     pub(super) fn render_center(
@@ -3153,7 +3186,7 @@ impl Shell {
         let search_for_bounds = self.search.clone();
         let panel_label = active
             .map(|tab| tab.title.clone())
-            .unwrap_or_else(|| SharedString::from("No Open Tab"));
+            .unwrap_or_else(|| SharedString::from("No open tab"));
         v_flex()
             .flex_1()
             .min_w(px(0.0))
@@ -3930,7 +3963,7 @@ impl Shell {
             .bg(design::role::surface_chrome(cx).alpha(1.0))
             .role(Role::TabList)
             .accessibility_id("center-tab-list")
-            .aria_label("Open Tabs")
+            .aria_label("Open tabs")
             // The tab menu is reachable without a pointer.
             .aria_keyshortcuts("Shift+F10 ContextMenu")
             .tab_group()
@@ -4389,7 +4422,9 @@ impl Shell {
             .border_1()
             .border_color(border)
             .bg(colors.elevated_surface_background.alpha(1.0))
-            .shadow(cx.theme().shadow_tokens().lg)
+            // The toast's own elevation — transient, and able to clear the Dock's
+            // edge, which is why the shadow scale keeps a value beneath `overlay`.
+            .shadow(design::shadow::toast(cx))
             .child(
                 div()
                     .id("toast-icon")
@@ -4416,8 +4451,8 @@ impl Shell {
                             .ghost()
                             .with_size(Size::Size(design::size::CONTROL))
                             .w(design::size::CONTROL)
-                            .tooltip("Dismiss Message (Esc)")
-                            .accessibility_label("Dismiss Message")
+                            .tooltip("Dismiss message (Esc)")
+                            .accessibility_label("Dismiss message")
                             .on_click(cx.listener(|shell, _, _, cx| {
                                 shell.toast = None;
                                 cx.notify();
@@ -4467,7 +4502,7 @@ impl Shell {
             .clusters
             .get(self.active_cluster)
             .map(|name| name.as_ref())
-            .unwrap_or("No Context");
+            .unwrap_or("No context");
         let namespace = self.namespace.as_ref();
         // The scope names where the switcher acts. The kind is the tab title behind the dialog,
         // which `DESIGN.md` §3.1 says must not be restated, and for the kind switcher it is also
@@ -4977,7 +5012,10 @@ impl Shell {
                 design::border::INTERACTIVE_MIN_CONTRAST,
             ))
             .bg(colors.elevated_surface_background.alpha(1.0))
-            .shadow(cx.theme().shadow_tokens().lg)
+            // A dialog, so the `overlay` step of the one shadow scale — the same
+            // value the command palette's card takes, because both are the topmost
+            // decision layer of the window.
+            .shadow(design::shadow::overlay(cx))
             .track_focus(&self.dialog_focus_handle)
             .tab_group()
             .key_context("Dialog")
@@ -5272,7 +5310,7 @@ impl Shell {
                         self.dialog_cancel_button("dialog-exec-cancel", 1, cx),
                         self.dialog_button(
                             "dialog-exec-confirm",
-                            "Open Shell",
+                            "Open shell",
                             2,
                             ButtonVariant::Primary,
                             cx.listener(|this, _, window, cx| this.confirm_exec_dialog(window, cx)),
@@ -5418,7 +5456,7 @@ impl Shell {
                         ),
                         self.dialog_button(
                             "dialog-forward-confirm",
-                            "Start Port Forward",
+                            "Start port forward",
                             super::PORT_FORWARD_CONFIRM_FOCUS,
                             ButtonVariant::Primary,
                             cx.listener(|this, _, window, cx| {
@@ -5943,7 +5981,7 @@ mod tests {
         let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
         shell.update(cx, |shell, cx| {
             shell.toast_with_action(
-                "Open Shell needs a context connection. Select a context, then try again."
+                "Open shell needs a context connection. Select a context, then try again."
                     .to_owned(),
                 design::Severity::Warning,
                 super::super::reload_kubeconfigs_action(),
@@ -6363,11 +6401,7 @@ mod tests {
     fn compact_inspector_label_asks_for_a_wider_window() {
         assert_eq!(
             crate::shell::INSPECTOR_COMPACT_LABEL,
-            "Inspector Unavailable. Widen the window to show it."
-        );
-        assert_eq!(
-            crate::shell::INSPECTOR_WIDTH_HINT,
-            "Widen the window to show the Inspector."
+            "Inspector unavailable. Widen the window to show it."
         );
     }
 

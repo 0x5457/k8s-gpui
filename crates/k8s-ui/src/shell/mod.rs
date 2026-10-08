@@ -721,9 +721,8 @@ const INSPECTOR_DOCK_NARROW_BELOW: f32 = 1200.0;
 /// [`INSPECTOR_FLOAT_BELOW`] and [`INSPECTOR_DOCK_NARROW_BELOW`] — and the name is the last
 /// thing about it that is wrong.
 const INSPECTOR_LAYOUT_BREAKPOINT: f32 = 1200.0;
-const INSPECTOR_WIDTH_HINT: &str = "Widen the window to show the Inspector.";
 /// Label for the Inspector toggle when the window is too narrow to show it.
-const INSPECTOR_COMPACT_LABEL: &str = "Inspector Unavailable. Widen the window to show it.";
+const INSPECTOR_COMPACT_LABEL: &str = "Inspector unavailable. Widen the window to show it.";
 /// How long the window waits after the last change before writing `layout.json`.
 const LAYOUT_SAVE_DELAY: Duration = Duration::from_millis(400);
 
@@ -6263,7 +6262,7 @@ impl Shell {
             SearchResultAction::Exec => {
                 let Some(target) = search_hit_exec_target(&hit) else {
                     self.toast(
-                        "Open Shell is available only for Pods.".to_owned(),
+                        "Open shell is available only for Pods.".to_owned(),
                         design::Severity::Warning,
                         cx,
                     );
@@ -6275,7 +6274,7 @@ impl Shell {
             SearchResultAction::PortForward => {
                 let Some(target) = search_hit_forward_target(&hit) else {
                     self.toast(
-                        "Start Port Forward is available only for Pods.".to_owned(),
+                        "Start port forward is available only for Pods.".to_owned(),
                         design::Severity::Warning,
                         cx,
                     );
@@ -7028,7 +7027,7 @@ impl Shell {
             // The sentence names the cause, and the one thing that can fix it is a button. A
             // warning the reader has to translate into a menu is a warning with no action.
             self.toast_with_action(
-                "Open Shell needs a context connection. Select a context, then try again."
+                "Open shell needs a context connection. Select a context, then try again."
                     .to_owned(),
                 design::Severity::Warning,
                 reload_kubeconfigs_action(),
@@ -10487,7 +10486,12 @@ impl Shell {
                 Button::new("center-empty-palette")
                     .label("Command palette")
                     .accessibility_label("Open the command palette")
-                    .primary()
+                    // Secondary, not primary: it opens a tool, it commits nothing. Primary
+                    // is the one default commit in a decision area, and an empty state
+                    // suggests two of them — the accent spent here twice a session just
+                    // because the palette is the first habit is exactly how an accent
+                    // stops meaning anything.
+                    .secondary()
                     .with_size(Size::Medium)
                     .tab_index(0isize)
                     .on_click(cx.listener(|this, _, window, cx| {
@@ -10504,7 +10508,7 @@ impl Shell {
                     .ghost()
                     .with_size(Size::Medium)
                     .tab_index(1isize)
-                    .tooltip("Open the Pods view.")
+                    .tooltip("Open the Pods view")
                     .on_click(cx.listener(|this, _, _, cx| {
                         this.activate_tab(0, cx);
                         cx.notify();

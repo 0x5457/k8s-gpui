@@ -34,6 +34,7 @@ use crate::design::{self, Severity, space};
 use crate::session::{LOG_EVENT_MAX_BYTES, TextInput};
 use crate::settings::DataTypography;
 
+use super::common;
 use super::common::{
     buffer_font, label_body, label_panel_title, label_small, label_text, labelled, menu_item,
     spinner, status_message,
@@ -4168,7 +4169,10 @@ impl DockPanel {
             .flex_none()
             .w_full()
             .h(design::size::DOCK_TABS)
-            .px(space::SM)
+            // The shared content spine. The strip used to inset 8px while the terminal
+            // pane it opens on pads 16 (`UI-SPEC` §16.4), which put the first tab 8px
+            // left of the content it belongs to — two leading edges on one column.
+            .px(common::CONTENT_INSET)
             .items_center()
             .tab_group()
             .bg(design::role::surface_chrome(cx).alpha(1.0))
@@ -4230,9 +4234,9 @@ impl DockPanel {
             )
             .child(div().flex_1().min_w(px(0.)))
             .when_some(status, |this, status| this.child(status))
-            // One cluster, so the three trailing controls share a frame: the same 8px inset the
-            // strip gives its own leading edge, one `space::XS` between neighbours, and the close
-            // one step further out.
+            // One cluster, so the three trailing controls share a frame: the same leading
+            // inset the strip gives its own edge, one `space::XS` between neighbours, and the
+            // close one step further out.
             //
             // The gap was `space::XXS`, which is 2px. These are three separate 24px hit targets,
             // not three pills: a pointer aimed between `⋯` and `⌃` had a 2px seam to find, and
@@ -8940,11 +8944,14 @@ mod tests {
             .debug_bounds("dock-log-message")
             .expect("A compact log message is laid out");
         assert!(
-            (f32::from(first_tab.origin.x) - f32::from(tabs.origin.x) - f32::from(space::SM)).abs()
+            (f32::from(first_tab.origin.x) - f32::from(tabs.origin.x)
+                - f32::from(common::CONTENT_INSET))
+            .abs()
                 <= 1.0,
-            "the first tab starts at the strip's own inset. `docs/mockup/secondary.html` draws \
-             `.dtabs` with `padding: 0 8px`; the strip used to hand its left edge to the first \
-             tab because the component's bar had no inset of its own."
+            "the first tab starts at the shared content spine. The strip used to inset 8px \
+             (`space::SM`, the old mockup's `padding: 0 8px`) while the terminal beside it led at \
+             16px, so two docked bands drew two leading edges; the strip now reads \
+             `common::CONTENT_INSET` like every other docked panel's body and toolbar."
         );
         assert!(
             (f32::from(toolbar.size.height) - f32::from(design::size::DOCK_TOOLBAR)).abs() <= 1.0

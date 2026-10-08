@@ -22,8 +22,8 @@ use gpui_kit::component::{Disableable as _, Icon, Sizable as _, Size, h_flex, v_
 use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement, StatefulInteractiveElement};
 use gpui_kit::{
     AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    FontWeight, Hsla, IntoElement, MouseButton, ParentElement, Pixels, Render, Role, SharedString,
-    Styled, Subscription, Task, UnderlineStyle, Window, div, px,
+    Hsla, IntoElement, MouseButton, ParentElement, Pixels, Render, Role, SharedString, Styled,
+    Subscription, Task, UnderlineStyle, Window, div, px,
 };
 use kube_core::DynamicObject;
 
@@ -1390,11 +1390,12 @@ impl ForwardsView {
             .w_full()
             .h(design::size::SUMMARY_STRIP)
             .min_w(px(0.))
-            // `UI-SPEC.md` §4.4 puts the strip's content at the same 16px edge the table's own
-            // cells start at. This panel used a 12px edge on a 40px `surface.chrome` band above
-            // a 32px `surface.content` one, and the Helm panel beside it a third arrangement —
-            // three bands for the same job, none of them §4.2's resource header.
-            .px(space::LG)
+            // `UI-SPEC.md` §4.4 puts the strip's content at the same 16px edge the table's
+            // own cells start at — the one `CONTENT_INSET` spine every docked panel now reads.
+            // This panel used a 12px edge on a 40px `surface.chrome` band above a 32px
+            // `surface.content` one, and the Helm panel beside it a third arrangement — three
+            // bands for the same job, none of them §4.2's resource header.
+            .px(common::CONTENT_INSET)
             .gap(space::SM)
             .items_center()
             // The band is 32px tall and its contents are a fixed 208px filter, a title and
@@ -1550,7 +1551,7 @@ impl ForwardsView {
                 .w_full()
                 .h(design::size::SUMMARY_STRIP)
                 .min_w(px(0.))
-                .px(space::LG)
+                .px(common::CONTENT_INSET)
                 .gap(space::SM)
                 .items_center()
                 .role(Role::Status)
@@ -1564,21 +1565,22 @@ impl ForwardsView {
         )
     }
 
-    /// A group heading: a dot, the section's name, and how many are in it.
+    /// A group heading: the section's name and how many are in it.
     ///
-    /// The name is uppercased here rather than in `Section::title` because gpui 0.6.6 has no
-    /// `text-transform`, and because the section name is also this element's `ElementId` and
-    /// debug selector — a test and an accessibility label both want the sentence case. Every
-    /// other group heading in the app (the Inspector's sections, the Overview's tiles, the
-    /// table header) uppercases at the same `caption` weight, and `UI-SPEC.md` §2.3 reserves
-    /// that treatment for exactly this: 分区标题和表头, never a label in body copy.
+    /// The name is uppercased by `common::section_heading` rather than in `Section::title`,
+    /// because the section name is also this element's `ElementId` and debug selector — a test
+    /// and an accessibility label both read the sentence case.
+    ///
+    /// The heading used to lead with a 6px dot beside every title, in `danger` on the Failed
+    /// one — uppercase, semibold **and** a strong channel in one region, which is the
+    /// combination the typography guide rules out ("Do not combine uppercase, strong color,
+    /// and bold weight in the same region"). The healthy sections' dot carried no state the
+    /// name and the count beside it did not already say, so the dot is gone. The one section
+    /// whose state *is* the news — Failed — says it in the word instead, in the danger
+    /// channel's word ink: shape plus ink, one channel, never colour alone.
     fn render_section_heading(&self, section: Section, count: usize, cx: &App) -> AnyElement {
         let heading = section.title();
-        let title = format!(
-            "{} ({})",
-            heading.to_uppercase(),
-            design::format::count(count)
-        );
+        let title = format!("{} ({})", heading, design::format::count(count));
         h_flex()
             .id(SharedString::from(format!("forwards-section-{heading}")))
             .debug_selector(move || format!("forwards-group-{heading}"))
@@ -1596,26 +1598,10 @@ impl ForwardsView {
             .items_center()
             .role(Role::Group)
             .aria_label(title.clone())
-            .child(
-                div()
-                    .flex_none()
-                    .size(design::size::STATUS_DOT)
-                    .rounded_full()
-                    // A section of failures is the one thing in this list that is coloured,
-                    // and it is coloured once, in the heading. The healthy sections get the
-                    // same dot in `fg_tertiary` — §14.3 draws one beside every heading, and
-                    // `fg_disabled` made the Active dot all but invisible, so the two
-                    // headings stopped reading as peers of the same kind of thing.
-                    .bg(match section {
-                        Section::Failed => role::danger(cx),
-                        _ => role::fg_tertiary(cx),
-                    }),
-            )
-            .child(
-                common::label_small(title)
-                    .text_color(role::fg_tertiary(cx))
-                    .font_weight(FontWeight::SEMIBOLD),
-            )
+            .child(common::section_heading(title).text_color(match section {
+                Section::Failed => role::status_word_for(Severity::Error, cx),
+                _ => role::fg_tertiary(cx),
+            }))
             .into_any_element()
     }
 
@@ -1869,8 +1855,13 @@ impl ForwardsView {
                     .id(time_id.clone())
                     .debug_selector(move || time_id.to_string())
                     .flex_none()
-                    .text_size(design::text::MONO_XS)
-                    .line_height(design::text::MONO_XS_LINE_HEIGHT)
+                    // The word it prints is prose — `Stopped`, `just now`,
+                    // `Reconnecting… 12s` — so it takes the UI rung the row's other quiet
+                    // columns wear, not the mono one: `MONO_XS` is the size for a UID or a
+                    // port, and a status word is neither. The digits keep the tabular
+                    // figures every number column in the panel carries.
+                    .text_size(design::text::LABEL)
+                    .line_height(design::text::LABEL_LINE_HEIGHT)
                     .text_color(time_role)
                     .font_features(settings::data_typography(cx).features.clone())
                     .child(time_label),
@@ -1976,11 +1967,12 @@ impl ForwardsView {
             .aria_keyshortcuts("Enter Control+C Control+O")
             .w_full()
             .min_w(px(0.))
-            // The panel's left edge, the same `space::LG` the toolbar and the summary strip
-            // start at and the same one the Helm table's own cells start at beside it. At
-            // `space::MD` every name in this list sat four pixels inside the title above it,
-            // which is one alignment spine for the chrome and another for the data.
-            .px(space::LG)
+            // The panel's left edge, the same `CONTENT_INSET` spine the toolbar and the
+            // summary strip start at and the same one the Helm table's own cells start at
+            // beside it. At `space::MD` every name in this list sat four pixels inside the
+            // title above it, which is one alignment spine for the chrome and another for
+            // the data.
+            .px(common::CONTENT_INSET)
             .gap(space::SM)
             .items_start()
             .relative()

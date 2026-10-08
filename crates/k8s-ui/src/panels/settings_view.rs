@@ -294,12 +294,17 @@ const REFERENCE_SUMMARY: &str =
 /// and this is what says the two things there are the two things that cannot be
 /// undone, and what each one deletes. It names the consequence before the press
 /// rather than after it, because the press that matters is the second one.
+///
+/// Both button labels carry `…`: a press arms the step rather than completing
+/// it, and the ellipsis policy asks for the mark on any command that needs more
+/// input — here the second, armed press — before it can complete. The armed
+/// labels drop it, because that press *is* the completion.
 const DANGER_ZONE_LABEL: &str = "Danger zone";
 const DANGER_ZONE_CAPTION: &str = "Neither can be undone. Clear cache deletes every cached snapshot and discovery result; Reset all settings restores every preference in this window. Everything else here takes effect as you change it.";
-const CLEAR_CACHE_LABEL: &str = "Clear cache";
+const CLEAR_CACHE_LABEL: &str = "Clear cache…";
 const CLEAR_CACHE_ARMED_LABEL: &str = "Delete the cache";
 const CLEAR_CACHE_CONFIRM: &str = "Clear cache deletes every cached snapshot and discovery result under the cache folder. The cluster is not affected.";
-const RESET_ALL_LABEL: &str = "Reset all settings";
+const RESET_ALL_LABEL: &str = "Reset all settings…";
 const RESET_ALL_ARMED_LABEL: &str = "Reset everything";
 const RESET_ALL_CONFIRM: &str = "Reset all settings deletes every preference in this window \u{2014} appearance, keyboard, cluster, editor, data and update settings \u{2014} and restores the built-in shortcuts. It does not touch cluster data.";
 const CANCEL_LABEL: &str = "Cancel";
@@ -314,7 +319,7 @@ const CANCEL_LABEL: &str = "Cancel";
 /// sentence says what the app fell back to, because "it did not work" without
 /// "and you are looking at defaults" is only half the information.
 const SETTINGS_FILE_UNREADABLE: &str = "The settings file could not be read, so built-in defaults are in use. Fix the file, then reload.";
-const SETTINGS_FILE_OPEN_LABEL: &str = "Open settings file";
+const SETTINGS_FILE_OPEN_LABEL: &str = "Open settings file…";
 
 /// Shown when a background write of the settings file failed after the control
 /// already flipped.
@@ -473,7 +478,7 @@ impl SettingsCategory {
     /// to before they click it.
     pub fn summary(self) -> &'static str {
         match self {
-            Self::Appearance => "Theme, accent, density, type and motion.",
+            Self::Appearance => "Theme, accent, type and motion.",
             Self::Keyboard => "Preset, type-ahead, and the shortcut reference.",
             Self::Cluster => "Namespace, deep links, timeouts and tool availability.",
             Self::Editor => "Indentation, whitespace, validation and wrapping.",
@@ -608,6 +613,12 @@ impl SettingSpec {
 enum Setting {
     Theme,
     Accent,
+    // `Density` is kept, not drawn: [`SPECS`] explains why the row is hidden
+    // until a real density system reads the value, and the variant carries the
+    // plumbing — the `density` storage key, the choices, the default — so the
+    // row comes back by restoring one spec. The `expect` is the tripwire: the
+    // day a surface does construct it, this attribute is the thing to delete.
+    #[expect(dead_code)]
     Density,
     UiFont,
     TextSize,
@@ -932,15 +943,13 @@ const SPECS: &[SettingSpec] = &[
         "highlight colour electric blue",
         Some("Surfaces read the theme's own accent."),
     ),
-    SettingSpec::new(
-        Setting::Density,
-        SettingsCategory::Appearance,
-        "Density",
-        "Comfortable 32px · normal 28px · dense 24px",
-        "How much air each row carries: 32px comfortable, 28px normal, 24px dense. Row height is a layout constant in every surface that has one, and no surface reads this yet.",
-        "rows compact spacing tight comfortable",
-        Some("Row height is fixed in every surface."),
-    ),
+    // `Setting::Density` has no row. Its own description said why: row height
+    // is a layout constant in every surface and "no surface reads this yet",
+    // which is the false affordance §UI-AUDIT I5 names — a control that answers
+    // a question nothing asks. The enum variant, the `density` storage key and
+    // the choices stay wired below, so the row returns when a real density
+    // system exists; until then the row is not drawn, not searched and not
+    // tabbed to.
     SettingSpec::new(
         Setting::UiFont,
         SettingsCategory::Appearance,
@@ -3161,6 +3170,33 @@ fn token_button(id: impl Into<gpui_kit::ElementId>, label: &str, framed: bool, c
     if framed { button.outline() } else { button }
 }
 
+/// A retry/reload/refresh action, the one way this surface draws one.
+///
+/// Three places ask the same question again — the save banner's `Retry`, the
+/// keymap's `Reload`, and the updater's `Check now` — and they were three
+/// hand-written buttons with one tooltip that said `Write` where its neighbour
+/// said `Save` and a casing of its own apiece. One helper holds what they now
+/// share: the surface's own quiet plate ([`token_button`], because `ghost()`
+/// resolves to bare text under this theme), a sentence-case word, the product's
+/// one reload glyph (`design::glyph::action::reload`, the broken circle with two
+/// heads it assigns to "ask the source again"), and a tooltip that names what
+/// is tried again rather than restating the label, sentence style, no terminal
+/// period — the policy the Overview's refresh button already spells out.
+///
+/// The ideal home for this helper is `panels/common.rs` as `common::retry_button`,
+/// beside the `labelled` ghost control the other panels use; it lives here
+/// because this lane does not own that module.
+fn retry_button(
+    id: impl Into<gpui_kit::ElementId>,
+    label: &str,
+    tooltip: &'static str,
+    cx: &App,
+) -> Button {
+    token_button(id, label, false, cx)
+        .icon(design::glyph::action::reload())
+        .tooltip(tooltip)
+}
+
 /// The one push button on this surface whose press is irreversible, at rest.
 ///
 /// The same plate as every other button here, in `danger_word` instead of
@@ -3506,11 +3542,15 @@ impl SettingsView {
                 .flex_none()
                 .debug_selector(|| "settings-save-retry".to_owned())
                 .child(
-                    token_button("settings-save-retry", RETRY_LABEL, false, cx)
-                        .h(design::size::CONTROL)
-                        .accessibility_label("Write the settings file again")
-                        .tooltip("Save the settings file again.")
-                        .on_click(cx.listener(|view, _, _, cx| view.retry_settings_save(cx))),
+                    retry_button(
+                        "settings-save-retry",
+                        RETRY_LABEL,
+                        "Save the settings file again",
+                        cx,
+                    )
+                    .h(design::size::CONTROL)
+                    .accessibility_label("Save the settings file again")
+                    .on_click(cx.listener(|view, _, _, cx| view.retry_settings_save(cx))),
                 );
             return Some(
                 self.status_banner(
@@ -3528,7 +3568,7 @@ impl SettingsView {
                 token_button("settings-file-open", SETTINGS_FILE_OPEN_LABEL, false, cx)
                     .h(design::size::CONTROL)
                     .accessibility_label("Open the settings file")
-                    .tooltip("Open the settings file in the platform's file manager.")
+                    .tooltip("Open the settings file in the platform's file manager")
                     .on_click(cx.listener(|_, _, _, _| {
                         if let Some(path) = settings::user_settings_path() {
                             let _ = SettingsView::reveal(&path);
@@ -4237,7 +4277,7 @@ impl SettingsView {
                 token_button("settings-clear-search", "Clear search", false, cx)
                     .h(design::size::CONTROL)
                     .accessibility_label("Clear the settings search")
-                    .tooltip("Clear the search and show every page.")
+                    .tooltip("Clear the search and show every page")
                     .on_click(cx.listener(move |view, _, _, cx| view.set_search_query("", cx))),
             );
         div()
@@ -5104,11 +5144,11 @@ impl SettingsView {
                     ),
             )
             .child(
-                token_button("settings-reveal-cache", "Open folder", false, cx)
+                token_button("settings-reveal-cache", "Open folder…", false, cx)
                     .h(design::size::CONTROL)
                     .tab_index(setting.tab())
                     .accessibility_label("Open the cache folder")
-                    .tooltip("Open the cache folder in the platform's file manager.")
+                    .tooltip("Open the cache folder in the platform's file manager")
                     .on_click(cx.listener(|_, _, _, _| {
                         if let Some(path) = k8s_core::paths::cache_dir() {
                             let _ = SettingsView::reveal(&path);
@@ -5192,7 +5232,7 @@ impl SettingsView {
                             .h(design::size::CONTROL)
                             .tab_index(setting.tab())
                             .accessibility_label("Copy the version number")
-                            .tooltip("Copy the version number.")
+                            .tooltip("Copy the version number")
                             .on_click(cx.listener(move |_, _, _, cx| {
                                 cx.write_to_clipboard(ClipboardItem::new_string(version.clone()));
                             })),
@@ -5279,7 +5319,7 @@ impl SettingsView {
                 } else {
                     "Open reference"
                 },
-                "Every command and its key, searchable. Also on ? from anywhere.",
+                "Every command and its key, searchable. Also on ? from anywhere",
             ),
             _ => (
                 if self.update_restart_label().is_some() {
@@ -5287,7 +5327,7 @@ impl SettingsView {
                 } else {
                     "Check now"
                 },
-                "Look for a newer K8s Studio build for this installation.",
+                "Look for a newer K8s Studio build for this installation",
             ),
         };
         // At most one primary button per screen, and this is the only candidate
@@ -5302,16 +5342,25 @@ impl SettingsView {
         // border is the web habit the spec rules out, and on the Updates page it
         // also put a second box on a screen whose other accent is the tab
         // underline.
+        //
+        // `Check now` is the page's re-fetch, so it takes the one retry/refresh
+        // treatment (`retry_button`: the quiet plate, the reload glyph, the
+        // sentence-style tooltip) it shares with the save retry and the keymap
+        // reload; `Restart to update` is a commit, not a re-fetch, and keeps the
+        // plain plate its `primary` moment rides on.
         let button = if primary {
-            token_button(setting.control_selector(), label, false, cx).primary()
-        } else {
             token_button(setting.control_selector(), label, false, cx)
+                .primary()
+                .tooltip(tooltip)
+        } else if setting == Setting::CheckForUpdates {
+            retry_button(setting.control_selector(), label, tooltip, cx)
+        } else {
+            token_button(setting.control_selector(), label, false, cx).tooltip(tooltip)
         };
         let button = button
             .h(design::size::CONTROL)
             .tab_index(tab)
-            .accessibility_label(setting.title())
-            .tooltip(tooltip);
+            .accessibility_label(setting.title());
         if setting == Setting::CheckForUpdates {
             let restart = self.update_restart_label().is_some();
             return button
@@ -5402,8 +5451,8 @@ impl SettingsView {
                 // this window wears `primary` on is the armed destructive commit.
                 token_button("settings-clear-shortcut-search", "Clear search", false, cx)
                     .h(design::size::CONTROL)
-                    .accessibility_label("Clear the Shortcut Search")
-                    .tooltip("Clear the search and show every command.")
+                    .accessibility_label("Clear the shortcut search")
+                    .tooltip("Clear the search and show every command")
                     .on_click(cx.listener(|view, _, window, cx| view.clear_search(window, cx))),
             );
         div()
@@ -5470,7 +5519,7 @@ impl SettingsView {
                             .tab_stop(path.is_some())
                             .disabled(path.is_none())
                             .accessibility_label("Copy the keymap file path")
-                            .tooltip("Copy the keymap file path.")
+                            .tooltip("Copy the keymap file path")
                             .on_click(cx.listener(|view, _, _, cx| view.copy_keymap_path(cx))),
                     ),
             );
@@ -5480,10 +5529,10 @@ impl SettingsView {
             .gap(space::SM)
             .items_center()
             .child(
-                token_button("settings-keymap-create-show", "Open keymap file", false, cx)
+                token_button("settings-keymap-create-show", "Open keymap file…", false, cx)
                     .h(design::size::CONTROL)
-                    .accessibility_label("Open the User Keymap File")
-                    .tooltip("Create or show the user keymap file.")
+                    .accessibility_label("Open the user keymap file")
+                    .tooltip("Create or show the user keymap file")
                     .on_click(cx.listener(|view, _, window, cx| {
                         if let Some(handler) = &view.on_create_or_show_keymap {
                             handler(window, cx);
@@ -5491,15 +5540,19 @@ impl SettingsView {
                     })),
             )
             .child(
-                token_button("settings-keymap-reload", "Reload keymap", false, cx)
-                    .h(design::size::CONTROL)
-                    .accessibility_label("Reload the User Keymap")
-                    .tooltip(keymap_reload_description())
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if let Some(handler) = &view.on_reload_keymap {
-                            handler(window, cx);
-                        }
-                    })),
+                retry_button(
+                    "settings-keymap-reload",
+                    "Reload keymap",
+                    "Reload the user keymap and apply the saved shortcuts",
+                    cx,
+                )
+                .h(design::size::CONTROL)
+                .accessibility_label("Reload the user keymap")
+                .on_click(cx.listener(|view, _, window, cx| {
+                    if let Some(handler) = &view.on_reload_keymap {
+                        handler(window, cx);
+                    }
+                })),
             );
         v_flex()
             .id("settings-keymap-file")
@@ -5572,7 +5625,7 @@ impl SettingsView {
                 .tab_stop(!is_recording)
                 .disabled(is_recording)
                 .accessibility_label(format!("Edit shortcut for {}", command.label))
-                .tooltip("Record a new shortcut for this command.")
+                .tooltip("Record a new shortcut for this command")
                 .on_click(cx.listener(move |view, _, window, cx| {
                     view.start_recording(edit_command.clone(), window, cx);
                 })),
@@ -5596,7 +5649,7 @@ impl SettingsView {
                 .tab_stop(!is_recording)
                 .disabled(is_recording)
                 .accessibility_label(format!("Clear shortcut for {}", command.label))
-                .tooltip("Remove this shortcut from the user keymap.")
+                .tooltip("Remove this shortcut from the user keymap")
                 .on_click(cx.listener(move |view, _, _, cx| {
                     view.clear_binding(&clear_command, cx);
                 })),
@@ -5785,7 +5838,7 @@ impl SettingsView {
                         .h(design::size::CONTROL)
                         .tab_index(tab_order::DANGER_FIRST + 1)
                         .accessibility_label("Cancel clear cache")
-                        .tooltip("Keep the cache.")
+                        .tooltip("Keep the cache")
                         .on_click(cx.listener(move |view, _, _, cx| view.cancel_danger(cx))),
                 )
         });
@@ -6586,7 +6639,7 @@ fn keyboard_description(action_name: &str, label: &str) -> String {
         "k8s_shell::ToggleNotifications" => "Show or hide recent notifications.".to_owned(),
         "k8s_shell::ReloadKubeconfigs" => "Reload the configured kubeconfig files.".to_owned(),
         "k8s_shell::ReloadKeymap" => {
-            "Reload the user keymap and apply the saved shortcuts.".to_owned()
+            keymap_reload_description().to_owned()
         }
         "k8s_shell::UseKeymapPreset" => "Replace the user keymap with a named preset.".to_owned(),
         // Theme. The three actions live in the `k8s_shell` namespace, so a table
@@ -6864,7 +6917,7 @@ const BOUND_OUTSIDE_THE_PALETTE: &[BoundOutsidePalette] = &[
     // a review.
     BoundOutsidePalette {
         action_name: "k8s_inspector::CancelApplyReview",
-        label: "Cancel the Apply Review",
+        label: "Cancel the apply review",
         group: "Resources",
         editable: true,
     },
@@ -7672,7 +7725,7 @@ mod tests {
         // The sentence names the file, the fallback, and what to do about it.
         assert!(SETTINGS_FILE_UNREADABLE.contains("could not be read"));
         assert!(SETTINGS_FILE_UNREADABLE.contains("defaults"));
-        assert_eq!(SETTINGS_FILE_OPEN_LABEL, "Open settings file");
+        assert_eq!(SETTINGS_FILE_OPEN_LABEL, "Open settings file…");
         // And a store that parses shows no banner.
         let (_view, cx) = open(cx, 960.);
         assert!(cx.debug_bounds("settings-file-unreadable").is_none());

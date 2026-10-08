@@ -46,11 +46,17 @@ impl Unit {
 
     /// Compact value for an axis label. A unit the label does not itself carry is
     /// named in [`Unit::axis_name`].
+    ///
+    /// The Y gutter reserves six columns for a tick label and sizes the whole
+    /// plot from that claim, so every formatter this calls keeps its output
+    /// inside it in its own lane's terms, and the module test below holds the
+    /// claim. The full-precision value is one hover away, and it is printed in
+    /// the numeric table under the chart.
     pub fn axis_label(self, value: f64) -> String {
         match self {
             Self::Cpu => format_cores(value / 1000.0),
             Self::Memory => compact_bytes(value),
-            Self::Count => format!("{value:.0}"),
+            Self::Count => compact_count(value),
         }
     }
 
@@ -88,16 +94,67 @@ fn format_cores(cores: f64) -> String {
 const KIB: f64 = 1024.0;
 const MIB: f64 = KIB * 1024.0;
 const GIB: f64 = MIB * 1024.0;
+const TIB: f64 = GIB * 1024.0;
 
+/// One compact axis label's worth of bytes.
+///
+/// The axis gutter reserves six columns, and this ladder trades precision to
+/// stay inside it: one decimal until the digits alone would reach the ceiling,
+/// none after — `512.0Gi` is seven columns, and the label would run into the
+/// panel edge. The boundary is at the *round-down* of the hundred, not the
+/// hundred itself, because `99.95` at one decimal prints `100.0` and the gutter
+/// has to hold what the string actually reads. [`Unit::format`] keeps the
+/// hundredths a table cell has room for.
 fn compact_bytes(bytes: f64) -> String {
-    if bytes >= GIB {
-        format!("{:.1}Gi", bytes / GIB)
+    if bytes >= TIB {
+        let tib = bytes / TIB;
+        if tib >= 99.95 {
+            format!("{tib:.0}Ti")
+        } else {
+            format!("{tib:.1}Ti")
+        }
+    } else if bytes >= GIB {
+        let gib = bytes / GIB;
+        if gib >= 99.95 {
+            format!("{gib:.0}Gi")
+        } else {
+            format!("{gib:.1}Gi")
+        }
     } else if bytes >= MIB {
         format!("{:.0}Mi", bytes / MIB)
     } else if bytes >= KIB {
         format!("{:.0}Ki", bytes / KIB)
     } else {
         format!("{bytes:.0}B")
+    }
+}
+
+/// One compact axis label's worth of count.
+///
+/// Plain digits while they fit the six-column gutter — a count axis labels
+/// replicas and churn in the hundreds, and `512` reads truer than `0.5M` — and
+/// SI suffixes past that, trading precision for columns on the same round-down
+/// rule as [`compact_bytes`]. A count this far up the ladder has outgrown a
+/// chart of pods, so the ladder ends at the biggest suffix that keeps the
+/// gutter's claim.
+fn compact_count(value: f64) -> String {
+    const M: f64 = 1_000_000.0;
+    const G: f64 = 1_000.0 * M;
+    const T: f64 = 1_000.0 * G;
+    if value < 999_999.5 {
+        return format!("{value:.0}");
+    }
+    let (scaled, suffix) = if value >= T {
+        (value / T, "T")
+    } else if value >= G {
+        (value / G, "G")
+    } else {
+        (value / M, "M")
+    };
+    if scaled >= 99.95 {
+        format!("{scaled:.0}{suffix}")
+    } else {
+        format!("{scaled:.1}{suffix}")
     }
 }
 
@@ -449,6 +506,80 @@ impl ChartData {
             format!("{title}: no data")
         } else {
             format!("{title}: {}", parts.join(" "))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The Y gutter reserves six label columns (`element`'s `Y_LABEL_COLUMNS`)
+    /// and sizes the whole plot from that claim, so a longer tick is a label
+    /// clipped by the panel edge. `nice_ticks` only ever emits `m × 10^e` with
+    /// m in {1, 2, 5}, so those are the tick sets each unit is held to, at every
+    /// magnitude a pod chart reaches, plus the rungs where a label switches its
+    /// unit or its precision — the places the claim used to break.
+    #[test]
+    fn axis_labels_hold_the_six_column_claim() {
+        const COLUMNS: usize = 6;
+        let mut nice_ticks = Vec::new();
+        for e in 0..=9 {
+            let decade = 10f64.powi(e);
+            for mantissa in [1.0, 2.0, 5.0] {
+                nice_ticks.push(mantissa * decade);
+            }
+        }
+        let rungs: [(Unit, Vec<f64>); 3] = [
+            // Millicores: a pod chart on a node-sized box reaches tens of cores,
+            // and the sweep carries it to five hundred thousand — past anything
+            // a core-count axis will ever name.
+            (Unit::Cpu, nice_ticks[..27].to_vec()),
+            // Bytes: the precision trade at a hundred gibibytes, and the unit
+            // trade at a tebibyte.
+            (
+                Unit::Memory,
+                [
+                    nice_ticks.clone(),
+                    vec![
+                        99.95 * GIB - 1.0,
+                        99.95 * GIB,
+                        100.0 * GIB,
+                        1023.0 * GIB,
+                        TIB - 1.0,
+                        TIB,
+                        99.95 * TIB,
+                        100.0 * TIB,
+                    ],
+                ]
+                .concat(),
+            ),
+            // Counts: the digit ceiling, and every suffix rung past it.
+            (
+                Unit::Count,
+                [
+                    nice_ticks,
+                    vec![
+                        999_999.5 - 1.0,
+                        999_999.5,
+                        99.95e6 - 1.0,
+                        99.95e6,
+                        1.0e9,
+                        1.0e12,
+                    ],
+                ]
+                .concat(),
+            ),
+        ];
+        for (unit, values) in rungs {
+            for value in values {
+                let label = unit.axis_label(value);
+                assert!(
+                    label.chars().count() <= COLUMNS,
+                    "{unit:?} tick {value} labels {label:?}, which is {} columns — past the gutter",
+                    label.chars().count()
+                );
+            }
         }
     }
 }

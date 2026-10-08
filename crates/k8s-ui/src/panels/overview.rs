@@ -2043,13 +2043,7 @@ fn section_heading_with_total(
             this.aria_description(reading.to_owned())
                 .tooltip(text_tooltip(reading.to_owned()))
         })
-        .child(
-            Label::new(title.to_uppercase())
-                .text_size(text::CAPTION)
-                .line_height(text::CAPTION_LINE_HEIGHT)
-                .font_weight(text::SEMIBOLD)
-                .text_color(role::fg_tertiary(cx)),
-        )
+        .child(common::section_heading(title))
         .child(div().flex_1().min_w(px(0.)))
         .when_some(total, |this, total| {
             this.child(
@@ -3954,10 +3948,11 @@ impl OverviewView {
             .flex_none()
             .w_full()
             .h(design::size::TITLE_BAR)
-            // The scroll body below pads by `LG`, so the toolbar does too:
-            // `UI-SPEC` §7 asks every element in a region to start on one x, and
-            // the title used to sit 8px left of everything under it.
-            .px(space::LG)
+            // The scroll body below pads by the shared content spine, so the
+            // toolbar does too: `UI-SPEC` §7 asks every element in a region to
+            // start on one x, and the title used to sit 8px left of everything
+            // under it.
+            .px(common::CONTENT_INSET)
             .gap(space::SM)
             .items_center()
             .tab_group()
@@ -6255,8 +6250,10 @@ impl Render for OverviewView {
                     .overflow_y_scroll()
                     // `UI-SPEC` §2.1: a panel's own padding is 16, four pixels
                     // looser than a web form's default, and the toolbar above pads
-                    // by the same so the region reads as one.
-                    .p(space::LG)
+                    // by the same so the region reads as one. The value is the
+                    // shared `CONTENT_INSET`, so the spine cannot drift from the
+                    // panels this one docks beside.
+                    .p(common::CONTENT_INSET)
                     .child(body),
             );
         v_flex()
