@@ -4523,7 +4523,14 @@ impl SettingsView {
             ),
             (false, true) => (
                 design::role::surface_overlay(cx).alpha(0.),
-                design::role::border_base(cx),
+                // An unchecked box has no fill to say "I am a control", so its edge
+                // has to. `border_base` is the quietest border the app owns — it is
+                // the divider under a row, the hairline between cells — and a
+                // checkbox drawn in it disappears into the text next to it.
+                // `border_strong` is the control-boundary role, which is also what
+                // a TextInput's resting frame wears, so the box and the field a
+                // reader compares it with agree about where a control starts.
+                design::role::border_strong(cx),
                 design::role::fg_tertiary(cx),
                 design::role::fg_primary(cx),
             ),
@@ -4536,8 +4543,13 @@ impl SettingsView {
         };
         let mark = div()
             .flex_none()
-            .w(px(14.))
-            .h(px(14.))
+            // 16px: the comment below reserves a 16px box, and 14px was a quiet
+            // shrink nobody updated. At 14px a 10px check sits 2px from the edge
+            // on every side, so the mark reads as texture rather than as a check;
+            // at 16px a 12px check has the same 2px of air around it and the
+            // shape reads as a check inside a box.
+            .w(px(16.))
+            .h(px(16.))
             .rounded(design::radius::XS)
             .border_1()
             .border_color(edge)
@@ -4548,7 +4560,7 @@ impl SettingsView {
             .when(checked, |mark| {
                 mark.child(
                     Icon::new(IconName::Check)
-                        .with_size(Size::Size(px(10.)))
+                        .with_size(Size::Size(px(12.)))
                         .text_color(box_ink),
                 )
             });

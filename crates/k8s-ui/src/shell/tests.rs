@@ -1427,13 +1427,13 @@ fn shell_action_dispatch_defers_until_update_completes(cx: &mut TestAppContext) 
             shell.dispatch(super::ToggleLeftPanel, window, cx);
             shell.dispatch(super::ToggleDock, window, cx);
             assert!(shell.sidebar_open);
-            assert!(shell.dock_open);
+            assert!(!shell.dock_open);
         });
     });
     cx.run_until_parked();
 
     assert!(!shell.read_with(cx, |shell, _| shell.sidebar_open));
-    assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
+    assert!(shell.read_with(cx, |shell, _| shell.dock_open));
 }
 
 #[gpui_kit::test]
@@ -1822,14 +1822,19 @@ fn panel_toggles_are_keyboard_driven(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("secondary-alt-b");
     assert!(!shell.read_with(cx, |shell, _| shell.inspector_open));
 
-    // `UI-SPEC.md` §16.2 keeps the Dock's 28px strip resident, so the Dock is open on launch and
-    // the chord's first press closes it. What this test is about is that the chord drives the
-    // state in both directions, so it starts from the state the product is actually in.
-    assert!(shell.read_with(cx, |shell, _| shell.dock_open));
-    cx.simulate_keystrokes(shortcut("secondary-j", "secondary-shift-d"));
+    // The Dock starts hidden like VSCode's panel: the chord's first press opens it. What this
+    // test is about is that the chord drives the state in both directions, so it starts from
+    // the state the product is actually in.
     assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
     cx.simulate_keystrokes(shortcut("secondary-j", "secondary-shift-d"));
     assert!(shell.read_with(cx, |shell, _| shell.dock_open));
+    cx.simulate_keystrokes(shortcut("secondary-j", "secondary-shift-d"));
+    assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
+    // The VSCode/Zed panel chord does the same job on the same surface.
+    cx.simulate_keystrokes("secondary-`");
+    assert!(shell.read_with(cx, |shell, _| shell.dock_open));
+    cx.simulate_keystrokes("secondary-`");
+    assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
 }
 
 #[gpui_kit::test]
@@ -1883,8 +1888,13 @@ fn closing_panels_restores_the_focus_that_opened_them(cx: &mut TestAppContext) {
     });
     assert!(cx.update(|window, _| source.is_focused(window)));
 
-    // The Dock strip is resident on launch (§16.2), so opening it is a no-op and the pair that
-    // tests the focus hand-back is close-then-open: the focus has to survive both.
+    // The Dock starts hidden, so the pair that tests the focus hand-back is open-then-close
+    // from a Dock the test opens first: the focus has to survive both directions.
+    assert!(!shell.read_with(cx, |shell, _| shell.dock_open));
+    cx.update(|window, cx| {
+        window.focus(&source, cx);
+        shell.update(cx, |shell, cx| shell.toggle_dock(&ToggleDock, window, cx));
+    });
     assert!(shell.read_with(cx, |shell, _| shell.dock_open));
     cx.update(|window, cx| {
         window.focus(&source, cx);
