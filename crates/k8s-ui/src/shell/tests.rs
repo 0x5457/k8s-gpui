@@ -4815,7 +4815,28 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
     let (shell, cx) = cx.add_window_view(|_, cx| Shell::new(cx));
     cx.update(|window, cx| {
         shell.update(cx, |shell, cx| {
-            shell.open_scale_dialog(scale_test_target("web", "deploy-uid-1", 3), window, cx);
+            shell.set_terminal_services(
+                Some(TerminalServices {
+                    terminals: Rc::new(|_request, _sink, _cx| {
+                        Err("terminals unavailable".to_owned())
+                    }),
+                    forwards: Rc::new(|_request, _cx| {
+                        Err("port forwarding unavailable".to_owned())
+                    }),
+                    context: Some("kind-k8s-gpui-dev".to_owned()),
+                    namespace: None,
+                }),
+                cx,
+            );
+            shell.open_port_forward_dialog(
+                PortForwardTarget {
+                    namespace: Some("default".into()),
+                    name: "web-0".into(),
+                    ports: Vec::new(),
+                },
+                window,
+                cx,
+            );
         });
     });
     cx.run_until_parked();
@@ -4840,7 +4861,8 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
                 .iter()
                 .map(|name| gpui_kit::KeyContext::parse(name).expect("context"))
                 .collect();
-            let (matches, pending) = keymap.bindings_for_input(&[keystroke.clone()], &stack);
+            let (matches, pending) =
+                keymap.bindings_for_input(std::slice::from_ref(&keystroke), &stack);
             let names: Vec<String> = matches
                 .iter()
                 .map(|binding| binding.action().name().to_string())
@@ -4851,23 +4873,43 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
         }
     });
 
+    // The port-forward dialog opens with the input focused.
     cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
     cx.simulate_keystrokes("secondary-v");
     let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
-        Some(Dialog::Scale { input, .. }) => input.read(cx).text().to_owned(),
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
         _ => "<no dialog>".to_string(),
     });
-    eprintln!("PROBE after secondary-v: dialog text = {text:?}");
+    eprintln!("PROBE port-forward, no click, secondary-v => {text:?}");
+
+    // And again after the click the failing test performs.
+    let input_bounds = cx
+        .debug_bounds("dialog-port-forward-input")
+        .expect("port input is laid out");
+    cx.simulate_click(
+        point(input_bounds.left() + px(12.0), input_bounds.center().y),
+        Modifiers::none(),
+    );
+    cx.simulate_keystrokes("secondary-v");
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!("PROBE port-forward, after click, secondary-v => {text:?}");
 
     cx.simulate_keystrokes("secondary-a");
     cx.simulate_input("12");
     let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
-        Some(Dialog::Scale { input, .. }) => input.read(cx).text().to_owned(),
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
         _ => "<no dialog>".to_string(),
     });
-    eprintln!("PROBE after secondary-a + input 12: dialog text = {text:?}");
+    eprintln!("PROBE port-forward, secondary-a + input 12 => {text:?}");
 
     cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    // Deliberately fail so nextest prints the probe lines above; this test is
+    // a diagnostic and never merges.
+    panic!("PROBE dump");
 }
 
 #[gpui_kit::test]
