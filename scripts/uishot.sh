@@ -325,9 +325,11 @@ for item in "${seq[@]+"${seq[@]}"}"; do
         xy="${body%%|*}"
         click_at "${xy%%,*}" "${xy##*,}"
     fi
-    printf -v fname '%02d-%s.png' "$idx" "$name"
+    # `shot` adds the .png itself, so the name carries no extension here: a
+    # caller that adds its own gets a `.png.png` artifact.
+    printf -v fname '%02d-%s' "$idx" "$name"
     shot "$fname"
-    echo "[shot] $out/$fname"
+    echo "[shot] $out/$fname.png"
     idx=$((idx + 1))
 done
 

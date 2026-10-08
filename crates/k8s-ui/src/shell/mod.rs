@@ -3002,13 +3002,14 @@ impl Shell {
             open_tabs: vec![0],
             active_tab: 0,
             inspector_open: layout.panels.inspector_open.unwrap_or(false),
-            // `UI-SPEC.md` §16.2 and §2.5 both say the Dock's 28px label strip is resident —
-            // "标签条常驻 28px（body 折叠成 0 也在）" — because otherwise there is nothing on
-            // screen to switch to and logs, the one panel a reader reaches for during an
-            // incident, are invisible until they already know the chord. Below 760px the body
-            // folds to 0 on its own (`panels::dock`), so a short window still opens on the
-            // table. A remembered choice still wins, which is `UI-REDESIGN.md` L11.
-            dock_open: layout.panels.dock_open.unwrap_or(true),
+            // The Dock starts hidden, like VSCode/Zed: `secondary-backtick` (and the
+            // legacy `secondary-j`) reveal it. An unfolded Dock on first launch is 200px
+            // of window that says "nothing here", and the status bar already carries the
+            // one forward into it (`Port forwards · 0 active` and the session count are
+            // both live paths in). A remembered choice still wins, which is
+            // `UI-REDESIGN.md` L11: once the reader has opened it, their layout file
+            // keeps it open.
+            dock_open: layout.panels.dock_open.unwrap_or(false),
             left_width: layout
                 .cluster(active_cluster_name.as_str())
                 .sidebar_width

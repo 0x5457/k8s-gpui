@@ -1919,6 +1919,16 @@ impl DockPanel {
                 self.terminal_maximized = false;
                 self.log_cap_notice = None;
                 self.sync_focus_handles();
+                // Switching to the Terminal tab means "I want a terminal", the same
+                // reading VSCode gives to focusing its panel: an empty tab the reader
+                // just chose is a prompt, not a destination, so the first local shell
+                // opens with the tab rather than one click later. A reader who closed
+                // the last session and stayed on the tab keeps the empty state — this
+                // runs on selection only, never on render — so closing a shell never
+                // respawns it under the pointer.
+                if self.terminals.is_empty() && self.terminal_available() {
+                    self.new_local_terminal(window, cx);
+                }
                 cx.notify();
             }
         }
@@ -12119,6 +12129,41 @@ mod tests {
         cx.run_until_parked();
         assert_eq!(panel.read_with(cx, |panel, _| panel.terminal_count()), 1);
         assert_eq!(terminals.borrow().opened, 1);
+    }
+
+    /// Choosing the Terminal tab means "I want a terminal", the reading VSCode gives its panel:
+    /// with no session behind the tab, the first local shell opens with the selection rather
+    /// than one click later — while `show_terminal_tab`, the path an exec request takes, leaves
+    /// the empty state in charge because the session it is about to open is the reader's answer.
+    ///
+    /// Closing the last session afterwards stays closed: the auto-open runs on selection, not
+    /// render, so a shell never respawns under the pointer that just closed it.
+    #[gpui_kit::test]
+    fn selecting_the_terminal_tab_opens_a_local_shell_when_empty(cx: &mut TestAppContext) {
+        let (panel, terminals, _forwards, cx) = setup_terminals(cx);
+        assert_eq!(panel.read_with(cx, |panel, _| panel.terminal_count()), 0);
+
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.select(DockTab::Terminal, window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(panel.read_with(cx, |panel, _| panel.terminal_count()), 1);
+        assert_eq!(terminals.borrow().opened, 1);
+        assert_eq!(
+            terminals.borrow().requests[0].kind,
+            TerminalKind::Local,
+            "the shell the tab opens is local, not an exec into a Pod nobody selected"
+        );
+
+        // Switching away and back with a live session opens nothing new.
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.select(DockTab::Logs(0), window, cx));
+        });
+        cx.update(|window, cx| {
+            panel.update(cx, |panel, cx| panel.select(DockTab::Terminal, window, cx));
+        });
+        cx.run_until_parked();
+        assert_eq!(panel.read_with(cx, |panel, _| panel.terminal_count()), 1);
     }
 
     #[gpui_kit::test]

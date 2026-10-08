@@ -22,6 +22,7 @@
     "bindings": {
       "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
       "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-`": "k8s_shell::ToggleDock",
       "secondary-q": "k8s_app::Quit",
       "secondary-m": "k8s_app::MinimizeWindow",
       "secondary-h": "k8s_app::Hide",
@@ -64,6 +65,7 @@
     "unbind": {
       "secondary-shift-l": "k8s_shell::ToggleLeftPanel",
       "secondary-shift-d": "k8s_shell::ToggleDock",
+      "secondary-`": "k8s_shell::ToggleDock",
       "secondary-q": "k8s_app::Quit",
       "secondary-m": "k8s_app::MinimizeWindow",
       "secondary-h": "k8s_app::Hide",
