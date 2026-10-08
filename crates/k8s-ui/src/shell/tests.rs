@@ -31,7 +31,7 @@ use super::panels::{
 use super::{
     CatalogState, CenterTab, ConnectionState, DIVIDER_KEY_STEP, Dialog, DragTarget, FocusNext,
     INSPECTOR_FLOAT_BELOW, InspectorLayout, MIN_LAYOUT_WIDTH, NamespaceState, OpenServiceAccount,
-    PaletteScope, ReloadKubeconfigs, Shell, StartupState, StatusPanel, TabContent, TabView,
+    PaletteScope, ReloadKubeconfigs, Role, Shell, StartupState, StatusPanel, TabContent, TabView,
     ToggleCommandPalette, ToggleDock, ToggleLeftPanel, ToggleRightPanel, bounded_tab_drop_gap,
     inspector_layout, inspector_width_ceiling, move_open_tab_within_group, normalize_open_tabs,
     parse_chart_reference, parse_port, parse_replicas, reorder_open_tabs,
@@ -48,7 +48,7 @@ use crate::panels::terminal::{
 use crate::session::ServiceAccountTarget;
 use crate::table_view::{
     ClusterSession, ObjectOps, PodsView, PortForwardTarget, ResourceSpec, Row, ScaleTarget,
-    TableStatus,
+    TableStatus, TextInput,
 };
 use crate::update::{UpdateActions, UpdatePhase, UpdateUiState};
 use gpui_kit::assets::IconName;
@@ -4973,6 +4973,59 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
     eprintln!("PROBE port-forward, third open, secondary-v => {text:?}");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
+
+    // Experiment A: the shared field in a fixed layout, like the passing
+    // *non-paste* TextInput tests use. Distinguishes dialog-overlaid geometry
+    // from the field itself. The field's own on_action(Paste) stops
+    // propagation at the TextInput depth, so cmd-v handled there would still
+    // land in caller_seen — which is exactly what we want to observe.
+    let caller_seen = Rc::new(RefCell::new(Vec::<String>::new()));
+    let caller_sink = Rc::clone(&caller_seen);
+    let (input, cx) = cx.add_window_view(|_window, cx| {
+        TextInput::new("probe", cx, move |text, _cx| {
+            caller_sink.borrow_mut().push(text.to_owned());
+        })
+        .with_role(Role::TextInput)
+    });
+    let focus = input.read_with(cx, |input, cx| input.focus_handle(cx));
+    cx.update(|window, cx| window.focus(&focus, cx));
+    cx.run_until_parked();
+    cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
+    cx.simulate_keystrokes("secondary-v");
+    eprintln!(
+        "PROBE fixed field, secondary-v => text={:?} caller={:?}",
+        input.read_with(cx, |input, _| input.text().to_owned()),
+        caller_seen.borrow()
+    );
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("12");
+    eprintln!(
+        "PROBE fixed field, secondary-a+12 => text={:?}",
+        input.read_with(cx, |input, _| input.text().to_owned())
+    );
+
+    // Experiment B: replay the failing test's strokes while a keystroke
+    // observer records what dispatch resolved for each, on the same field.
+    let keystroke_log = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+    cx.update(|_window, cx| {
+        let log = Rc::clone(&keystroke_log);
+        cx.observe_keystrokes(move |event, _window, _cx| {
+            log.borrow_mut().push((
+                format!("{:?} {:?}", event.keystroke.modifiers, event.keystroke.key),
+                event
+                    .action
+                    .as_ref()
+                    .map(|action| action.name().to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+            ));
+        })
+        .detach();
+    });
+    cx.simulate_keystrokes("secondary-v");
+    cx.simulate_keystrokes("secondary-a");
+    cx.simulate_input("k");
+    eprintln!("PROBE keystroke events => {:?}", keystroke_log.borrow());
+
     // Deliberately fail so nextest prints the probe lines above; this test is
     // a diagnostic and never merges.
     panic!("PROBE dump");
