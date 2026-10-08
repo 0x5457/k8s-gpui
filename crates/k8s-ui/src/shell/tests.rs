@@ -4875,7 +4875,33 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
 
     // The port-forward dialog opens with the input focused.
     cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
+    // 1. Raw action dispatch: does input::Paste work at all here?
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(gpui_kit::component::input::Paste), cx);
+    });
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!("PROBE port-forward, dispatch input::Paste => {text:?}");
+    // 2. The app's own spelling of the same edit.
+    cx.update(|window, cx| {
+        window.dispatch_action(Box::new(k8s_actions::Paste), cx);
+    });
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!("PROBE port-forward, dispatch k8s_shell::Paste => {text:?}");
+    let focused = cx.update(|_window, cx| {
+        shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::PortForward { input, .. }) => Some(input.read(cx).focus_handle(cx)),
+            _ => None,
+        })
+    });
+    eprintln!("PROBE focused-focusable => {focused:?}");
     cx.simulate_keystrokes("secondary-v");
+    cx.run_until_parked();
     let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
         Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
         _ => "<no dialog>".to_string(),
