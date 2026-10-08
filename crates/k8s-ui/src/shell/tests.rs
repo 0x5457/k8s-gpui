@@ -4812,7 +4812,6 @@ fn async_port_forward_does_not_report_zero_before_binding(cx: &mut TestAppContex
     assert!(toast.message.contains("localhost:4321"));
 }
 
-
 #[gpui_kit::test]
 fn port_forward_dialog_uses_text_input_for_paste_and_validation(cx: &mut TestAppContext) {
     init_ui(cx);
