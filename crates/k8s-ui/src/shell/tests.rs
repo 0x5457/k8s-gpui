@@ -4852,6 +4852,7 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
             keystroke.key, keystroke.modifiers, keystroke.key_char
         );
         for contexts in [
+            vec!["Shell", "Dialog", "TextInput", "Input"],
             vec!["TextInput", "Input"],
             vec!["Input", "TextInput"],
             vec!["TextInput"],
@@ -4865,7 +4866,17 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
                 keymap.bindings_for_input(std::slice::from_ref(&keystroke), &stack);
             let names: Vec<String> = matches
                 .iter()
-                .map(|binding| binding.action().name().to_string())
+                .map(|binding| {
+                    format!(
+                        "{} keystrokes={:?}",
+                        binding.action().name(),
+                        binding
+                            .keystrokes()
+                            .iter()
+                            .map(|stroke| format!("{stroke:?}"))
+                            .collect::<Vec<_>>()
+                    )
+                })
                 .collect();
             eprintln!(
                 "PROBE bindings_for_input(secondary-v, {contexts:?}) => {names:?} pending={pending}"
