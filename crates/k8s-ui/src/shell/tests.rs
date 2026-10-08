@@ -4931,6 +4931,46 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
     });
     eprintln!("PROBE port-forward, secondary-a + input 12 => {text:?}");
 
+    // The failing tests do a full open/escape/open cycle before the failing
+    // paste. Repeat the cycle here and paste in the THIRD dialog instance,
+    // so the probe sees whatever state the cycle leaves behind.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_port_forward_dialog(
+                PortForwardTarget {
+                    namespace: Some("default".into()),
+                    name: "web-0".into(),
+                    ports: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_port_forward_dialog(
+                PortForwardTarget {
+                    namespace: Some("default".into()),
+                    name: "web-0".into(),
+                    ports: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    cx.write_to_clipboard(ClipboardItem::new_string("99".to_owned()));
+    cx.simulate_keystrokes("secondary-v");
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!("PROBE port-forward, third open, secondary-v => {text:?}");
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
     // Deliberately fail so nextest prints the probe lines above; this test is
