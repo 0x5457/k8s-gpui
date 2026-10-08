@@ -4919,6 +4919,21 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
                 .unwrap_or(false)
         })
     };
+    let stroke_log = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+    cx.update(|_window, cx| {
+        let log = Rc::clone(&stroke_log);
+        cx.observe_keystrokes(move |event, _window, _cx| {
+            log.borrow_mut().push((
+                format!("{:?} {:?}", event.keystroke.modifiers, event.keystroke.key),
+                event
+                    .action
+                    .as_ref()
+                    .map(|action| action.name().to_string())
+                    .unwrap_or_else(|| "-".to_owned()),
+            ));
+        })
+        .detach();
+    });
     cx.simulate_keystrokes("secondary-v");
     cx.run_until_parked();
     let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
@@ -4926,7 +4941,8 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
         _ => "<no dialog>".to_string(),
     });
     eprintln!(
-        "PROBE port-forward, no click, secondary-v => {text:?} focused={focused} context_stack={contexts:?}"
+        "PROBE port-forward, no click, secondary-v => {text:?} focused={focused} context_stack={contexts:?} events={:?}",
+        stroke_log.borrow()
     );
 
     // And again after the click the failing test performs.
