@@ -13305,17 +13305,40 @@ mod tests {
 
     struct ServiceSource;
 
-    impl ResourceSource for ServiceSource {
-        fn subscribe(&mut self, events: UnboundedSender<SourceEvent>) -> Box<dyn Subscription> {
-            let _ = events.send(SourceEvent::Init);
+    impl ServiceSource {
+        fn events() -> Vec<SourceEvent> {
+            let mut events = vec![SourceEvent::Init];
             for index in 0..2 {
-                let _ = events.send(SourceEvent::Store(StoreEvent {
+                events.push(SourceEvent::Store(StoreEvent {
                     op: StoreOp::Apply,
                     obj: test_service(index),
                 }));
             }
-            let _ = events.send(SourceEvent::InitDone);
+            events.push(SourceEvent::InitDone);
+            events
+        }
+    }
+
+    impl ResourceSource for ServiceSource {
+        fn subscribe(&mut self, events: UnboundedSender<SourceEvent>) -> Box<dyn Subscription> {
+            for event in Self::events() {
+                let _ = events.send(event);
+            }
             Box::new(NoopSubscription { _events: events })
+        }
+
+        /// Delivers the rows on the bounded channel the view actually reads.
+        /// The default `subscribe_bounded` bridges the legacy unbounded channel
+        /// from a real thread, so a test could still read the loading state
+        /// after the rows were sent.
+        fn subscribe_bounded(
+            &mut self,
+            events: tokio::sync::mpsc::Sender<SourceEvent>,
+        ) -> Box<dyn Subscription> {
+            for event in Self::events() {
+                let _ = events.try_send(event);
+            }
+            Box::new(BoundedNoopSubscription { _events: events })
         }
     }
 
@@ -13348,15 +13371,39 @@ mod tests {
     /// Pods view without a source per kind.
     struct SingleObjectSource(Arc<DynamicObject>);
 
+    impl SingleObjectSource {
+        fn events(&self) -> Vec<SourceEvent> {
+            vec![
+                SourceEvent::Init,
+                SourceEvent::Store(StoreEvent {
+                    op: StoreOp::Apply,
+                    obj: Arc::clone(&self.0),
+                }),
+                SourceEvent::InitDone,
+            ]
+        }
+    }
+
     impl ResourceSource for SingleObjectSource {
         fn subscribe(&mut self, events: UnboundedSender<SourceEvent>) -> Box<dyn Subscription> {
-            let _ = events.send(SourceEvent::Init);
-            let _ = events.send(SourceEvent::Store(StoreEvent {
-                op: StoreOp::Apply,
-                obj: Arc::clone(&self.0),
-            }));
-            let _ = events.send(SourceEvent::InitDone);
+            for event in self.events() {
+                let _ = events.send(event);
+            }
             Box::new(NoopSubscription { _events: events })
+        }
+
+        /// Delivers the rows on the bounded channel the view actually reads.
+        /// The default `subscribe_bounded` bridges the legacy unbounded channel
+        /// from a real thread, so a test could still read the loading state
+        /// after the rows were sent.
+        fn subscribe_bounded(
+            &mut self,
+            events: tokio::sync::mpsc::Sender<SourceEvent>,
+        ) -> Box<dyn Subscription> {
+            for event in self.events() {
+                let _ = events.try_send(event);
+            }
+            Box::new(BoundedNoopSubscription { _events: events })
         }
     }
 
@@ -14151,6 +14198,19 @@ mod tests {
             let _ = events.send(SourceEvent::InitDone);
             Box::new(NoopSubscription { _events: events })
         }
+
+        /// Delivers the list markers on the bounded channel the view actually
+        /// reads. The default `subscribe_bounded` bridges the legacy unbounded
+        /// channel from a real thread, so a test could still read the loading
+        /// state after `InitDone` was sent.
+        fn subscribe_bounded(
+            &mut self,
+            events: tokio::sync::mpsc::Sender<SourceEvent>,
+        ) -> Box<dyn Subscription> {
+            let _ = events.try_send(SourceEvent::Init);
+            let _ = events.try_send(SourceEvent::InitDone);
+            Box::new(BoundedNoopSubscription { _events: events })
+        }
     }
 
     /// Lists no rows but still reaches the live state.
@@ -14164,6 +14224,20 @@ mod tests {
             let _ = events.send(SourceEvent::Init);
             let _ = events.send(SourceEvent::InitDone);
             Box::new(NoopSubscription { _events: events })
+        }
+
+        /// Delivers the list markers on the bounded channel the view actually
+        /// reads. The default `subscribe_bounded` bridges the legacy unbounded
+        /// channel from a real thread, so a test could still read the loading
+        /// state after `InitDone` was sent.
+        fn subscribe_bounded(
+            &mut self,
+            events: tokio::sync::mpsc::Sender<SourceEvent>,
+        ) -> Box<dyn Subscription> {
+            self.subscribes.fetch_add(1, Ordering::Relaxed);
+            let _ = events.try_send(SourceEvent::Init);
+            let _ = events.try_send(SourceEvent::InitDone);
+            Box::new(BoundedNoopSubscription { _events: events })
         }
     }
 
@@ -14768,15 +14842,47 @@ mod confirmation_tests {
         fn cancel(&mut self) {}
     }
 
-    impl ResourceSource for DeploymentSource {
-        fn subscribe(&mut self, events: UnboundedSender<SourceEvent>) -> Box<dyn Subscription> {
-            let _ = events.send(SourceEvent::Init);
-            let _ = events.send(SourceEvent::Store(StoreEvent {
+    fn deployment_events() -> Vec<SourceEvent> {
+        vec![
+            SourceEvent::Init,
+            SourceEvent::Store(StoreEvent {
                 op: StoreOp::Apply,
                 obj: deployment(),
-            }));
-            let _ = events.send(SourceEvent::InitDone);
+            }),
+            SourceEvent::InitDone,
+        ]
+    }
+
+    /// Keeps the bounded channel open so the watch loop sees an idle source
+    /// rather than a closed one.
+    struct BoundedNoopSubscription {
+        _events: tokio::sync::mpsc::Sender<SourceEvent>,
+    }
+
+    impl Subscription for BoundedNoopSubscription {
+        fn cancel(&mut self) {}
+    }
+
+    impl ResourceSource for DeploymentSource {
+        fn subscribe(&mut self, events: UnboundedSender<SourceEvent>) -> Box<dyn Subscription> {
+            for event in deployment_events() {
+                let _ = events.send(event);
+            }
             Box::new(NoopSubscription { _events: events })
+        }
+
+        /// Delivers the rows on the bounded channel the view actually reads.
+        /// The default `subscribe_bounded` bridges the legacy unbounded channel
+        /// from a real thread, so a test could still read the loading state
+        /// after the rows were sent.
+        fn subscribe_bounded(
+            &mut self,
+            events: tokio::sync::mpsc::Sender<SourceEvent>,
+        ) -> Box<dyn Subscription> {
+            for event in deployment_events() {
+                let _ = events.try_send(event);
+            }
+            Box::new(BoundedNoopSubscription { _events: events })
         }
     }
 
