@@ -4626,7 +4626,21 @@ fn scale_dialog_validates_and_submits(cx: &mut TestAppContext) {
 
     open(cx);
     cx.simulate_keystrokes("secondary-a");
+    eprintln!(
+        "PROBE scale: after secondary-a sel-text={:?}",
+        shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::Scale { input, .. }) => Some(input.read(cx).text().to_owned()),
+            _ => None,
+        })
+    );
     cx.simulate_input("12");
+    eprintln!(
+        "PROBE scale: after input 12 text={:?}",
+        shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::Scale { input, .. }) => Some(input.read(cx).text().to_owned()),
+            _ => None,
+        })
+    );
     cx.simulate_keystrokes("tab tab");
     assert_eq!(shell.read_with(cx, |shell, _| shell.dialog_focus), 2);
     cx.simulate_keystrokes("enter");
@@ -4847,6 +4861,13 @@ fn port_forward_dialog_uses_text_input_for_paste_and_validation(cx: &mut TestApp
     );
     cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
     cx.simulate_keystrokes("secondary-v");
+    eprintln!(
+        "PROBE pf: after secondary-v text={:?}",
+        shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::PortForward { input, .. }) => Some(input.read(cx).text().to_owned()),
+            _ => None,
+        })
+    );
     assert_eq!(
         shell.read_with(cx, |shell, cx| match &shell.dialog {
             Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),

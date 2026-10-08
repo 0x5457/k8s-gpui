@@ -14340,6 +14340,10 @@ mod tests {
         });
         cx.run_until_parked();
 
+        let (status, rows) = view.read_with(cx, |view, cx| {
+            (format!("{:?}", view.status(cx)), view.row_count(cx))
+        });
+        eprintln!("PROBE unknown_kind: status={status} rows={rows} resource-empty={:?}", cx.debug_bounds("resource-empty"));
         assert!(
             cx.debug_bounds("resource-empty").is_some(),
             "an unknown kind with no rows uses the empty state"
@@ -14871,6 +14875,17 @@ mod confirmation_tests {
         cx.run_until_parked();
         focus_table(cx, &view);
         cx.simulate_keystrokes("down");
+
+        {
+            let (status, rows, sel) = view.read_with(cx, |view, cx| {
+                (
+                    format!("{:?}", view.status(cx)),
+                    view.row_count(cx),
+                    view.selection_count(),
+                )
+            });
+            eprintln!("PROBE delete_conf: status={status} rows={rows} sel={sel}");
+        }
 
         let seen = Rc::new(RefCell::new(Vec::new()));
         view.update(cx, |view, _| {
