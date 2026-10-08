@@ -4900,13 +4900,34 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
         })
     });
     eprintln!("PROBE focused-focusable => {focused:?}");
+    cx.run_until_parked();
+    let contexts = cx.update(|window, _cx| {
+        window
+            .context_stack()
+            .iter()
+            .map(|context| format!("{context:?}"))
+            .collect::<Vec<_>>()
+    });
+    let focused = {
+        let handle = shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::PortForward { input, .. }) => Some(input.read(cx).focus_handle(cx)),
+            _ => None,
+        });
+        cx.update(|window, _| {
+            handle
+                .map(|handle| handle.is_focused(window))
+                .unwrap_or(false)
+        })
+    };
     cx.simulate_keystrokes("secondary-v");
     cx.run_until_parked();
     let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
         Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
         _ => "<no dialog>".to_string(),
     });
-    eprintln!("PROBE port-forward, no click, secondary-v => {text:?}");
+    eprintln!(
+        "PROBE port-forward, no click, secondary-v => {text:?} focused={focused} context_stack={contexts:?}"
+    );
 
     // And again after the click the failing test performs.
     let input_bounds = cx
@@ -4974,11 +4995,10 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
     cx.simulate_keystrokes("escape");
     cx.run_until_parked();
 
-    // Experiment A: the shared field in a fixed layout, like the passing
-    // *non-paste* TextInput tests use. Distinguishes dialog-overlaid geometry
-    // from the field itself. The field's own on_action(Paste) stops
-    // propagation at the TextInput depth, so cmd-v handled there would still
-    // land in caller_seen — which is exactly what we want to observe.
+    // Experiment A: the shared field in a fixed layout, in both currently
+    // failing (numeric) and currently working (plain) flavors. The probe's own
+    // port-forward dialog fails to paste; this field pastes on the first
+    // stroke in both flavors, which isolates digits_only from the dialog.
     let caller_seen = Rc::new(RefCell::new(Vec::<String>::new()));
     let caller_sink = Rc::clone(&caller_seen);
     let (input, cx) = cx.add_window_view(|_window, cx| {
@@ -4986,6 +5006,7 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
             caller_sink.borrow_mut().push(text.to_owned());
         })
         .with_role(Role::TextInput)
+        .with_numeric_input(4)
     });
     let focus = input.read_with(cx, |input, cx| input.focus_handle(cx));
     cx.update(|window, cx| window.focus(&focus, cx));
@@ -4993,19 +5014,53 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
     cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
     cx.simulate_keystrokes("secondary-v");
     eprintln!(
-        "PROBE fixed field, secondary-v => text={:?} caller={:?}",
+        "PROBE fixed numeric field, secondary-v => text={:?} caller={:?}",
         input.read_with(cx, |input, _| input.text().to_owned()),
         caller_seen.borrow()
     );
     cx.simulate_keystrokes("secondary-a");
     cx.simulate_input("12");
     eprintln!(
-        "PROBE fixed field, secondary-a+12 => text={:?}",
+        "PROBE fixed numeric field, secondary-a+12 => text={:?}",
         input.read_with(cx, |input, _| input.text().to_owned())
     );
 
-    // Experiment B: replay the failing test's strokes while a keystroke
-    // observer records what dispatch resolved for each, on the same field.
+    // Experiment C: what dispatch says about the SAME chords on the FIRST
+    // dialog, observing focus, the resolved action, and the dispatch-path
+    // context stack the keymap is matched against.
+    cx.update(|window, cx| {
+        shell.update(cx, |shell, cx| {
+            shell.open_port_forward_dialog(
+                PortForwardTarget {
+                    namespace: Some("default".into()),
+                    name: "web-0".into(),
+                    ports: Vec::new(),
+                },
+                window,
+                cx,
+            );
+        });
+    });
+    cx.run_until_parked();
+    let focused = {
+        let handle = shell.read_with(cx, |shell, cx| match &shell.dialog {
+            Some(Dialog::PortForward { input, .. }) => Some(input.read(cx).focus_handle(cx)),
+            _ => None,
+        });
+        cx.update(|window, _| {
+            handle
+                .map(|handle| handle.is_focused(window))
+                .unwrap_or(false)
+        })
+    };
+    let contexts = cx.update(|window, _cx| {
+        window
+            .context_stack()
+            .iter()
+            .map(|context| format!("{context:?}"))
+            .collect::<Vec<_>>()
+    });
+    eprintln!("PROBE numeric dialog, focused={focused} context_stack={contexts:?}");
     let keystroke_log = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
     cx.update(|_window, cx| {
         let log = Rc::clone(&keystroke_log);
@@ -5021,10 +5076,34 @@ fn probe_secondary_chords_in_dialog_input(cx: &mut TestAppContext) {
         })
         .detach();
     });
+    cx.write_to_clipboard(ClipboardItem::new_string("88".to_owned()));
     cx.simulate_keystrokes("secondary-v");
+    let contexts = cx.update(|window, _cx| {
+        window
+            .context_stack()
+            .iter()
+            .map(|context| format!("{context:?}"))
+            .collect::<Vec<_>>()
+    });
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!(
+        "PROBE numeric dialog, secondary-v => text={text:?} events={:?} context_stack={contexts:?}",
+        keystroke_log.borrow()
+    );
     cx.simulate_keystrokes("secondary-a");
-    cx.simulate_input("k");
-    eprintln!("PROBE keystroke events => {:?}", keystroke_log.borrow());
+    let text = shell.read_with(cx, |shell, cx| match &shell.dialog {
+        Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
+        _ => "<no dialog>".to_string(),
+    });
+    eprintln!(
+        "PROBE numeric dialog, secondary-a => text={text:?} events={:?}",
+        keystroke_log.borrow()
+    );
+    cx.simulate_keystrokes("escape");
+    cx.run_until_parked();
 
     // Deliberately fail so nextest prints the probe lines above; this test is
     // a diagnostic and never merges.
