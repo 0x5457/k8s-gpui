@@ -157,7 +157,7 @@ impl Render for CenterTabDragPreview {
             .rounded_md()
             .border_1()
             .border_color(colors.border_focused)
-            .bg(colors.elevated_surface_background.alpha(0.78))
+            .bg(design::role::surface_raised(cx).alpha(0.78))
             .opacity(0.82)
             .child(Icon::new(self.icon).xsmall().text_color(colors.text))
             .child(
@@ -889,7 +889,6 @@ fn tree_status(
     cx: &App,
 ) -> AnyElement {
     let message = message.into();
-    let colors = design::colors(cx);
     let loading = icon == IconName::LoaderCircle;
     let marker = Marker::new()
         .loading(loading)
@@ -902,7 +901,7 @@ fn tree_status(
                 MarkerIcon::new().size_6().child(
                     Icon::new(icon)
                         .with_size(Size::Size(design::size::ICON_LARGE))
-                        .text_color(colors.text_muted),
+                        .text_color(design::role::fg_secondary(cx)),
                 ),
             )
         })
@@ -1125,7 +1124,7 @@ impl Shell {
                             .w(design::size::UPDATE_PROGRESS)
                             .accessibility_label(format!("Download progress: {percent}%")),
                     )
-                    .child(text_small(format!("{percent}%")).text_color(colors.text_muted))
+                    .child(text_small(format!("{percent}%")).text_color(design::role::fg_secondary(cx)))
                     .into_any_element()
             }
             None => h_flex()
@@ -1139,7 +1138,7 @@ impl Shell {
                     design::status_colors(cx).info,
                     Size::Size(design::size::HIT_MIN),
                 ))
-                .child(text_small("Downloading…").text_color(colors.text_muted))
+                .child(text_small("Downloading…").text_color(design::role::fg_secondary(cx)))
                 .into_any_element(),
         }
     }
@@ -1324,8 +1323,16 @@ impl Shell {
                     .aria_size_of_set(UPDATE_OVERLAY_ACTIONS)
                     .aria_selected(action_active(0))
                     .when(action_active(0), |this| this.aria_active_descendant())
-                    .when(action_active(0), |this| {
-                        this.border_1().border_color(colors.border_focused)
+                    // A permanent 1px frame, recoloured rather than added: a
+                    // `when(active).border_1()` toggled the border on and off,
+                    // and the appearing 2px pushed the fixed-width row it
+                    // highlights — a ring that resizes its control is a layout
+                    // bug, not a focus state.
+                    .border_1()
+                    .border_color(if action_active(0) {
+                        colors.border_focused
+                    } else {
+                        colors.border_focused.alpha(0.)
                     })
                     .child(
                         common::labelled(
@@ -1355,8 +1362,13 @@ impl Shell {
                     .aria_size_of_set(UPDATE_OVERLAY_ACTIONS)
                     .aria_selected(action_active(1))
                     .when(action_active(1), |this| this.aria_active_descendant())
-                    .when(action_active(1), |this| {
-                        this.border_1().border_color(colors.border_focused)
+                    // See the check slot: the frame is always there; only its ink
+                    // changes, so arrowing never reflows the row.
+                    .border_1()
+                    .border_color(if action_active(1) {
+                        colors.border_focused
+                    } else {
+                        colors.border_focused.alpha(0.)
                     })
                     .child(
                         common::labelled(
@@ -1386,8 +1398,12 @@ impl Shell {
                     .aria_size_of_set(UPDATE_OVERLAY_ACTIONS)
                     .aria_selected(action_active(2))
                     .when(action_active(2), |this| this.aria_active_descendant())
-                    .when(action_active(2), |this| {
-                        this.border_1().border_color(colors.border_focused)
+                    // See the check slot: permanent frame, recoloured on active.
+                    .border_1()
+                    .border_color(if action_active(2) {
+                        colors.border_focused
+                    } else {
+                        colors.border_focused.alpha(0.)
                     })
                     .child(
                         common::labelled(
@@ -1418,7 +1434,7 @@ impl Shell {
             .rounded_lg()
             .border_1()
             .border_color(colors.border)
-            .bg(colors.elevated_surface_background.alpha(1.0))
+            .bg(design::role::surface_raised(cx).alpha(1.0))
             // Anchored to the strip it expands, so it takes the popover elevation
             // from the one shadow scale — not the kit's `shadow_tokens().lg`, which
             // was the second source the command palette's comment already names.
@@ -1639,7 +1655,6 @@ impl Shell {
     /// own actions; the bell counts the active incidents, which is the same figure the
     /// notification center puts first and the only one that means something on its own.
     fn render_top_bar_notifications(&self, cx: &Context<Self>) -> AnyElement {
-        let colors = design::colors(cx);
         let summary = self.status_summary(cx);
         let errors = design::format::count_with_noun(summary.errors, "error", "errors");
         let active = summary.active_notifications;
@@ -1694,7 +1709,7 @@ impl Shell {
                         .with_size(Size::Size(design::icon::IN_ROW))
                         .text_color(design::icon::status(cx, design::Severity::Error)),
                 )
-                .child(text_small(errors).text_color(colors.text_muted))
+                .child(text_small(errors).text_color(design::role::fg_secondary(cx)))
         });
         let mut bell = top_bar_icon_button(
             "top-bar-notifications",
@@ -1759,7 +1774,7 @@ impl Shell {
                                 .flex_none()
                                 .role(Role::Status)
                                 .aria_label(notifications.clone())
-                                .child(text_small(notifications).text_color(colors.text_muted)),
+                                .child(text_small(notifications).text_color(design::role::fg_secondary(cx))),
                         )
                     }),
             )
@@ -2671,7 +2686,6 @@ impl Shell {
 
     /// Render the resource load failure and retry action.
     fn render_tree_failure(&self, reason: &str, cx: &Context<Self>) -> AnyElement {
-        let colors = design::colors(cx);
         let mut panel = v_flex()
             .id("tree-failure")
             .debug_selector(|| "tree-failure".to_owned())
@@ -2697,7 +2711,7 @@ impl Shell {
                 text_small(
                     "Load the resource tree. If loading fails, check the context connection.",
                 )
-                .text_color(colors.text_muted),
+                .text_color(design::role::fg_secondary(cx)),
             )
             .child(
                 common::labelled(
@@ -4421,7 +4435,7 @@ impl Shell {
             .rounded_md()
             .border_1()
             .border_color(border)
-            .bg(colors.elevated_surface_background.alpha(1.0))
+            .bg(design::role::surface_raised(cx).alpha(1.0))
             // The toast's own elevation — transient, and able to clear the Dock's
             // edge, which is why the shadow scale keeps a value beneath `overlay`.
             .shadow(design::shadow::toast(cx))
@@ -5011,7 +5025,7 @@ impl Shell {
                 colors.border,
                 design::border::INTERACTIVE_MIN_CONTRAST,
             ))
-            .bg(colors.elevated_surface_background.alpha(1.0))
+            .bg(design::role::surface_raised(cx).alpha(1.0))
             // A dialog, so the `overlay` step of the one shadow scale — the same
             // value the command palette's card takes, because both are the topmost
             // decision layer of the window.
@@ -5028,7 +5042,7 @@ impl Shell {
             .role(role)
             .aria_label(title.clone())
             .child(section_text(title).text_color(colors.text))
-            .child(detail.text_color(colors.text_muted))
+            .child(detail.text_color(design::role::fg_secondary(cx)))
     }
 
     fn render_dialog_input(
@@ -5079,7 +5093,7 @@ impl Shell {
         // in, a port to forward — take their selection from `design::row_selected_bg_on` solved
         // against it. They used to take `colors.element_selected`, a filled slab the theme solves
         // for a web list, which is the one web-shaped fill a desktop dialog must not have.
-        let card_surface = colors.elevated_surface_background;
+        let card_surface = design::role::surface_raised(cx);
         let Some(dialog) = self.dialog.as_ref() else {
             return div().into_any_element();
         };
@@ -5153,14 +5167,20 @@ impl Shell {
                     // it still has to sit in the same slot with the same focus ring,
                     // so it is the same button without the handler.
                     let confirm_focus_index = confirm_focus;
+                    // Disabled with a reason, not a restatement: the label is
+                    // already on the button, so a tooltip that repeats it answers
+                    // nothing. Naming the constraint is what lets the empty field's
+                    // reader know why the commit is off.
                     let button = Button::new("dialog-helm-confirm")
                         .label(confirm_label)
                         .with_variant(confirm_style)
                         .with_size(Size::Size(design::size::CONTROL))
                         .w(px(ACTION_BUTTON_WIDTH))
                         .tab_index(confirm_focus as isize)
-                        .tooltip(confirm_label)
-                        .accessibility_label(confirm_label)
+                        .tooltip("Enter a valid chart reference first")
+                        .accessibility_label(format!(
+                            "{confirm_label}, unavailable until the chart reference is valid"
+                        ))
                         .disabled(true);
                     div()
                         .rounded_md()
@@ -5184,7 +5204,7 @@ impl Shell {
                 card = self.dialog_shell(Role::AlertDialog, title, text(detail), window, cx);
                 if let Some(field) = field {
                     card = card
-                        .child(text_small("Chart reference").text_color(colors.text_muted))
+                        .child(text_small("Chart reference").text_color(design::role::fg_secondary(cx)))
                         .child(field)
                         .when_some(error.clone(), |this, message| {
                             this.child(text_small(message).text_color(error_ink))
@@ -5301,7 +5321,7 @@ impl Shell {
                                 .text_color(if active {
                                     colors.text
                                 } else {
-                                    colors.text_muted
+                                    design::role::fg_secondary(cx)
                                 }),
                             )
                             .child(text(container))
@@ -5402,7 +5422,7 @@ impl Shell {
                                 .text_color(if active {
                                     colors.text
                                 } else {
-                                    colors.text_muted
+                                    design::role::fg_secondary(cx)
                                 }),
                             )
                             .child(text(label))
@@ -5424,19 +5444,19 @@ impl Shell {
                                 .children(choices),
                         )
                     })
-                    .child(text_small("Remote Port").text_color(colors.text_muted))
+                    .child(text_small("Remote Port").text_color(design::role::fg_secondary(cx)))
                     .child(field)
                     .when_some(error.clone(), |this, message| {
                         this.child(text_small(message).text_color(error_ink))
                     })
-                    .child(text_small("Local Port").text_color(colors.text_muted))
+                    .child(text_small("Local Port").text_color(design::role::fg_secondary(cx)))
                     .child(local_field)
                     .when_some(local_error, |this, message| {
                         this.child(text_small(message).text_color(error_ink))
                     })
                     .child(
                         text_small("Leave Local Port empty to assign a free local port.")
-                            .text_color(colors.text_muted),
+                            .text_color(design::role::fg_secondary(cx)),
                     )
                     .child(Self::dialog_actions(
                         self.dialog_button(
@@ -5487,7 +5507,7 @@ impl Shell {
                 let field = self.render_dialog_input("dialog-scale-input", input, 0, cx);
                 card = self
                     .dialog_shell(Role::Dialog, title, text(detail), window, cx)
-                    .child(text_small("Replica Count").text_color(colors.text_muted))
+                    .child(text_small("Replica Count").text_color(design::role::fg_secondary(cx)))
                     .child(field)
                     .when_some(*error, |this, message| {
                         this.child(text_small(message).text_color(error_ink))

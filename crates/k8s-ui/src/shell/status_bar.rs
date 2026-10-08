@@ -1198,7 +1198,7 @@ impl Shell {
             .rounded_lg()
             .border_1()
             .border_color(popover_border(raised, colors.border))
-            .bg(colors.elevated_surface_background.alpha(1.0))
+            .bg(design::role::surface_raised(cx).alpha(1.0))
             // The one elevation the product gives a popover, from the shadow scale:
             // the kit's `shadow_tokens().lg` was a second source, and two answers to
             // "how high does a popover float" was the drift it caused.
@@ -1228,7 +1228,7 @@ impl Shell {
                             Label::new(notification_count_label(count))
                                 .text_size(design::text::CAPTION)
                                 .line_height(design::text::CAPTION_LINE_HEIGHT)
-                                .text_color(colors.text_muted),
+                                .text_color(design::role::fg_secondary(cx)),
                         )
                     })
                     .child(div().flex_1())
@@ -1285,7 +1285,7 @@ impl Shell {
                             Label::new(status_label)
                                 .text_size(design::text::CAPTION)
                                 .line_height(design::text::CAPTION_LINE_HEIGHT)
-                                .text_color(colors.text_muted),
+                                .text_color(design::role::fg_secondary(cx)),
                         ),
                 )
             })
@@ -1404,7 +1404,7 @@ impl Shell {
                                 Label::new(detail)
                                     .text_size(design::text::CAPTION)
                                     .line_height(design::text::CAPTION_LINE_HEIGHT)
-                                    .text_color(colors.text_muted),
+                                    .text_color(design::role::fg_secondary(cx)),
                             )
                         })
                     }),
@@ -1420,7 +1420,7 @@ impl Shell {
                         Label::new(format_age(notification.at.elapsed().as_secs()))
                             .text_size(design::text::CAPTION)
                             .line_height(design::text::CAPTION_LINE_HEIGHT)
-                            .text_color(colors.text_muted),
+                            .text_color(design::role::fg_secondary(cx)),
                     ),
             )
             .when(has_detail, |this| {
