@@ -240,16 +240,20 @@ press() {
         local mods=() key="" part
         local IFS='+'
         for part in $chord; do
-            if [[ -z "$key" ]]; then
-                # wtype names the Meta key `logo` (also `win`), never `super` — a
-                # documented `super+shift+p` chord was a silent no-op on it.
-                [[ "$part" == super ]] && part=logo
-                mods+=("$part")
-            else
-                key="$part"
+            # Every part before the last is a modifier; the last is the key the
+            # chord acts on. Tracking the index (not "is key set yet") is what
+            # makes `ctrl+shift+p` reach the app — the old loop left `key` empty
+            # for any multi-part chord, so every `ctrl+...` step silently did
+            # nothing.
+            if [[ -n "$key" ]]; then
+                [[ "$key" == super ]] && key=logo
+                mods+=("$key")
             fi
+            key="$part"
         done
         unset IFS
+        # wtype names the Meta key `logo` (also `win`), never `super`.
+        [[ "$key" == super ]] && key=logo
         [[ -z "$key" ]] && return 0
         local args=()
         for part in "${mods[@]}"; do args+=(-M "$part"); done
