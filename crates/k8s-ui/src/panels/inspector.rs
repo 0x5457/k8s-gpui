@@ -12671,7 +12671,7 @@ mod tests {
     fn apply_reports_invalid_yaml_and_keeps_dirty(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("{oops");
         panel.update(cx, |panel, cx| panel.apply(cx));
         assert!(panel.read_with(cx, |panel, _| panel.validation_error.is_some()));
@@ -12691,7 +12691,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("@oops");
         panel.update(cx, |panel, cx| panel.apply(cx));
         let diagnostics = inline_diagnostics(&panel, cx);
@@ -12715,7 +12715,7 @@ mod tests {
             "Editing clears diagnostics"
         );
 
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12736,7 +12736,7 @@ mod tests {
                 *sink.borrow_mut() = Some(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12785,7 +12785,7 @@ mod tests {
     fn missing_apply_handler_never_marks_yaml_saved(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12827,7 +12827,7 @@ mod tests {
                 sink.borrow_mut().push(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12905,7 +12905,7 @@ mod tests {
                 sink.borrow_mut().push(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12939,7 +12939,7 @@ mod tests {
                 sink.borrow_mut().push(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -12968,10 +12968,10 @@ mod tests {
                 sink.fetch_add(1, Ordering::Relaxed);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
-        cx.simulate_keystrokes("ctrl-enter");
+        cx.simulate_keystrokes("secondary-enter");
         cx.run_until_parked();
         assert_eq!(
             calls.load(Ordering::Relaxed),
@@ -12995,7 +12995,7 @@ mod tests {
     #[gpui_kit::test]
     fn dirty_selection_switch_is_deferred_until_cancel(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "a: 1");
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("a: 2");
         assert!(dirty(&panel, cx));
         panel.update(cx, |panel, cx| {
@@ -13021,7 +13021,7 @@ mod tests {
     fn dirty_selection_keeps_the_original_target_until_discard(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "a: 1");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("a: 2");
         panel.update(cx, |panel, cx| {
             panel.set_selection(
@@ -13068,7 +13068,7 @@ mod tests {
                 *sink.borrow_mut() = Some(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -13117,7 +13117,7 @@ mod tests {
                 *sink.borrow_mut() = Some(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = matching_apply_yaml("uid-1");
         cx.simulate_input(&yaml);
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -13146,7 +13146,7 @@ mod tests {
                 sink.fetch_add(1, Ordering::Relaxed);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("a: 2");
         panel.update(cx, |panel, cx| panel.apply(cx));
         assert_eq!(calls.load(Ordering::Relaxed), 0);
@@ -13170,7 +13170,7 @@ mod tests {
             "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-0\n  namespace: default\n",
             "apiVersion: v1\nkind: Pod\nmetadata:\n  name: web-0\n  namespace: default\n  uid: uid-2\n",
         ] {
-            cx.simulate_keystrokes("ctrl-a");
+            cx.simulate_keystrokes("secondary-a");
             cx.simulate_input(yaml);
             panel.update(cx, |panel, cx| panel.apply(cx));
             assert_eq!(calls.load(Ordering::Relaxed), 0);
@@ -13198,7 +13198,7 @@ mod tests {
                 sink.fetch_add(1, Ordering::Relaxed);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("metadata:\n  name: other\n  uid: uid-1");
         panel.update(cx, |panel, cx| panel.apply(cx));
         assert_eq!(calls.load(Ordering::Relaxed), 0);
@@ -13210,7 +13210,7 @@ mod tests {
     fn reset_discards_dirty_content_and_pending_selection(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "a: 1");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("a: 2");
         panel.update(cx, |panel, cx| {
             panel.set_selection(
@@ -13810,7 +13810,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("@oops");
         // The editor parses after a typing pause, so the test waits out the same debounce the
         // user waits out. `run_until_parked` does not move the clock. The two steps bracket
@@ -13980,7 +13980,7 @@ mod tests {
                 sink.borrow_mut().push(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -14024,7 +14024,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -14057,7 +14057,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -14101,7 +14101,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -14192,7 +14192,7 @@ mod tests {
             // And the review, which is the one mode that replaces the tab body rather than sitting
             // inside it.
             panel.update(cx, |panel, cx| panel.show_tab(InspectorTab::Yaml, cx));
-            cx.simulate_keystrokes("ctrl-a");
+            cx.simulate_keystrokes("secondary-a");
             cx.simulate_input(&matching_apply_yaml("uid-1"));
             panel.update(cx, |panel, cx| panel.apply(cx));
             cx.run_until_parked();
@@ -14246,7 +14246,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -14478,7 +14478,7 @@ mod tests {
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
         let server_text = panel.read_with(cx, |panel, _| panel.original.clone());
         let server_text = server_text.expect("the selection text");
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         panel.update(cx, |panel, cx| panel.confirm_pending_apply(cx));
@@ -14638,7 +14638,7 @@ mod tests {
                 sink.borrow_mut().push(request);
             });
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         let yaml = format!("{}\n", matching_apply_yaml("uid-1"));
         cx.simulate_input(&yaml);
         let pending = ObjectRef {
@@ -14689,7 +14689,7 @@ mod tests {
         );
         // Dirty means the document differs from the text the cluster reported, so retyping the
         // same bytes is not a change and Apply has nothing to send. The comment is one.
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&format!("# edited\n{pending_yaml}"));
         assert!(dirty(&panel, cx));
         panel.update(cx, |panel, cx| panel.apply(cx));
@@ -14715,7 +14715,7 @@ mod tests {
         panel.update(cx, |panel, _| {
             panel.set_targeted_apply_handler(|_request: ApplyRequest, _| {});
         });
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         panel.update(cx, |panel, cx| panel.confirm_pending_apply(cx));
@@ -14757,7 +14757,7 @@ mod tests {
     fn pending_apply_button_is_disabled(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "a: 1");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         cx.run_until_parked();
         let enabled = cx.debug_bounds("yaml-action-apply").expect("Apply button");
@@ -14793,7 +14793,7 @@ mod tests {
     fn undo_to_the_saved_text_loads_the_pending_selection(cx: &mut TestAppContext) {
         let (panel, cx) = setup(cx, "a: 1");
         select(&panel, "uid-1", cx);
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("a: 2");
         assert!(dirty(&panel, cx));
         panel.update(cx, |panel, cx| {
@@ -14813,7 +14813,7 @@ mod tests {
 
         // gpui-base records a keystroke that replaced a selection as its own atomic
         // transaction, so undoing a select-all and replace takes two presses.
-        cx.simulate_keystrokes("ctrl-z ctrl-z");
+        cx.simulate_keystrokes("secondary-z secondary-z");
         cx.run_until_parked();
         assert!(
             !panel.read_with(cx, |panel, _| panel.has_pending()),
@@ -15482,7 +15482,7 @@ mod tests {
         let (panel, cx) = setup(cx, "name: app");
         select(&panel, "uid-1", cx);
         panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input(&matching_apply_yaml("uid-1"));
         panel.update(cx, |panel, cx| panel.apply(cx));
         cx.run_until_parked();
@@ -15780,7 +15780,7 @@ mod tests {
             panel.update(cx, |panel, _| panel.set_on_apply(|_| {}));
             cx.simulate_resize(gpui_kit::size(gpui_kit::px(260.), gpui_kit::px(900.)));
             panel.update(cx, |panel, cx| panel.show_tab(InspectorTab::Yaml, cx));
-            cx.simulate_keystrokes("ctrl-a");
+            cx.simulate_keystrokes("secondary-a");
             cx.simulate_input(&matching_apply_yaml("uid-1"));
             panel.update(cx, |panel, cx| panel.apply(cx));
             cx.run_until_parked();
@@ -15803,7 +15803,7 @@ mod tests {
             });
             cx.simulate_resize(gpui_kit::size(gpui_kit::px(260.), gpui_kit::px(900.)));
             panel.update(cx, |panel, cx| panel.show_tab(InspectorTab::Yaml, cx));
-            cx.simulate_keystrokes("ctrl-a");
+            cx.simulate_keystrokes("secondary-a");
             cx.simulate_input(&matching_apply_yaml("uid-1"));
             panel.update(cx, |panel, cx| panel.apply(cx));
             panel.update(cx, |panel, cx| panel.confirm_pending_apply(cx));
