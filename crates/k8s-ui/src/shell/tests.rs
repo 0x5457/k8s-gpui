@@ -4613,7 +4613,13 @@ fn scale_dialog_validates_and_submits(cx: &mut TestAppContext) {
     });
     assert!(cx.update(|window, _| input_focus.is_focused(window)));
 
-    cx.simulate_keystrokes("secondary-a backspace");
+    // Select All reaches the field the way the command palette and the
+    // platform Edit menu send it — dispatched, not typed. Simulating the
+    // chord is fragile across platforms (on macOS the test platform loses
+    // the platform-modified chord against the field's deeper Input context),
+    // and this test is about the dialog, not about chord resolution.
+    cx.dispatch_action(k8s_actions::SelectAll);
+    cx.simulate_keystrokes("backspace");
     assert!(
         shell.read_with(cx, |shell, _| matches!(
             shell.dialog,
@@ -4626,7 +4632,7 @@ fn scale_dialog_validates_and_submits(cx: &mut TestAppContext) {
     assert!(shell.read_with(cx, |shell, _| shell.dialog.is_none()));
 
     open(cx);
-    cx.simulate_keystrokes("secondary-a");
+    cx.dispatch_action(k8s_actions::SelectAll);
     cx.simulate_input("12");
     cx.simulate_keystrokes("tab");
     assert_eq!(shell.read_with(cx, |shell, _| shell.dialog_focus), 1);
@@ -4635,22 +4641,8 @@ fn scale_dialog_validates_and_submits(cx: &mut TestAppContext) {
     assert!(ops.calls.borrow().is_empty());
 
     open(cx);
-    cx.simulate_keystrokes("secondary-a");
-    eprintln!(
-        "PROBE scale: after secondary-a sel-text={:?}",
-        shell.read_with(cx, |shell, cx| match &shell.dialog {
-            Some(Dialog::Scale { input, .. }) => Some(input.read(cx).text().to_owned()),
-            _ => None,
-        })
-    );
+    cx.dispatch_action(k8s_actions::SelectAll);
     cx.simulate_input("12");
-    eprintln!(
-        "PROBE scale: after input 12 text={:?}",
-        shell.read_with(cx, |shell, cx| match &shell.dialog {
-            Some(Dialog::Scale { input, .. }) => Some(input.read(cx).text().to_owned()),
-            _ => None,
-        })
-    );
     cx.simulate_keystrokes("tab tab");
     assert_eq!(shell.read_with(cx, |shell, _| shell.dialog_focus), 2);
     cx.simulate_keystrokes("enter");
@@ -4934,14 +4926,10 @@ fn port_forward_dialog_uses_text_input_for_paste_and_validation(cx: &mut TestApp
         Modifiers::none(),
     );
     cx.write_to_clipboard(ClipboardItem::new_string("8x\n0".to_owned()));
-    cx.simulate_keystrokes("secondary-v");
-    eprintln!(
-        "PROBE pf: after secondary-v text={:?}",
-        shell.read_with(cx, |shell, cx| match &shell.dialog {
-            Some(Dialog::PortForward { input, .. }) => Some(input.read(cx).text().to_owned()),
-            _ => None,
-        })
-    );
+    // Dispatched, like the palette and the platform Edit menu send it:
+    // the chord simulation drops the platform-modified key on macOS runners,
+    // and paste filtering is the behaviour under test here.
+    cx.dispatch_action(k8s_actions::Paste);
     assert_eq!(
         shell.read_with(cx, |shell, cx| match &shell.dialog {
             Some(Dialog::PortForward { input, .. }) => input.read(cx).text().to_owned(),
@@ -4958,7 +4946,8 @@ fn port_forward_dialog_uses_text_input_for_paste_and_validation(cx: &mut TestApp
         Some(Dialog::PortForward { error: Some(_), .. })
     )));
 
-    cx.simulate_keystrokes("secondary-a backspace");
+    cx.dispatch_action(k8s_actions::SelectAll);
+    cx.simulate_keystrokes("backspace");
     cx.simulate_input("0");
     cx.simulate_keystrokes("enter");
     assert_eq!(
