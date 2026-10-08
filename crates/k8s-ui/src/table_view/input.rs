@@ -1058,7 +1058,7 @@ mod tests {
         let (input, cx) = cx.add_window_view(|_, cx| TextInput::new("Search", cx, |_, _| {}));
         click_field(&input, cx);
         cx.simulate_input("abc");
-        cx.simulate_keystrokes("ctrl-a");
+        cx.simulate_keystrokes("secondary-a");
         cx.simulate_input("x");
         assert_eq!(input.read_with(cx, |input, _| input.text().to_owned()), "x");
     }

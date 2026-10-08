@@ -4446,7 +4446,7 @@ fn delete_confirmation_gates_the_ops_call(cx: &mut TestAppContext) {
     focus_table(cx, &shell);
 
     cx.simulate_keystrokes("down");
-    cx.simulate_keystrokes("delete");
+    cx.simulate_keystrokes(shortcut("delete", "secondary-delete"));
     cx.run_until_parked();
     assert!(
         shell.read_with(cx, |shell, _| shell.dialog.is_some()),
@@ -4465,7 +4465,7 @@ fn delete_confirmation_gates_the_ops_call(cx: &mut TestAppContext) {
     );
 
     // Cancel has focus by default, so Enter does not delete.
-    cx.simulate_keystrokes("delete");
+    cx.simulate_keystrokes(shortcut("delete", "secondary-delete"));
     cx.run_until_parked();
     cx.simulate_keystrokes("enter");
     assert!(shell.read_with(cx, |shell, _| shell.dialog.is_none()));
@@ -4475,7 +4475,7 @@ fn delete_confirmation_gates_the_ops_call(cx: &mut TestAppContext) {
     );
 
     // Tab selects Delete, then Enter confirms the request.
-    cx.simulate_keystrokes("delete");
+    cx.simulate_keystrokes(shortcut("delete", "secondary-delete"));
     cx.run_until_parked();
     cx.simulate_keystrokes("tab");
     cx.simulate_keystrokes("enter");
@@ -4494,7 +4494,7 @@ fn delete_confirmation_keeps_the_original_object_after_selection_changes(cx: &mu
     inject_ops(cx, &shell, Rc::clone(&ops));
     focus_table(cx, &shell);
     cx.simulate_keystrokes("down");
-    cx.simulate_keystrokes("delete");
+    cx.simulate_keystrokes(shortcut("delete", "secondary-delete"));
     cx.run_until_parked();
     let original_uid = shell.read_with(cx, |shell, _| {
         let Some(Dialog::ConfirmDelete { target, .. }) = &shell.dialog else {
@@ -4548,7 +4548,7 @@ fn delete_confirmation_swallows_underlying_shortcuts(cx: &mut TestAppContext) {
     let selected = shell.read_with(cx, |shell, cx| {
         shell.pods.read(cx).selected_name(cx).map(|n| n.to_string())
     });
-    cx.simulate_keystrokes("delete");
+    cx.simulate_keystrokes(shortcut("delete", "secondary-delete"));
     cx.run_until_parked();
     assert!(shell.read_with(cx, |shell, _| shell.dialog.is_some()));
 

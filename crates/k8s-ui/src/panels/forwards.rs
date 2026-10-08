@@ -2383,11 +2383,18 @@ mod tests {
     fn every_shared_label_call_site_in_these_panels_names_its_ink() {
         for (name, source) in OWNED_PANELS {
             // Only the module body: the tests below contain the strings this scans for.
-            let body = source
-                .split("\n#[cfg(test)]\nmod tests {")
-                .next()
+            // Go line by line rather than splitting on a marker with `\n` in it: a Windows
+            // checkout may carry CRLF endings, where the literal marker never matches.
+            let all: Vec<&str> = source.lines().collect();
+            let marker = (0..all.len())
+                .find(|index| {
+                    all[*index].trim() == "#[cfg(test)]"
+                        && all
+                            .get(index + 1)
+                            .is_some_and(|line| line.trim().starts_with("mod tests"))
+                })
                 .unwrap_or_else(|| panic!("{name} has no test module to stop the scan at"));
-            let lines: Vec<&str> = body.lines().collect();
+            let lines: Vec<&str> = all[..marker].to_vec();
             for (index, line) in lines.iter().enumerate() {
                 let Some(column) = line.find("label_") else {
                     continue;

@@ -1502,7 +1502,19 @@ fn fresh_test_settings_path() -> PathBuf {
 fn read_current(path: &Path) -> Result<String, String> {
     match std::fs::read_to_string(path) {
         Ok(text) => Ok(text),
-        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok("{}".to_owned()),
+        // NotFound can mean the file is simply absent, which a save creates. It can also
+        // mean a parent of the path is a regular file: Windows maps ERROR_DIRECTORY to
+        // NotFound, so the blocker case arrives here too instead of as NotADirectory.
+        // Only the first meaning is the empty store; the second must surface, or the
+        // follow-up create_dir_all reports a directory error for a file that is not one.
+        Err(error)
+            if error.kind() == std::io::ErrorKind::NotFound
+                && !path
+                    .parent()
+                    .is_some_and(|parent| parent.exists() && !parent.is_dir()) =>
+        {
+            Ok("{}".to_owned())
+        }
         Err(error) => Err(format!(
             "Cannot read settings file {}: {error}. Check file permissions and try again.",
             path.display()

@@ -344,15 +344,22 @@ mod tests {
             true,
             mode,
         ));
-        assert!(should_bypass_local_mouse(
-            MouseButton::Left,
-            Modifiers {
-                platform: true,
-                ..Modifiers::default()
-            },
-            true,
-            mode,
-        ));
+        // The platform key is the secondary key only on macOS, and every caller folds it
+        // into `alt` before this check, so it reaches the function on its own only here.
+        // Off macOS it is the Super/Win key: a click with it goes to the terminal. On macOS
+        // it would read as Command held, which the secondary guard keeps local.
+        assert_eq!(
+            should_bypass_local_mouse(
+                MouseButton::Left,
+                Modifiers {
+                    platform: true,
+                    ..Modifiers::default()
+                },
+                true,
+                mode,
+            ),
+            cfg!(not(target_os = "macos")),
+        );
         assert!(!should_bypass_local_mouse(
             MouseButton::Left,
             Modifiers {

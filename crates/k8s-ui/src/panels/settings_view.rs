@@ -6153,14 +6153,15 @@ const BOUND_WITHOUT_A_ROW: &[(&str, &str)] = &[
 /// each of them beside the name the person is clicking, so a reference row would
 /// answer "No shortcut assigned." on every platform but the one that has the
 /// chord. The list is empty off macOS so the check below is about this build's
-/// keymap rather than about the keymap of another platform.
+/// keymap rather than about the keymap of another platform. `ShowAll` is absent
+/// on purpose: the platform's Show All menu entry carries no chord anywhere, so
+/// UNBOUND_ACTIONS names it and no keymap does.
 #[cfg(test)]
 #[cfg(target_os = "macos")]
 const APPLE_MENU_CHORDS: &[&str] = &[
     "k8s_app::Quit",
     "k8s_app::Hide",
     "k8s_app::HideOthers",
-    "k8s_app::ShowAll",
     "k8s_app::MinimizeWindow",
     "k8s_app::ToggleFullScreen",
 ];
