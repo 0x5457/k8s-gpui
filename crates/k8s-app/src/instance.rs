@@ -13,7 +13,7 @@ use k8s_core::ipc::{self, InstanceLock, IpcError};
 #[cfg(windows)]
 use windows::Win32::Foundation::HANDLE;
 
-#[cfg(test)]
+#[cfg(any(windows, test))]
 const WINDOWS_ERROR_ALREADY_EXISTS: i32 = 183;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -57,6 +57,7 @@ struct InstanceMutex {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 impl Drop for InstanceMutex {
     fn drop(&mut self) {
         let _ = unsafe { windows::Win32::Foundation::CloseHandle(self.handle) };
@@ -162,6 +163,7 @@ fn classify_mutex_error(error: &io::Error) -> InstallResult {
 }
 
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn acquire_instance_mutex(name: &str) -> io::Result<InstanceMutex> {
     use std::os::windows::ffi::OsStrExt as _;
     use windows::Win32::Foundation::{CloseHandle, ERROR_SUCCESS, GetLastError};
@@ -184,9 +186,9 @@ fn acquire_instance_mutex(name: &str) -> io::Result<InstanceMutex> {
 
 /// Names the mutex after the current user so sessions cannot collide.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn instance_mutex_name() -> io::Result<String> {
     const HEX: &[u8; 16] = b"0123456789abcdef";
-    use windows::Win32::Foundation::HANDLE as _;
     use windows::Win32::Security::TOKEN_QUERY;
     use windows::Win32::System::Threading::{GetCurrentProcess, OpenProcessToken};
 
@@ -207,6 +209,7 @@ fn instance_mutex_name() -> io::Result<String> {
 
 /// Copies the token user SID out of the token handle.
 #[cfg(windows)]
+#[allow(unsafe_code)]
 fn token_user_sid(token: HANDLE) -> io::Result<Vec<u8>> {
     use windows::Win32::Security::{GetLengthSid, GetTokenInformation, TOKEN_USER, TokenUser};
 
