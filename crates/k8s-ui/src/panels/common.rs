@@ -279,9 +279,31 @@ pub(crate) const CONTENT_INSET: Pixels = space::LG;
 /// on the heading's far edge and the Inspector puts it in its own lane, so a
 /// caller composes rather than decorating the caption.
 pub(crate) fn section_heading(title: impl Into<SharedString>) -> RoleLabel {
+    section_heading_impl(title, true)
+}
+
+/// The same caption, for a title that is an identifier, not a word.
+///
+/// The chart table's column headers are container names (`web-0/app`), not
+/// prose, and `Design guides > Guidance for AI-generated interfaces` forbids
+/// transforming "every string automatically: product names, acronyms, and
+/// localized content must preserve their intended casing" — an uppercase
+/// `WEB-0/APP` is a different string from the one the cluster named. The
+/// treatment around the word is identical (size, weight, rung); only the
+/// transform is skipped.
+pub(crate) fn section_heading_identifier(title: impl Into<SharedString>) -> RoleLabel {
+    section_heading_impl(title, false)
+}
+
+fn section_heading_impl(title: impl Into<SharedString>, upper: bool) -> RoleLabel {
     let title: SharedString = title.into();
+    let title = if upper {
+        SharedString::from(title.to_uppercase())
+    } else {
+        title
+    };
     RoleLabel::new(
-        SharedString::from(title.to_uppercase()),
+        title,
         design::text::CAPTION,
         design::text::CAPTION_LINE_HEIGHT,
         Some(design::text::SEMIBOLD),

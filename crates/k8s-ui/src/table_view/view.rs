@@ -4703,10 +4703,10 @@ impl PodsView {
         let title_text = header_label(column.title);
         let description = header_accessibility_description(column.title, affordance);
         let label = header_accessibility_label(column.title, affordance);
-        // One label element, restyled from the header's own hover group, so the
-        // label and the wash under it change together. They were two separate
-        // hover reads before, which is how a header ended up with a bright label
-        // under a faint wash.
+        // The label holds one ink for the whole header group: hover is shape, not
+        // recolour (see [`header_label_color`]), so it does not join the wash's
+        // hover group. It used to shadow that group's ink, which is how a header
+        // ended up with a bright label under a faint wash.
         //
         // Weight carries "which column is this table ordered by", not the ink:
         // see [`header_label_weight`].
@@ -4722,10 +4722,7 @@ impl PodsView {
             .text_size(design::text::CAPTION)
             .line_height(design::text::CAPTION_LINE_HEIGHT)
             .font_weight(header_label_weight(affordance))
-            .text_color(header_label_color(affordance, false, cx))
-            .group_hover(group.clone(), |label| {
-                label.text_color(header_label_color(affordance, true, cx))
-            })
+            .text_color(header_label_color(affordance, cx))
             .child(title_text);
         let cell = div()
             .id(("pod-column", index))
@@ -7378,57 +7375,60 @@ fn row_age(row: &Row) -> Option<Duration> {
     age_seconds(&row.obj).map(Duration::from_secs)
 }
 
-/// The dot a status cell draws.
+/// The channel a status cell draws, and *whether* it needs a row re-solve.
 ///
 /// `UI-SPEC` §0 铁律三 inverts the usual reading: a healthy resource is grey, and
-/// only `Pending` / `Failed` / `Error` get a colour. A 10,000-row table in which
-/// every row is green is a table in which the reader has nothing to look at, and
-/// the cost of that is not aesthetic — it is the few hundred rows that are
-/// actually stuck.
-///
-/// Healthy therefore takes `fg_tertiary`, the quietest ink, and a `Pending` pod
-/// under thirty seconds old takes the same value: it is not a problem yet, and
-/// colouring it would be the same lie in the other direction.
-fn status_dot_ink(severity: Severity, cx: &App) -> Hsla {
+/// only a problem — `Warning`/`Error` (`Info` counts as a claim) — gets a colour.
+/// That is the split [`Severity::marker_on`] / [`Severity::word`] make once, in
+/// the product's single resolver, so the cell draws its channel from there rather
+/// than re-deriving it from the *mark* role and re-lifting. But the *solve* the
+/// resolver applies is only honest for a coloured claim: a grey mark or word on
+/// the neutral ladder (`fg_tertiary`/`fg_secondary`) is already at its text floor
+/// and must stay exactly on its rung — a 3:1 graphic solve would lift `fg_tertiary`
+/// brighter than the word beside it. So only the loud channels take the row
+/// re-solve (the wash under a selection can smudge them); the quiet ink returns
+/// untouched, as it always has.
+fn status_channel(severity: Severity, row_background: Hsla, graphic: bool, cx: &App) -> Hsla {
     match severity {
-        Severity::Error => design::role::danger(cx),
-        Severity::Warning => design::role::warning(cx),
-        // `Info` is a state the cluster is in rather than something wrong with
-        // the resource, and it is grey for the same reason `Success` is.
-        _ => design::role::fg_tertiary(cx),
-    }
-}
-
-/// The word a status cell draws, beside its dot.
-///
-/// One step louder than the dot rather than the same value: the dot has to be
-/// findable at a glance across 10,000 rows, and the word has to be readable at
-/// arm's length once the reader has found the row. §4.4 gives the two different
-/// values, and using one value for both would make the dot redundant.
-fn status_word_ink(severity: Severity, cx: &App) -> Hsla {
-    match severity {
-        Severity::Error => design::role::danger(cx),
-        Severity::Warning => design::role::warning(cx),
+        // A coloured claim: the single resolver gives the channel ink, and the
+        // row re-solve lifts it off the selection wash if it has to.
+        Severity::Warning | Severity::Error | Severity::Info => {
+            let ink = if graphic {
+                severity.marker_on(cx, row_background)
+            } else {
+                severity.word(cx)
+            };
+            status_ink_on_row(ink, row_background, graphic, cx)
+        }
+        // A quiet state (healthy, `<30s` Pending, neutral): the exact ink-ladder
+        // rung, never a graphic-solved lift — see the doc above.
+        _ if graphic => design::role::fg_tertiary(cx),
         _ => design::role::fg_secondary(cx),
     }
 }
 
+/// The dot a status cell draws: the channel's mark, solved only when it is a claim.
+fn status_dot_ink(severity: Severity, row_background: Hsla, cx: &App) -> Hsla {
+    status_channel(severity, row_background, true, cx)
+}
+
+/// The word a status cell draws: the same channel's word role, one step above its
+/// dot, solved only when it is a claim.
+fn status_word_ink(severity: Severity, row_background: Hsla, cx: &App) -> Hsla {
+    status_channel(severity, row_background, false, cx)
+}
+
 /// Re-solves one status ink against the surface the row is actually painted on.
 ///
-/// [`status_dot_ink`] and [`status_word_ink`] answer "which channel is this?" and
-/// the design system's status roles are solved against the *table's* content
-/// surface. Three of the five row states are a wash over that surface rather than
-/// the surface itself — the selection, the muted selection and the keyboard cursor
-/// — so a status word on one of them is text on a background its colour was never
-/// measured against, and it is the reader who selected the row who sees it. The
-/// selection wash is 20% accent, which is enough to move a solved hue off its
-/// floor and not enough for the eye to notice that anything changed.
-///
-/// The floor is the one the channel already promises: 3:1 for the 6px dot, which
-/// is a graphic, and 4.5:1 for the word, which is text, raised to 7:1 and 4.5:1
-/// under Increase Contrast exactly as `design::confidence::foreground` raises its
-/// own. Nothing here invents a colour — the ink is the channel's, and this only
-/// walks it away from the row it landed on until it clears.
+/// The channel comes from [`Severity::marker_on`] / [`Severity::word`] — the
+/// product's single severity resolver — so a status dot and word are never
+/// derived from the *mark* role and re-lifted here. This wrapper then applies
+/// the one row-specific adjustment the resolver does not know about: three of
+/// the five row states are a wash over the content surface (selection, muted
+/// selection, keyboard cursor), and a word solved against the bare surface can
+/// smudge against that 20% wash. This walks the ink away from the row until it
+/// clears the same floor the resolver already promises — 3:1 for the dot
+/// (graphic), 4.5:1 for the word (text), raised under Increase Contrast.
 fn status_ink_on_row(ink: Hsla, row_background: Hsla, graphic: bool, cx: &App) -> Hsla {
     let increased = crate::settings::increase_contrast_enabled(cx);
     let minimum = match (graphic, increased) {
@@ -9211,8 +9211,8 @@ fn row_cell(
         // Solved against the row the cell is on, not against the table: see
         // `status_ink_on_row`. On a plain row this is a no-op, because the channel
         // was already solved against this very surface.
-        let dot_ink = status_ink_on_row(status_dot_ink(severity, cx), row_background, true, cx);
-        let word_ink = status_ink_on_row(status_word_ink(severity, cx), row_background, false, cx);
+        let dot_ink = status_dot_ink(severity, row_background, cx);
+        let word_ink = status_word_ink(severity, row_background, cx);
         let cell_row = h_flex()
             .id(cell_container_id)
             .debug_selector(move || format!("resource-status-cell-{row_index}-{position}"))
@@ -10322,15 +10322,18 @@ fn header_cell_height() -> Pixels {
 
 /// Returns the color a column header's label draws with.
 ///
-/// `UI-SPEC` §4.4: `fg.tertiary` at rest, `fg.secondary` under the pointer, and
-/// `fg.primary` for the sorted column. Three values and no accent — the accent is
-/// the focus channel, so a sort must not borrow it.
+/// One ink ladder with no hover step: `fg.secondary` at rest and `fg.primary`
+/// for the sorted column — never the accent, which is the focus channel. Hover
+/// is *shape*-only (the column's own wash and the control that reveals beside
+/// the word — see [`header_label_weight`]); recolouring an unsorted label under
+/// the pointer made it as loud as the sorted one, and the band's one question —
+/// which column the table is ordered by — became unreadable.
 ///
 /// `Relevance` is deliberately not one of the two bright cases. The order it names
 /// belongs to the *query*, not to a column, and the old rule read "not Unsorted",
 /// so a single typed filter lit all seven labels at once and the band stopped
 /// having a sorted column to point at. See [`affordance_marks_the_column`].
-fn header_label_color(affordance: SortAffordance, _hovered: bool, cx: &App) -> Hsla {
+fn header_label_color(affordance: SortAffordance, cx: &App) -> Hsla {
     if affordance_marks_the_column(affordance) {
         design::role::fg_primary(cx)
     } else {
@@ -10512,13 +10515,13 @@ mod tests {
                 design::row_selected_bg(cx),
                 design::row_selected_bg(cx).opacity(0.5),
             ];
-            // `UI-SPEC` §4.4 gives the header exactly three inks and no rail at
-            // all, so the set is closed: rest, hovered, sorted.
+            // The header's ink set is closed: resting and sorted. Hover is shape
+            // (wash + revealed control), never a third ink, so there is no
+            // hovered value to test alongside them.
             let header_colors = [
-                header_label_color(SortAffordance::Unsorted, false, cx),
-                header_label_color(SortAffordance::Unsorted, true, cx),
-                header_label_color(SortAffordance::Ascending, false, cx),
-                header_label_color(SortAffordance::Descending, false, cx),
+                header_label_color(SortAffordance::Unsorted, cx),
+                header_label_color(SortAffordance::Ascending, cx),
+                header_label_color(SortAffordance::Descending, cx),
             ];
             for fill in selection_fills {
                 for ink in header_colors {
@@ -13055,39 +13058,40 @@ mod tests {
     fn healthy_is_grey_and_only_a_problem_takes_a_colour(cx: &mut TestAppContext) {
         init_app(cx);
         cx.update(|cx| {
+            // The plain row: no selection wash, so the resolver's own channel and
+            // the quiet healthy grey come straight through (the wash-solve is a
+            // no-op on the surface it already solved against).
+            let row = design::role::surface_content(cx);
             assert_eq!(
-                status_dot_ink(Severity::Success, cx),
+                status_dot_ink(Severity::Success, row, cx),
                 design::role::fg_tertiary(cx),
                 "a healthy row's dot is the quietest ink on screen"
             );
             assert_eq!(
-                status_word_ink(Severity::Success, cx),
+                status_word_ink(Severity::Success, row, cx),
                 design::role::fg_secondary(cx),
                 "a healthy row's word is one step above its dot"
             );
-            assert_eq!(
-                status_dot_ink(Severity::Warning, cx),
-                design::role::warning(cx)
-            );
-            assert_eq!(
-                status_word_ink(Severity::Warning, cx),
-                design::role::warning(cx)
-            );
-            assert_eq!(
-                status_dot_ink(Severity::Error, cx),
-                design::role::danger(cx)
-            );
-            assert_eq!(
-                status_word_ink(Severity::Error, cx),
-                design::role::danger(cx)
-            );
-            // And none of the three status inks is the accent, which is spent on
-            // the row selection and the one `primary` button. `§0` 铁律二 caps it
-            // at two uses per screen and this table is on most of them.
+            // The mark and its word are the SAME channel, one role apiece — the
+            // promise `Severity`'s mark/word split makes, and the thing the old
+            // two-resolver path could drift away from. Same hue and saturation;
+            // only the lightness differs, because the 6px mark and the 13px word
+            // are held to different floors (graphic 3:1, text 4.5:1).
+            for severity in [Severity::Warning, Severity::Error] {
+                let dot = status_dot_ink(severity, row, cx);
+                let word = status_word_ink(severity, row, cx);
+                assert!(
+                    (dot.h - word.h).abs() < 1e-4 && (dot.s - word.s).abs() < 1e-4,
+                    "a status cell's dot and word are one channel: dot {dot:?}, word {word:?}"
+                );
+            }
+            // And no status ink is the accent, which is spent on the row
+            // selection and the one `primary` button. `§0` 铁律二 caps it at two
+            // uses per screen and this table is on most of them.
             for ink in [
-                status_dot_ink(Severity::Success, cx),
-                status_word_ink(Severity::Warning, cx),
-                status_word_ink(Severity::Error, cx),
+                status_dot_ink(Severity::Success, row, cx),
+                status_word_ink(Severity::Warning, row, cx),
+                status_word_ink(Severity::Error, row, cx),
             ] {
                 assert_ne!(ink, design::role::accent(cx));
             }

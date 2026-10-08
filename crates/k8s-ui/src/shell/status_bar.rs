@@ -1366,8 +1366,13 @@ impl Shell {
             .when(has_detail, |this| {
                 // No hand cursor on a notification row: `UI-SPEC` §9.3 lists
                 // one, and a list that changes the cursor is a list that has
-                // announced itself as a web page.
-                this.hover(|this| this.bg(colors.element_hover))
+                // announced itself as a web page. The hover wash is the
+                // product's solved hover on the popover's surface, not the kit's
+                // `element_hover` — the same family and the same file already
+                // agree on `design::state::hover` (the port-forward link above),
+                // so two sources for one pointer state was the drift a reskin
+                // turns visible.
+                this.hover(|this| this.bg(design::state::hover(cx, raised)))
                     .on_click(cx.listener(move |shell, _: &ClickEvent, _, cx| {
                         shell.toggle_notification(id, cx);
                     }))

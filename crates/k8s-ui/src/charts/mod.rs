@@ -44,6 +44,57 @@ impl Unit {
         }
     }
 
+    /// The divisor and short suffix a value of `reference` magnitude is read in.
+    ///
+    /// One call answers both, so a whole table column can pin itself to a single
+    /// scale: a Memory column whose series crosses 1 Gi prints `942.1` and
+    /// `1.0` side by side in the same unit instead of making the reader re-scale
+    /// every row (`Design guides > Designing data-heavy interfaces` — align
+    /// comparable values). The header names the unit; the cells stay bare.
+    pub fn scale_of(self, reference: f64) -> (f64, &'static str) {
+        match self {
+            // Cores, like the axis — a count in {1, 0.1, 0.01, 0.001} cores.
+            Self::Cpu => (1000.0, "cores"),
+            Self::Memory => {
+                if reference >= TIB {
+                    (TIB, "TiB")
+                } else if reference >= GIB {
+                    (GIB, "GiB")
+                } else if reference >= MIB {
+                    (MIB, "MiB")
+                } else if reference >= KIB {
+                    (KIB, "KiB")
+                } else {
+                    (1.0, "B")
+                }
+            }
+            Self::Count => (1.0, ""),
+        }
+    }
+
+    /// `value` read in the given scale, at a fixed precision for the column,
+    /// with its unit — one unit for *every* cell in the column, so the digits
+    /// align and the scale is named at the point of reading. The precision is the
+    /// coarsest that still distinguishes the column's own cells: the axis's core
+    /// steps for CPU, one decimal for a byte column so a `0.4` next to a `0.5`
+    /// still reads. Values below the scale floor fall back to their own magnitude
+    /// so a near-zero never prints `0.0 GiB`.
+    pub fn format_at(self, value: f64, scale: (f64, &'static str)) -> String {
+        let (divisor, suffix) = scale;
+        let scaled = value / divisor;
+        match self {
+            Self::Cpu => format!("{} cores", format_cores(scaled)),
+            Self::Memory => {
+                if value < divisor * 0.1 {
+                    format_bytes(value)
+                } else {
+                    format!("{scaled:.1} {suffix}")
+                }
+            }
+            Self::Count => format!("{value:.0}"),
+        }
+    }
+
     /// Compact value for an axis label. A unit the label does not itself carry is
     /// named in [`Unit::axis_name`].
     ///
@@ -449,6 +500,21 @@ impl ChartData {
 
     /// Align rows by time, newest first. Missing cells use an em dash.
     pub fn table_rows(&self) -> Vec<TableRow> {
+        // One scale per column, pinned to the column's largest value, so a column
+        // that crosses a magnitude (942 MiB → 1.03 GiB) keeps every cell in one
+        // named unit and the digits stay comparable down the column. An empty
+        // series keeps the format-itself fallback.
+        let scales: Vec<(f64, &'static str)> = self
+            .series
+            .iter()
+            .map(|series| {
+                let max = series
+                    .valued()
+                    .map(|sample| sample.value.abs())
+                    .fold(0.0_f64, f64::max);
+                series.unit.scale_of(max)
+            })
+            .collect();
         let mut times: BTreeSet<i64> = BTreeSet::new();
         for series in &self.series {
             for point in &series.points {
@@ -464,14 +530,18 @@ impl ChartData {
                 let cells = self
                     .series
                     .iter()
-                    .map(|series| {
+                    .zip(&scales)
+                    .map(|(series, scale)| {
                         series
                             .points
                             .binary_search_by_key(&at_ms, |point| point.at_ms)
                             .ok()
                             .and_then(|index| series.points.get(index))
                             .and_then(|point| point.value)
-                            .map_or_else(|| "—".to_owned(), |value| series.unit.format(value))
+                            .map_or_else(
+                                || "—".to_owned(),
+                                |value| series.unit.format_at(value, *scale),
+                            )
                     })
                     .collect();
                 TableRow {
@@ -581,5 +651,58 @@ mod tests {
                 );
             }
         }
+    }
+
+    /// A table column that crosses a magnitude must stay in one unit, or the
+    /// digits stop being comparable down the column (`942.1 MiB` next to `1.03
+    /// GiB` is two questions, not one row). The column pins itself to its largest
+    /// value's scale.
+    #[test]
+    fn a_table_column_keeps_one_unit_across_a_magnitude_crossing() {
+        let column = |points: &[(i64, f64)]| Series {
+            label: "web".into(),
+            unit: Unit::Memory,
+            color: SeriesColor::for_index(0),
+            filled: false,
+            points: points
+                .iter()
+                .map(|&(at_ms, value)| NormalizedPoint {
+                    at_ms,
+                    value: Some(value),
+                })
+                .collect(),
+        };
+        let data = ChartData {
+            series: vec![column(&[
+                (1000, 942.0 * MIB),
+                (2000, 1.03 * GIB),
+                (3000, 512.0 * MIB),
+            ])],
+            interval_ms: 1000,
+        };
+        // Each row's cells are the series values only (the clock is its own
+        // column, rendered separately), so the single Memory series is `cells[0]`.
+        let cells: Vec<String> = data
+            .table_rows()
+            .into_iter()
+            .map(|row| row.cells[0].clone())
+            .collect();
+        assert_eq!(cells.len(), 3);
+        // Pinned to the column max (1.03 GiB), every cell reads in GiB — the
+        // 942 MiB and 512 MiB rows do not drop to a MiB cell, so the digits
+        // align and each names the shared unit.
+        for cell in &cells {
+            assert!(
+                cell.ends_with(" GiB"),
+                "cell {cell:?} should read in the column's pinned GiB unit"
+            );
+        }
+        // One unit, one decimal, order-independent: 1.0 GiB (from the 1.03
+        // max), 0.9 (from 942 MiB), 0.5 (from 512 MiB).
+        let mut sorted = cells.clone();
+        sorted.sort();
+        assert_eq!(sorted, ["0.5 GiB", "0.9 GiB", "1.0 GiB"]);
+        // And the scale itself names GiB for the header.
+        assert_eq!(Unit::Memory.scale_of(1.03 * GIB), (GIB, "GiB"));
     }
 }

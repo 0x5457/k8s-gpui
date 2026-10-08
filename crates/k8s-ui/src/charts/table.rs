@@ -16,7 +16,7 @@ use gpui_kit::prelude::*;
 use gpui_kit::{App, Div, Hsla, Pixels, Role, SharedString, Stateful, Styled, Window, div, px};
 
 use crate::design::{self, space};
-use crate::panels::common::{empty_state, section_heading};
+use crate::panels::common::{empty_state, section_heading_identifier};
 use crate::settings::{self, DataTypography};
 
 use super::ChartData;
@@ -318,9 +318,11 @@ impl TableDelegate for ChartTableDelegate {
 
     /// Column heading for the value table.
     ///
-    /// The product's one caption treatment, [`section_heading`] — `CAPTION`
-    /// semibold, uppercased, in the tertiary ink, the same treatment the
-    /// resource list's column headings and every panel's section head use —
+    /// The product's one caption treatment, [`section_heading_identifier`] —
+    /// `CAPTION` semibold in the tertiary ink, the same rung and weight the
+    /// resource list's column headings and every panel's section head use, in
+    /// its identifier-preserving form because these headers are container
+    /// names —
     /// and trailing for the numeric columns because their cells are. The time
     /// column carries a marker for its fixed order instead of a sort control
     /// the table cannot honour, in a lane of its own so the word stays on the
@@ -351,9 +353,11 @@ impl TableDelegate for ChartTableDelegate {
                 text.clone()
             })
             .child(
-                // One caption treatment for the whole product; the aria label
-                // above keeps the spoken sentence case.
-                section_heading(text)
+                // The one caption treatment, in its identifier-preserving form:
+                // these headers are container names, and uppercasing one changes
+                // the string the cluster named. The aria label keeps the spoken
+                // sentence case.
+                section_heading_identifier(text)
                     .min_w_0()
                     .overflow_hidden()
                     .text_ellipsis()
