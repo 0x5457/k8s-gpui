@@ -5529,15 +5529,20 @@ impl SettingsView {
             .gap(space::SM)
             .items_center()
             .child(
-                token_button("settings-keymap-create-show", "Open keymap file…", false, cx)
-                    .h(design::size::CONTROL)
-                    .accessibility_label("Open the user keymap file")
-                    .tooltip("Create or show the user keymap file")
-                    .on_click(cx.listener(|view, _, window, cx| {
-                        if let Some(handler) = &view.on_create_or_show_keymap {
-                            handler(window, cx);
-                        }
-                    })),
+                token_button(
+                    "settings-keymap-create-show",
+                    "Open keymap file…",
+                    false,
+                    cx,
+                )
+                .h(design::size::CONTROL)
+                .accessibility_label("Open the user keymap file")
+                .tooltip("Create or show the user keymap file")
+                .on_click(cx.listener(|view, _, window, cx| {
+                    if let Some(handler) = &view.on_create_or_show_keymap {
+                        handler(window, cx);
+                    }
+                })),
             )
             .child(
                 retry_button(
@@ -6638,9 +6643,7 @@ fn keyboard_description(action_name: &str, label: &str) -> String {
         "k8s_shell::ToggleDock" => "Show or hide the bottom dock.".to_owned(),
         "k8s_shell::ToggleNotifications" => "Show or hide recent notifications.".to_owned(),
         "k8s_shell::ReloadKubeconfigs" => "Reload the configured kubeconfig files.".to_owned(),
-        "k8s_shell::ReloadKeymap" => {
-            keymap_reload_description().to_owned()
-        }
+        "k8s_shell::ReloadKeymap" => keymap_reload_description().to_owned(),
         "k8s_shell::UseKeymapPreset" => "Replace the user keymap with a named preset.".to_owned(),
         // Theme. The three actions live in the `k8s_shell` namespace, so a table
         // keyed on `k8s_app::Use…` matched nothing and both rows fell through to

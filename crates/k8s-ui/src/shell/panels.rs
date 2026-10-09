@@ -1124,7 +1124,10 @@ impl Shell {
                             .w(design::size::UPDATE_PROGRESS)
                             .accessibility_label(format!("Download progress: {percent}%")),
                     )
-                    .child(text_small(format!("{percent}%")).text_color(design::role::fg_secondary(cx)))
+                    .child(
+                        text_small(format!("{percent}%"))
+                            .text_color(design::role::fg_secondary(cx)),
+                    )
                     .into_any_element()
             }
             None => h_flex()
@@ -1774,7 +1777,10 @@ impl Shell {
                                 .flex_none()
                                 .role(Role::Status)
                                 .aria_label(notifications.clone())
-                                .child(text_small(notifications).text_color(design::role::fg_secondary(cx))),
+                                .child(
+                                    text_small(notifications)
+                                        .text_color(design::role::fg_secondary(cx)),
+                                ),
                         )
                     }),
             )
@@ -5204,7 +5210,10 @@ impl Shell {
                 card = self.dialog_shell(Role::AlertDialog, title, text(detail), window, cx);
                 if let Some(field) = field {
                     card = card
-                        .child(text_small("Chart reference").text_color(design::role::fg_secondary(cx)))
+                        .child(
+                            text_small("Chart reference")
+                                .text_color(design::role::fg_secondary(cx)),
+                        )
                         .child(field)
                         .when_some(error.clone(), |this, message| {
                             this.child(text_small(message).text_color(error_ink))

@@ -21,8 +21,8 @@ use gpui_kit::component::tooltip::Tooltip;
 use gpui_kit::component::{Disableable as _, Icon, Sizable as _, Size, h_flex, v_flex};
 use gpui_kit::prelude::{FluentBuilder as _, InteractiveElement, StatefulInteractiveElement};
 use gpui_kit::{
-    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable,
-    Hsla, IntoElement, MouseButton, ParentElement, Pixels, Render, Role, SharedString, Styled,
+    AnyElement, App, AppContext as _, ClipboardItem, Context, Entity, FocusHandle, Focusable, Hsla,
+    IntoElement, MouseButton, ParentElement, Pixels, Render, Role, SharedString, Styled,
     Subscription, Task, UnderlineStyle, Window, div, px,
 };
 use kube_core::DynamicObject;

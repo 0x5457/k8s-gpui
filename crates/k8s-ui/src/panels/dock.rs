@@ -8944,7 +8944,8 @@ mod tests {
             .debug_bounds("dock-log-message")
             .expect("A compact log message is laid out");
         assert!(
-            (f32::from(first_tab.origin.x) - f32::from(tabs.origin.x)
+            (f32::from(first_tab.origin.x)
+                - f32::from(tabs.origin.x)
                 - f32::from(common::CONTENT_INSET))
             .abs()
                 <= 1.0,

@@ -14368,7 +14368,10 @@ mod tests {
         let (status, rows) = view.read_with(cx, |view, cx| {
             (format!("{:?}", view.status(cx)), view.row_count(cx))
         });
-        eprintln!("PROBE unknown_kind: status={status} rows={rows} resource-empty={:?}", cx.debug_bounds("resource-empty"));
+        eprintln!(
+            "PROBE unknown_kind: status={status} rows={rows} resource-empty={:?}",
+            cx.debug_bounds("resource-empty")
+        );
         assert!(
             cx.debug_bounds("resource-empty").is_some(),
             "an unknown kind with no rows uses the empty state"
