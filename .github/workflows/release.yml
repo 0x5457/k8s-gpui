@@ -132,6 +132,11 @@ jobs:
       - name: Run native tests
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast
 
+      - name: WIP diag runner glibc
+        run: |
+          ldd --version | head -2
+          cat /etc/os-release | head -2
+
       - name: Build release binaries
         run: cargo build --release --locked -p k8s-app --bin k8s-app
 
