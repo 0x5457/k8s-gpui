@@ -938,7 +938,9 @@ impl UpdaterRuntime {
 
         let Some(artifacts) = artifacts else {
             self.persist_success(fetched.etag, manifest.version.to_string());
-            self.set_unsupported(format!("No update is available for linux/{UPDATE_TARGET_ARCH}."));
+            self.set_unsupported(format!(
+                "No update is available for linux/{UPDATE_TARGET_ARCH}."
+            ));
             return Ok(());
         };
 
