@@ -27,7 +27,7 @@ jobs:
     outputs:
       version: ${{ steps.version.outputs.version }}
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -106,7 +106,7 @@ jobs:
       K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
       K8S_GPUI_UPDATE_MANIFEST_URL: https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-${{ matrix.arch }}.json
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -123,7 +123,7 @@ jobs:
             git curl jq
 
       # Match the Rust toolchain pin.
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       # Deliberately not the mbx action: its GitHub backend only saves on a
       # default-branch push, so a tag-triggered release build could never
@@ -177,12 +177,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
         with:
           targets: ${{ matrix.target }}
 
@@ -276,7 +276,7 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false
@@ -286,7 +286,7 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
 
-      - uses: dtolnay/rust-toolchain@1.98.1
+      - uses: dtolnay/rust-toolchain@1.120.0
 
       # Kept on rust-cache for the tag-push save reason documented in the Linux job.
       - uses: Swatinem/rust-cache@v2
@@ -328,7 +328,7 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 1
           persist-credentials: false

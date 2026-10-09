@@ -35,11 +35,11 @@ jobs:
       run: ${{ steps.filter.outputs.run }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 0
           persist-credentials: false
@@ -85,15 +85,15 @@ jobs:
     timeout-minutes: 20
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed
         with:
           egress-policy: audit
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: rustfmt
       - name: Check Rust formatting
@@ -126,7 +126,7 @@ jobs:
       CXX: ${{ matrix.cxx }}
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed
         with:
           egress-policy: audit
       - name: Enable Windows long paths
@@ -134,7 +134,7 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Linux dependencies
@@ -149,7 +149,7 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
             git curl jq
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
         with:
           components: clippy
       # mbx restores the target tree and registry of the newest matching entry and
@@ -157,7 +157,7 @@ jobs:
       # explicit because the generated one only covers OS, arch, and toolchain, so
       # the clippy and test jobs would otherwise fight over a single entry.
       - name: Set up the build cache
-        uses: jdx/mr-boxington-action@9df1d4b18b2147788a7ee7a2c7b84ecf62fd89d3
+        uses: jdx/mr-boxington-action@d0825fbaf3cc36ca2609aa38e71046265a1f1e37
         with:
           cache-key: clippy-${{ matrix.name }}-${{ runner.arch }}-mbx-${{ github.sha }}
           restore-keys: |
@@ -193,7 +193,7 @@ jobs:
       CARGO_PROFILE_TEST_DEBUG: "0"
     steps:
       - name: Harden runner
-        uses: step-security/harden-runner@9af89fc71515a100421586dfdb3dc9c984fbf411
+        uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed
         with:
           egress-policy: audit
       - name: Enable Windows long paths
@@ -201,7 +201,7 @@ jobs:
         shell: pwsh
         run: git config --global core.longpaths true
       - name: Checkout
-        uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           persist-credentials: false
       - name: Install Linux dependencies
@@ -216,16 +216,16 @@ jobs:
             libxkbcommon-dev libxkbcommon-x11-dev libx11-xcb-dev libzstd-dev \
             git curl jq
       - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@1.98.1
+        uses: dtolnay/rust-toolchain@1.120.0
       # Keyed per job, for the same reason as the clippy job above.
       - name: Set up the build cache
-        uses: jdx/mr-boxington-action@9df1d4b18b2147788a7ee7a2c7b84ecf62fd89d3
+        uses: jdx/mr-boxington-action@d0825fbaf3cc36ca2609aa38e71046265a1f1e37
         with:
           cache-key: test-${{ matrix.name }}-${{ runner.arch }}-mbx-${{ github.sha }}
           restore-keys: |
             test-${{ matrix.name }}-${{ runner.arch }}-mbx-
       - name: Install nextest
-        uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
+        uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad
         with:
           tool: nextest
       - name: Run workspace tests
