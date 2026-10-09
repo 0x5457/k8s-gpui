@@ -329,14 +329,6 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
-      # WIP diag: the upload runner is ubuntu-latest while the build runner is
-      # ubuntu-22.04; if the runner images ever diverge in glibc, the stripped
-      # binary may fail to exec there. Print both sides.
-      - name: WIP diag upload runner glibc
-        run: |
-          ldd --version | head -1
-          grep -m1 PRETTY_NAME /etc/os-release
-
       - name: Generate, sign, and verify the updater manifest
         shell: bash
         env:
@@ -379,6 +371,12 @@ jobs:
           RELEASE_VERSION: ${{ needs.validate_release.outputs.version }}
         run: |
           set -euo pipefail
+          # The stripped binary still links libxcb/libxkbcommon: install the
+          # runtime libraries so `k8s-app --version` can load on this clean
+          # runner (the build job only brought in the -dev packages).
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libxcb1 libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1
           test -s release-artifacts/k8s-app
           chmod 0755 release-artifacts/k8s-app
           for binary in release-artifacts/k8s-app; do
@@ -402,7 +400,7 @@ jobs:
           version_status=$?
           set -e
           if [[ "$version_status" -ne 0 || "$version_output" != "k8s-app ${RELEASE_VERSION}" ]]; then
-            echo "::error::k8s-app --version did not report k8s-app $RELEASE_VERSION. status=$version_status output=$version_output"
+            echo "::error::k8s-app --version did not report k8s-app $RELEASE_VERSION (status=$version_status): $version_output"
             exit 1
           fi
 
