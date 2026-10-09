@@ -203,7 +203,10 @@ async fn block_selection_copies_rectangle() {
     )
     .expect("failed to start local pty");
     session.write(b"printf 'abcdef\\nghijkl\\nmnopqr\\n'\r".to_vec());
-    let row = wait_for_row(&session, &mut events, "abcdef").await;
+    // Wait for the last line: the selection spans all three, so anchoring on
+    // the first one races the shell flushing the rest.
+    let last = wait_for_row(&session, &mut events, "mnopqr").await;
+    let row = last - 2;
 
     session.start_block_selection(Point::new(Line(row), Column(1)), Side::Left);
     session.update_selection(Point::new(Line(row + 2), Column(3)), Side::Right);
