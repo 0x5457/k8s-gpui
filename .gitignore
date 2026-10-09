@@ -7,3 +7,4 @@ core.*
 __pycache__/
 vendor/
 docs
+updater-private.pem

@@ -196,20 +196,46 @@ async fn block_selection_copies_rectangle() {
     let (session, mut events) = TerminalSession::local(
         Some("/bin/sh".to_owned()),
         Some("/tmp".into()),
-        TermSize::new(20, 6),
+        TermSize::new(40, 12),
         8,
         18,
         1000,
     )
     .expect("failed to start local pty");
+    // A command narrow enough that the prompt plus its echo fit on one row,
+    // so the three printf lines always land on three consecutive rows and the
+    // selection columns stay on the lines themselves. Terminal is 20 wide;
+    // "printf 'abcdef\\n'" plus a short /tmp prompt fits.
     session.write(b"printf 'abcdef\\nghijkl\\nmnopqr\\n'\r".to_vec());
-    // Wait for the last line: the selection spans all three, so anchoring on
-    // the first one races the shell flushing the rest.
-    let last = wait_for_row(&session, &mut events, "mnopqr").await;
-    let row = last - 2;
+    // Wait for the LAST line first: the pty can split one printf into
+    // several reads, so by the time the last line lands all three are on
+    // the grid. Then find each line by content rather than assuming a row
+    // offset, so prompt/echo rows in between cannot shift the selection.
+    let _ = wait_for_row(&session, &mut events, "mnopqr").await;
+    let text = grid_text(&session);
+    let rows: Vec<i32> = ["abcdef", "ghijkl", "mnopqr"]
+        .iter()
+        .map(|needle| {
+            text.lines()
+                .position(|line| line.trim_end() == *needle)
+                .map(|r| r as i32)
+                .unwrap_or_else(|| panic!("{needle:?} missing from grid: {text:?}"))
+        })
+        .collect();
+    let (first, second, third) = (rows[0], rows[1], rows[2]);
+    assert_eq!(
+        second,
+        first + 1,
+        "rows must be consecutive: {first},{second},{third}"
+    );
+    assert_eq!(
+        third,
+        second + 1,
+        "rows must be consecutive: {second},{third}"
+    );
 
-    session.start_block_selection(Point::new(Line(row), Column(1)), Side::Left);
-    session.update_selection(Point::new(Line(row + 2), Column(3)), Side::Right);
+    session.start_block_selection(Point::new(Line(first), Column(1)), Side::Left);
+    session.update_selection(Point::new(Line(third), Column(3)), Side::Right);
     assert_eq!(
         session.selection_to_string().as_deref(),
         Some("bcd\nhij\nnop")
