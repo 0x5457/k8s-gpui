@@ -88,15 +88,23 @@ jobs:
               --generate-notes
           fi
 
-  bundle_linux_x86_64:
+  bundle_linux:
     needs: [validate_release, create_draft_release]
-    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: ubuntu-22.04
+            arch: x86_64
+          - runner: ubuntu-22.04-arm
+            arch: aarch64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     env:
       CC: clang
       CXX: clang++
       K8S_GPUI_UPDATE_PUBLIC_KEY: ${{ vars.K8S_GPUI_UPDATE_PUBLIC_KEY }}
-      K8S_GPUI_UPDATE_MANIFEST_URL: https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-x86_64.json
+      K8S_GPUI_UPDATE_MANIFEST_URL: https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-${{ matrix.arch }}.json
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
         with:
@@ -122,7 +130,7 @@ jobs:
       # publish a cache entry and would start every run cold.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-linux-x86_64
+          shared-key: release-linux-${{ matrix.arch }}
 
       - name: Install nextest
         uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
@@ -132,34 +140,48 @@ jobs:
       - name: Run native tests
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast
 
-      - name: WIP diag runner glibc
-        run: |
-          ldd --version | head -2
-          cat /etc/os-release | head -2
-
       - name: Build release binaries
         run: cargo build --release --locked -p k8s-app --bin k8s-app
 
       - name: Package Linux release artifacts
+        env:
+          ARCH: ${{ matrix.arch }}
         run: |
           set -euo pipefail
-          install -m 0755 target/release/k8s-app k8s-app
-          strip k8s-app
-          tar -czf k8s-gpui-linux-x86_64.tar.gz k8s-app
-          sha256sum k8s-gpui-linux-x86_64.tar.gz > k8s-gpui-linux-x86_64.tar.gz.sha256
+          install -m 0755 "target/release/k8s-app" "k8s-app-linux-${ARCH}"
+          strip "k8s-app-linux-${ARCH}"
+          # The tarball keeps the plain `k8s-app` name inside: the updater and
+          # install-user flow expect that exact binary name.
+          mkdir -p "dist/k8s-gpui-linux-${ARCH}"
+          install -m 0755 "k8s-app-linux-${ARCH}" "dist/k8s-gpui-linux-${ARCH}/k8s-app"
+          tar -C "dist/k8s-gpui-linux-${ARCH}" -czf "k8s-gpui-linux-${ARCH}.tar.gz" k8s-app
+          sha256sum "k8s-gpui-linux-${ARCH}.tar.gz" > "k8s-gpui-linux-${ARCH}.tar.gz.sha256"
 
       - uses: actions/upload-artifact@v7
         with:
-          name: k8s-gpui-linux-x86_64
+          name: k8s-gpui-linux-${{ matrix.arch }}
           path: |
-            k8s-app
-            k8s-gpui-linux-x86_64.tar.gz
-            k8s-gpui-linux-x86_64.tar.gz.sha256
+            k8s-app-linux-${{ matrix.arch }}
+            k8s-gpui-linux-${{ matrix.arch }}.tar.gz
+            k8s-gpui-linux-${{ matrix.arch }}.tar.gz.sha256
           if-no-files-found: error
 
   bundle_macos:
     needs: [validate_release, create_draft_release]
-    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Apple Silicon runner builds the arm64 bundle.
+          - runner: macos-latest
+            arch: arm64
+            target: aarch64-apple-darwin
+          # macos-13 is the last Intel image GitHub provides: use it while it
+          # exists for the x86_64 bundle.
+          - runner: macos-13
+            arch: x86_64
+            target: x86_64-apple-darwin
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -172,7 +194,7 @@ jobs:
       # Kept on rust-cache for the tag-push save reason documented in the Linux job.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-macos-${{ runner.arch }}
+          shared-key: release-macos-${{ matrix.arch }}
 
       - name: Install nextest
         uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
@@ -182,23 +204,25 @@ jobs:
       - name: Run native tests
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast
 
-      - name: Detect architecture
-        id: arch
-        shell: bash
-        run: echo "arch=$(uname -m)" >> "$GITHUB_OUTPUT"
-
+      # An explicit --target keeps the output path stable across runner images:
+      # Apple Silicon and Intel hosts put the binary under their own triple.
       - name: Build release binaries
-        run: cargo build --release --locked -p k8s-app --bin k8s-app
+        run: cargo build --release --locked -p k8s-app --bin k8s-app --target ${{ matrix.target }}
+
+      - name: Resolve the release binary path
+        id: bin
+        shell: bash
+        run: echo "path=target/${{ matrix.target }}/release/k8s-app" >> "$GITHUB_OUTPUT"
 
       - name: Package an unsigned macOS artifact
         shell: bash
         run: |
           set -euo pipefail
-          arch="${{ steps.arch.outputs.arch }}"
+          arch="${{ matrix.arch }}"
           app="dist/K8s GPUI.app"
           version="$(awk -F '"' '/^version = "/ { print $2; exit }' Cargo.toml)"
           mkdir -p "$app/Contents/MacOS" "$app/Contents/Resources"
-          install -m 0755 target/release/k8s-app "$app/Contents/MacOS/k8s-app"
+          install -m 0755 "${{ steps.bin.outputs.path }}" "$app/Contents/MacOS/k8s-app"
           cat > "$app/Contents/Info.plist" <<PLIST
           <?xml version="1.0" encoding="UTF-8"?>
           <plist version="1.0">
@@ -243,7 +267,15 @@ jobs:
 
   bundle_windows:
     needs: [validate_release, create_draft_release]
-    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - runner: windows-latest
+            arch: x86_64
+          - runner: windows-11-arm
+            arch: arm64
+    runs-on: ${{ matrix.runner }}
     timeout-minutes: 150
     steps:
       - uses: actions/checkout@93cb6efe18208431cddfb8368fd83d5badbf9bfd
@@ -261,7 +293,7 @@ jobs:
       # Kept on rust-cache for the tag-push save reason documented in the Linux job.
       - uses: Swatinem/rust-cache@v2
         with:
-          shared-key: release-windows-${{ runner.arch }}
+          shared-key: release-windows-${{ matrix.arch }}
 
       - name: Install nextest
         uses: taiki-e/install-action@a6b2e2dcd845ddd7f509ce4f3ed3d922b80cc5d9
@@ -271,19 +303,6 @@ jobs:
       - name: Run native tests
         run: cargo nextest run --workspace --all-features --locked --no-fail-fast
 
-      - name: Detect architecture
-        id: arch
-        shell: pwsh
-        run: |
-          $arch = if ($env:RUNNER_ARCH -eq "ARM64") {
-            "arm64"
-          } elseif ($env:RUNNER_ARCH -eq "X64") {
-            "x86_64"
-          } else {
-            "x86"
-          }
-          "arch=$arch" >> $env:GITHUB_OUTPUT
-
       - name: Build release binaries
         run: cargo build --release --locked -p k8s-app --bin k8s-app
 
@@ -291,7 +310,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $arch = "${{ steps.arch.outputs.arch }}"
+          $arch = "${{ matrix.arch }}"
           $package = "dist/k8s-gpui-windows-$arch"
           New-Item -ItemType Directory -Force $package | Out-Null
           Copy-Item "target/release/k8s-app.exe" "$package/k8s-app.exe"
@@ -302,17 +321,17 @@ jobs:
 
       - uses: actions/upload-artifact@v7
         with:
-          name: k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned
+          name: k8s-gpui-windows-${{ matrix.arch }}-unsigned
           path: |
-            k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned.zip
-            k8s-gpui-windows-${{ steps.arch.outputs.arch }}-unsigned.zip.sha256
+            k8s-gpui-windows-${{ matrix.arch }}-unsigned.zip
+            k8s-gpui-windows-${{ matrix.arch }}-unsigned.zip.sha256
           if-no-files-found: error
 
   upload_release_assets:
     needs:
       - validate_release
       - create_draft_release
-      - bundle_linux_x86_64
+      - bundle_linux
       - bundle_macos
       - bundle_windows
     runs-on: ubuntu-latest
@@ -341,29 +360,31 @@ jobs:
             echo "::error::Updater settings are missing. Set K8S_GPUI_UPDATE_PUBLIC_KEY as a repository variable and K8S_GPUI_UPDATE_SIGNING_KEY as a repository secret."
             exit 1
           fi
-          python3 scripts/update_manifest.py generate \
-            --output release-artifacts/update-linux-x86_64.json \
-            --repository "$GITHUB_REPOSITORY" \
-            --tag "$GITHUB_REF_NAME" \
-            --version "$RELEASE_VERSION" \
-            --os linux \
-            --arch x86_64 \
-            --artifact release-artifacts/k8s-app
-          python3 scripts/sign_update_manifest.py sign \
-            --manifest release-artifacts/update-linux-x86_64.json \
-            --signature release-artifacts/update-linux-x86_64.json.sig
-          python3 scripts/sign_update_manifest.py verify \
-            --manifest release-artifacts/update-linux-x86_64.json \
-            --signature release-artifacts/update-linux-x86_64.json.sig
-          python3 scripts/update_manifest.py verify \
-            --manifest release-artifacts/update-linux-x86_64.json \
-            --artifact-root release-artifacts \
-            --repository "$GITHUB_REPOSITORY" \
-            --tag "$GITHUB_REF_NAME" \
-            --version "$RELEASE_VERSION" \
-            --os linux \
-            --arch x86_64 \
-            --required-artifact k8s-app
+          for arch in x86_64 aarch64; do
+            python3 scripts/update_manifest.py generate \
+              --output "release-artifacts/update-linux-${arch}.json" \
+              --repository "$GITHUB_REPOSITORY" \
+              --tag "$GITHUB_REF_NAME" \
+              --version "$RELEASE_VERSION" \
+              --os linux \
+              --arch "$arch" \
+              --artifact "release-artifacts/k8s-app-linux-${arch}"
+            python3 scripts/sign_update_manifest.py sign \
+              --manifest "release-artifacts/update-linux-${arch}.json" \
+              --signature "release-artifacts/update-linux-${arch}.json.sig"
+            python3 scripts/sign_update_manifest.py verify \
+              --manifest "release-artifacts/update-linux-${arch}.json" \
+              --signature "release-artifacts/update-linux-${arch}.json.sig"
+            python3 scripts/update_manifest.py verify \
+              --manifest "release-artifacts/update-linux-${arch}.json" \
+              --artifact-root release-artifacts \
+              --repository "$GITHUB_REPOSITORY" \
+              --tag "$GITHUB_REF_NAME" \
+              --version "$RELEASE_VERSION" \
+              --os linux \
+              --arch "$arch" \
+              --required-artifact "k8s-app-linux-${arch}"
+          done
 
       - name: Check Linux release assets
         shell: bash
@@ -377,14 +398,17 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends \
             libxcb1 libxkbcommon0 libxkbcommon-x11-0 libx11-xcb1
-          test -s release-artifacts/k8s-app
-          chmod 0755 release-artifacts/k8s-app
-          for binary in release-artifacts/k8s-app; do
-            if ! file "$binary" | grep -E 'ELF 64-bit.*x86-64' >/dev/null; then
-              echo "::error::$binary is not a Linux x86_64 ELF binary. Check the build artifact."
-              exit 1
-            fi
-          done
+          test -s release-artifacts/k8s-app-linux-x86_64
+          test -s release-artifacts/k8s-app-linux-aarch64
+          chmod 0755 release-artifacts/k8s-app-linux-x86_64 release-artifacts/k8s-app-linux-aarch64
+          if ! file release-artifacts/k8s-app-linux-x86_64 | grep -E 'ELF 64-bit.*x86-64' >/dev/null; then
+            echo "::error::release-artifacts/k8s-app-linux-x86_64 is not a Linux x86_64 ELF binary. Check the build artifact."
+            exit 1
+          fi
+          if ! file release-artifacts/k8s-app-linux-aarch64 | grep -E 'ELF 64-bit.*aarch64' >/dev/null; then
+            echo "::error::release-artifacts/k8s-app-linux-aarch64 is not a Linux aarch64 ELF binary. Check the build artifact."
+            exit 1
+          fi
           (
             cd release-artifacts
             shopt -s nullglob
@@ -395,8 +419,9 @@ jobs:
             fi
             sha256sum --check "${checksums[@]}"
           )
+          # Only the x86_64 binary can execute on this runner.
           set +e
-          version_output="$(timeout 3s release-artifacts/k8s-app --version 2>&1)"
+          version_output="$(timeout 3s release-artifacts/k8s-app-linux-x86_64 --version 2>&1)"
           version_status=$?
           set -e
           if [[ "$version_status" -ne 0 || "$version_output" != "k8s-app ${RELEASE_VERSION}" ]]; then

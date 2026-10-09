@@ -25,8 +25,12 @@ use tokio::time::timeout;
 
 pub use k8s_core::update::UpdateState as UpdaterStatus;
 
+#[cfg(target_arch = "x86_64")]
 const DEFAULT_MANIFEST_URL: &str =
     "https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-x86_64.json";
+#[cfg(target_arch = "aarch64")]
+const DEFAULT_MANIFEST_URL: &str =
+    "https://github.com/0x5457/k8s-gpui/releases/latest/download/update-linux-aarch64.json";
 const MANIFEST_URL: &str = match option_env!("K8S_GPUI_UPDATE_MANIFEST_URL") {
     Some(value) => value,
     None => DEFAULT_MANIFEST_URL,
@@ -39,6 +43,12 @@ const READ_TIMEOUT: Duration = Duration::from_secs(60);
 const SMOKE_TEST_TIMEOUT: Duration = Duration::from_secs(15);
 /// The one binary an installation and a release contain.
 const APP_BINARY_NAME: &str = "k8s-app";
+/// The release asset the updater downloads for this build's architecture.
+/// Both Linux architectures ship in one release, so asset names carry the
+/// arch suffix; the tarball keeps the plain binary name inside instead.
+fn app_asset_name() -> String {
+    format!("{APP_BINARY_NAME}-linux-{UPDATE_TARGET_ARCH}")
+}
 const POLL_INTERVAL: Duration = Duration::from_secs(6 * 60 * 60);
 const RETRY_BASE: Duration = Duration::from_secs(15 * 60);
 const MAX_MANIFEST_SIZE: usize = 1024 * 1024;
@@ -71,7 +81,7 @@ fn updater_configured_for(
 
 pub fn updater_configured() -> bool {
     updater_configured_for(
-        cfg!(all(target_os = "linux", target_arch = "x86_64")),
+        cfg!(target_os = "linux"),
         cfg!(debug_assertions),
         PUBLIC_KEY_HEX.is_some(),
         updates_disabled_by_environment(),
@@ -95,8 +105,8 @@ pub fn initial_unavailable_reason() -> Option<String> {
 fn updater_unavailable_reason() -> String {
     if updates_disabled_by_environment() {
         "Automatic updates are disabled by K8S_GPUI_DISABLE_UPDATES. Remove the variable and restart the app.".to_owned()
-    } else if !cfg!(all(target_os = "linux", target_arch = "x86_64")) {
-        "Automatic updates are not available on this platform. Use linux/x86_64 or update through the package or source that installed the app."
+    } else if !cfg!(target_os = "linux") {
+        "Automatic updates are not available on this platform. Use Linux or update through the package or source that installed the app."
             .to_owned()
     } else if cfg!(debug_assertions) {
         "Automatic updates are not available in debug builds. Run a release build to enable update checks and installation."
@@ -653,8 +663,8 @@ fn recover_installations() -> Result<()> {
 
 pub fn install_user() -> Result<PathBuf> {
     ensure!(
-        cfg!(all(target_os = "linux", target_arch = "x86_64")),
-        "User installation is not available on this platform. Run `k8s-app install-user` from a linux/x86_64 release build."
+        cfg!(target_os = "linux"),
+        "User installation is not available on this platform. Run `k8s-app install-user` from a Linux release build."
     );
     ensure!(
         !cfg!(debug_assertions),
@@ -770,7 +780,7 @@ struct InstallEnvironment {
 impl InstallEnvironment {
     fn current() -> Self {
         Self {
-            supported_platform: cfg!(all(target_os = "linux", target_arch = "x86_64")),
+            supported_platform: cfg!(target_os = "linux"),
             debug_build: cfg!(debug_assertions),
             flatpak: std::env::var_os("FLATPAK_ID").is_some()
                 || std::env::var("container").is_ok_and(|value| value == "flatpak"),
@@ -928,7 +938,7 @@ impl UpdaterRuntime {
 
         let Some(artifacts) = artifacts else {
             self.persist_success(fetched.etag, manifest.version.to_string());
-            self.set_unsupported("No update is available for linux/x86_64.".to_owned());
+            self.set_unsupported(format!("No update is available for linux/{UPDATE_TARGET_ARCH}."));
             return Ok(());
         };
 
@@ -1279,14 +1289,15 @@ fn select_binary_artifacts(manifest: &UpdateManifest) -> Result<Option<BinaryArt
         target_count += 1;
         ensure!(artifact.size <= MAX_ARTIFACT_SIZE, "Artifact is too large.");
         let _ = http_url(&artifact.url).context("Invalid artifact URL.")?;
+        let expected_name = app_asset_name();
         match artifact.name.as_str() {
-            "k8s-app" => {
+            name if name == expected_name => {
                 ensure!(
                     app.replace(artifact.clone()).is_none(),
-                    "Duplicate k8s-app artifact."
+                    "Duplicate {expected_name} artifact."
                 );
             }
-            name => bail!("Unexpected linux/x86_64 artifact: {name}"),
+            name => bail!("Unexpected linux/{UPDATE_TARGET_ARCH} artifact: {name}"),
         }
     }
     if target_count == 0 {
@@ -1294,10 +1305,11 @@ fn select_binary_artifacts(manifest: &UpdateManifest) -> Result<Option<BinaryArt
     }
     ensure!(
         target_count == 1,
-        "The linux/x86_64 manifest must contain one artifact."
+        "The linux/{UPDATE_TARGET_ARCH} manifest must contain one artifact."
     );
+    let missing = format!("Manifest is missing the {} artifact.", app_asset_name());
     Ok(Some(BinaryArtifacts {
-        app: app.context("Manifest is missing the k8s-app artifact.")?,
+        app: app.context(missing)?,
     }))
 }
 
@@ -1320,7 +1332,7 @@ fn managed_installation_in(
     environment: InstallEnvironment,
 ) -> Result<InstallPlan, String> {
     if !environment.supported_platform {
-        return Err("Automatic updates are not available on this platform. Use linux/x86_64 or update through the package or source that installed the app.".to_owned());
+        return Err("Automatic updates are not available on this platform. Use Linux or update through the package or source that installed the app.".to_owned());
     }
     if environment.debug_build {
         return Err("Automatic updates are not available in debug builds. Run a release build to enable update checks and installation.".to_owned());
@@ -1929,8 +1941,8 @@ mod tests {
             "artifacts": [
                 {
                     "os": "linux",
-                    "arch": "x86_64",
-                    "name": "k8s-app",
+                    "arch": std::env::consts::ARCH,
+                    "name": app_asset_name(),
                     "url": "https://example.invalid/k8s-app",
                     "size": 4,
                     "sha256": "0".repeat(64)
@@ -1954,7 +1966,7 @@ mod tests {
                 .expect("target")
                 .app
                 .name,
-            "k8s-app"
+            app_asset_name()
         );
     }
 
@@ -2006,7 +2018,7 @@ mod tests {
         let error = managed_installation_in(Some(&data), Some(&executable), "v1.2.3", unsupported)
             .expect_err("unsupported platforms must reject managed updates");
         assert!(error.contains("platform"));
-        assert!(error.contains("linux/x86_64"));
+        assert!(error.contains("Use Linux"));
 
         let debug = InstallEnvironment {
             debug_build: true,

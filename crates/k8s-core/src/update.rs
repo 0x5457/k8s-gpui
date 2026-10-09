@@ -13,7 +13,10 @@ pub(crate) const MANIFEST_SCHEMA: u32 = 1;
 #[cfg(test)]
 pub(crate) const DEFAULT_CHANNEL: &str = "stable";
 pub const UPDATE_TARGET_OS: &str = "linux";
-pub const UPDATE_TARGET_ARCH: &str = "x86_64";
+/// The architecture this build downloads updates for. The release workflow
+/// publishes one updater manifest per Linux architecture, so the target comes
+/// from the compilation target instead of a fixed string.
+pub const UPDATE_TARGET_ARCH: &str = std::env::consts::ARCH;
 pub(crate) const UPDATE_STATE_FILE: &str = "update-state.json";
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
