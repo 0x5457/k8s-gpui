@@ -329,6 +329,14 @@ jobs:
           path: release-artifacts
           merge-multiple: true
 
+      # WIP diag: the upload runner is ubuntu-latest while the build runner is
+      # ubuntu-22.04; if the runner images ever diverge in glibc, the stripped
+      # binary may fail to exec there. Print both sides.
+      - name: WIP diag upload runner glibc
+        run: |
+          ldd --version | head -1
+          grep -m1 PRETTY_NAME /etc/os-release
+
       - name: Generate, sign, and verify the updater manifest
         shell: bash
         env:
@@ -394,7 +402,7 @@ jobs:
           version_status=$?
           set -e
           if [[ "$version_status" -ne 0 || "$version_output" != "k8s-app ${RELEASE_VERSION}" ]]; then
-            echo "::error::k8s-app --version did not report k8s-app $RELEASE_VERSION. Check the binary and version."
+            echo "::error::k8s-app --version did not report k8s-app $RELEASE_VERSION. status=$version_status output=$version_output"
             exit 1
           fi
 
